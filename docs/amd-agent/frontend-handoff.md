@@ -66,3 +66,16 @@
 ## 完成後
 
 開 PR 或推一個分支，在描述裡寫清楚哪些只在 mock 下測過。本機那邊會接真後端、在正式站驗證。
+
+## 追加：情境 A（綠島停航）— 2026-10-02
+
+後端已支援離島船班停航（見 [ferry-sea-data-research.md](ferry-sea-data-research.md)）。前端要補的：
+
+1. **demo 面板加「模擬：回程日浪高 3.5 公尺」**：請求帶 `scenario: { sea: { date: 'YYYY-MM-DD', waveMaxM: 3.5, gustMax: 9 } }`（date 用行程回程那天）。可與 `rain` 同時存在。
+2. **新的 fixture**：`server/test/fixtures/agent-ferry.json`（16 個事件，約 4.5 秒），mock 參數建議 `?agentMock=ferry`。
+3. **提案卡的新欄位**（只有離島行程才有）：
+   - `changes[]` 多一種 `type: 'move'`：`{ name, fromDay, day, from, to }`（站被移到別天，`from`/`to` 是時間）
+   - `ferry: { before: [{ direction: '去程'|'回程', day, depart }], after: [...], note }`：建議做成「回程 第 3 天 15:30 → 第 2 天 15:30」這種醒目的一行，`note` 要顯示（依預報推估，以船公司公告為準）
+   - `extraNights`：多住幾晚（有值時要提醒住宿另計，`costDelta.note` 已含這句）
+4. **回答 `question`**：Agent 有取捨時會回 `question` + `options[]`。使用者選了之後，**再送一次請求**：同一份 `trip`、同一個 `scenario`，`trigger: { type: 'user', message: '<原本的問題>。我的選擇：<選項文字>' }`。後端不保存對話狀態，所以要把問題一起帶上。你們目前「點選項填進輸入框」的做法只要確保送出時帶上問題即可。
+5. 離島行程的 `trip.region` 請帶 `'綠島'`／`'蘭嶼'`，港口站（富岡漁港、南寮漁港、開元漁港）照原本的名稱送；後端靠港口站判斷搭船。

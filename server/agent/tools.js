@@ -8,6 +8,8 @@
    ══════════════════════════════════════════════════ */
 const D = require('./data');
 const I = require('./itinerary');
+const F = require('./ferry');
+const SEA = require('./sea');
 
 const SEARCH_LIMIT = 6;
 
@@ -19,6 +21,8 @@ const fn = (name, description, properties, required) => ({
 const DEFINITIONS = [
   fn('get_trip_state', '取得目前行程：每天的站點（stopId、時間、停留分鐘、室內/戶外）、日期、結束時間、人數、預算。第一步一定先呼叫。', {}),
   fn('get_weather_forecast', '取得行程期間每個時段的降雨機率與天氣描述，並標出哪些站落在降雨機率 ≥ 50% 的時段。', {}),
+  fn('get_sea_conditions', '離島（綠島／蘭嶼）行程用：查每一天的浪高、風力與停航風險（依中央氣象署海面預報推估，高＝很可能停航）。', {}),
+  fn('get_ferry_status', '離島行程用：列出行程中的每一段船班（去程／回程、日期、開船時間），以及官方停航公告與推估的停航風險。', {}),
   fn('check_business_hours', '查某個地點某一天的營業狀態。', {
     name: { type: 'string', description: '地點名稱' },
     day: { type: 'integer', description: '行程第幾天（1 起算）' }
@@ -45,10 +49,11 @@ const DEFINITIONS = [
       items: {
         type: 'object',
         properties: {
-          type: { type: 'string', enum: ['replace', 'insert', 'remove', 'retime'] },
-          stopId: { type: 'string', description: 'replace/remove/retime 的目標站' },
+          type: { type: 'string', enum: ['replace', 'insert', 'remove', 'retime', 'move', 'move_ferry'], description: 'move_ferry：把整段船班改到別天或別的時間（帶 direction、day、time＝開船時間），港口站、之後的本島站與來不及去的島上站由程式自動處理' },
+          direction: { type: 'string', enum: ['return', 'outbound'], description: 'move_ferry 用' },
+          stopId: { type: 'string', description: 'replace/remove/retime/move 的目標站' },
           name: { type: 'string', description: 'replace/insert 的新地點，必須是搜尋工具回傳的名稱' },
-          day: { type: 'integer', description: 'insert 用' },
+          day: { type: 'integer', description: 'insert/move 用；move 到「天數 + 1」代表多住一晚' },
           afterStopId: { type: 'string', description: 'insert：插在哪一站之後' },
           time: { type: 'string', description: 'HH:MM，retime/insert 用' },
           stayMin: { type: 'integer', description: '停留分鐘；retime 只帶 stayMin 就是縮短或延長停留' }
@@ -76,6 +81,8 @@ const TERMINAL = new Set(['ask_user', 'present_proposal', 'no_change_needed']);
 const LABELS = {
   get_trip_state: () => '讀取目前行程',
   get_weather_forecast: () => '查詢天氣預報',
+  get_sea_conditions: () => '查詢綠島蘭嶼海面浪況',
+  get_ferry_status: () => '確認船班與停航公告',
   check_business_hours: (a) => `確認「${a.name}」營業時間`,
   search_local_poi: (a) => `搜尋附近${a.indoor ? '室內' : ''}景點`,
   search_restaurants: () => '搜尋附近餐廳',
@@ -92,9 +99,20 @@ function stopView(trip, s) {
     stopId: s.id, day: s.day, time: s.time, stayMin: s.stayMin, name: s.name,
     type: s.kind === 'food' ? '餐廳' : '景點',
     indoor: place ? D.indoorOf(place) : (s.kind === 'food' ? 'indoor' : 'unknown'),
+    ...(trip.island ? { side: F.sideOf(s, trip.island) === 'island' ? '島上' : '本島' } : {}),
+    ...(trip.island && F.isHarbor(s.name, trip.island) ? { harbor: true } : {}),
     ...(s.timeLocked ? { timeLocked: true } : {}),
     ...(s.keepReason ? { keepReason: s.keepReason } : {})
   };
+}
+
+function legsView(trip) {
+  return F.legsOf(trip).map((l) => ({
+    direction: l.direction === 'return' ? '回程' : '去程',
+    day: l.day, date: I.dateOfDay(trip.startDate, l.day),
+    depart: I.toClock(l.departMin), arrive: I.toClock(l.arriveMin),
+    fromStopId: l.fromStopId, toStopId: l.toStopId
+  }));
 }
 
 function candidateView(place, origin, date) {
@@ -148,7 +166,37 @@ const IMPL = {
     return {
       title: t.title, region: t.region, startDate: t.startDate, days: t.days,
       endTime: t.endTime, people: t.people, budgetPerPerson: t.budgetPerPerson,
+      ...(t.island ? { island: t.island, ferryLegs: legsView(t), note: '港口站代表搭船，不能刪除或替換，只能 move／retime' } : {}),
       stops: t.stops.map((s) => ({ ...stopView(t, s), date: I.dateOfDay(t.startDate, s.day) }))
+    };
+  },
+
+  async get_sea_conditions(ctx) {
+    const t = ctx.trip;
+    if (!t.island) return { note: '這不是離島行程，不需要查海況' };
+    const byDate = await ctx.getSea(t);
+    return {
+      area: '綠島蘭嶼海面',
+      days: Object.values(byDate).map((x) => ({
+        date: x.date, risk: x.risk, reasons: x.reasons,
+        ...(x.wave ? { wave: x.wave, wind: x.wind, waveType: x.waveType } : {}),
+        ...(x.simulated ? { simulated: true } : {})
+      })),
+      thresholds: `高風險：浪高 ≥ ${SEA.THRESHOLDS.high.waveM} 公尺或平均風 ≥ ${SEA.THRESHOLDS.high.windLevel} 級或颱風海上警報；中風險：浪高 ≥ ${SEA.THRESHOLDS.medium.waveM} 公尺或陣風 ≥ ${SEA.THRESHOLDS.medium.gustLevel} 級`,
+      note: '依中央氣象署海面預報推估，實際是否停航以船公司公告為準'
+    };
+  },
+
+  async get_ferry_status(ctx) {
+    const t = ctx.trip;
+    if (!t.island) return { note: '這不是離島行程' };
+    const byDate = await ctx.getSea(t);
+    const alerts = await SEA.fetchTdxAlerts();
+    const related = (alerts || []).filter((a) => a.title.includes(t.island) || a.description.includes(t.island));
+    return {
+      legs: legsView(t).map((l) => ({ ...l, risk: (byDate[l.date] || {}).risk || 'unknown', riskReasons: (byDate[l.date] || {}).reasons || [] })),
+      officialAlerts: alerts === null ? '查不到（交通部航運資料暫時無法取得）' : (related.length ? related : '目前沒有停航公告'),
+      schedule: '沒有船班時刻資料，改搭其他班次時只能估計時段，並提醒使用者向船公司確認'
     };
   },
 
@@ -195,7 +243,7 @@ const IMPL = {
 
   async propose_patch(ctx, args) {
     const { draft, results } = I.applyOps(ctx.trip, args.ops);
-    const check = I.validate(draft, await ctx.getForecast());
+    const check = await ctx.check(draft);
     ctx.draft = draft;
     ctx.draftCheck = check;
     if (!check.ok) ctx.failedRounds += 1;
@@ -207,6 +255,8 @@ const IMPL = {
       draft: draft.stops.map((s) => stopView(draft, s)),
       dayEnds: I.dayEnds(draft),
       dayEndsBefore: I.dayEnds(ctx.trip),
+      ...(draft.island ? { ferryLegs: legsView(draft) } : {}),
+      ...(draft.extraNights ? { extraNights: draft.extraNights } : {}),
       next: check.ok ? '驗證通過，可以呼叫 present_proposal' : '請針對 violations 修改 ops 後再呼叫 propose_patch（ops 要完整重給）'
     };
   },

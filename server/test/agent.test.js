@@ -1,6 +1,6 @@
 // 旅程應變 Agent 測試。
 //   node test/agent.test.js          離線：驗證規則、套用修改、降級方案（不呼叫 AI、不打 CWA）
-//   node test/agent.test.js --live   另外用 server/.env 的 AMD 端點跑「午後下雨」情境 B
+//   node test/agent.test.js --live   另外用 server/.env 的 AMD 端點跑情境 B（下雨）、D（好累）、A（綠島停航）
 'use strict';
 const path = require('path');
 require('dotenv').config({ path: path.join(__dirname, '..', '.env') });
@@ -28,6 +28,36 @@ const TRIP = {
   ]
 };
 const SCENARIO = { rain: { date: tomorrow, from: '13:00', to: '17:00', pop: 80 } };
+
+// 情境 A：綠島三天兩夜，第 3 天 15:30 回程。模擬第 3 天浪高 3.5 公尺。
+const GREEN = {
+  title: '綠島三天兩夜', region: '綠島', startDate: tomorrow, endTime: '21:00', people: 2,
+  stops: [
+    { id: 'g1', day: 1, time: '08:00', stayMin: 30, name: '富岡漁港' },
+    { id: 'g2', day: 1, time: '09:30', stayMin: 20, name: '南寮漁港' },
+    { id: 'g3', day: 1, time: '10:00', stayMin: 40, name: '綠島遊客中心' },
+    { id: 'g4', day: 1, time: '11:00', stayMin: 60, name: '綠島大街' },
+    { id: 'g5', day: 1, time: '12:30', stayMin: 60, name: '綠島竹屋餐廳' },
+    { id: 'g6', day: 1, time: '14:00', stayMin: 55, name: '小長城' },
+    { id: 'g7', day: 1, time: '15:30', stayMin: 90, name: '帆船鼻大草原' },
+    { id: 'g8', day: 1, time: '19:30', stayMin: 90, name: '朝日溫泉' },
+    { id: 'g9', day: 2, time: '09:00', stayMin: 65, name: '綠島梅花鹿生態園區' },
+    { id: 'g10', day: 2, time: '10:30', stayMin: 35, name: '柴口浮潛區' },
+    { id: 'g11', day: 2, time: '12:00', stayMin: 50, name: '綠島 非炒不可海鮮食堂' },
+    { id: 'g12', day: 2, time: '14:00', stayMin: 90, name: '過山古道' },
+    { id: 'g13', day: 2, time: '16:00', stayMin: 40, name: '牛頭山' },
+    { id: 'g14', day: 2, time: '17:30', stayMin: 60, name: '小島太太Mrs.Kojima(店休時間請看IG主頁)' },
+    { id: 'g15', day: 3, time: '09:00', stayMin: 35, name: '大白沙' },
+    { id: 'g16', day: 3, time: '10:00', stayMin: 35, name: '睡美人岩' },
+    { id: 'g17', day: 3, time: '11:00', stayMin: 60, name: '綠島監獄' },
+    { id: 'g18', day: 3, time: '12:30', stayMin: 60, name: '超難吃牛肉麵' },
+    { id: 'g19', day: 3, time: '14:30', stayMin: 60, name: '南寮漁港' },
+    { id: 'g20', day: 3, time: '16:30', stayMin: 20, name: '富岡漁港' },
+    { id: 'g21', day: 3, time: '17:30', stayMin: 60, name: '榕樹下米苔目(中華路創始老店-別無分店)' }
+  ]
+};
+const day3 = (() => { const d = new Date(tomorrow + 'T00:00:00Z'); d.setUTCDate(d.getUTCDate() + 2); return d.toISOString().slice(0, 10); })();
+const SEA_SCENARIO = { sea: { date: day3, waveMaxM: 3.5, gustMax: 9 } };
 
 (async () => {
   const D = require('../agent/data');
@@ -74,6 +104,59 @@ const SCENARIO = { rain: { date: tomorrow, from: '13:00', to: '17:00', pop: 80 }
   const shorter = I.applyOps(trip, [{ type: 'retime', stopId: 's5', stayMin: 45 }]);
   ok('retime 只帶 stayMin 可以縮短停留', shorter.draft.stops.find((s) => s.id === 's5').stayMin === 45 && I.dayEnds(shorter.draft)[1] === '18:15');
   ok('縮短停留會出現在差異裡', I.diffTrips(trip, shorter.draft).some((c) => c.type === 'retime' && c.stayTo === 45));
+
+  // ── 海象解析 ──
+  const SEA = require('../agent/sea');
+  const F = require('../agent/ferry');
+  ok('浪高取最大值', SEA.waveMaxOf('2轉3再轉4公尺') === 4 && SEA.waveMaxOf('約1公尺') === 1);
+  const w = SEA.windOf('4至5陣風7級晨轉5至6陣風8級下午再轉4至5陣風7級');
+  ok('風力拆出平均風與陣風', w.windMax === 6 && w.gustMax === 8, JSON.stringify(w));
+  ok('「陣風6級以下」不算進平均風', SEA.windOf('4級陣風6級以下').windMax === 4);
+  ok('浪高 3 公尺＝高風險', SEA.riskOf({ waveMaxM: 3, windMax: 5, gustMax: 7 }).risk === 'high');
+  ok('浪高 2 公尺＝中風險', SEA.riskOf({ waveMaxM: 2, windMax: 4, gustMax: 6 }).risk === 'medium');
+  ok('颱風海上警報＝高風險', SEA.riskOf({ waveMaxM: 1, windMax: 3, gustMax: 5, typhoon: true }).risk === 'high');
+
+  // ── 船班與島上／本島 ──
+  const green = I.normalizeTrip(GREEN);
+  const legs = F.legsOf(green);
+  ok('認出綠島行程', green.island === '綠島');
+  ok('找出去程與回程兩段船班', legs.length === 2 && legs[0].direction === 'outbound' && legs[1].direction === 'return' && legs[1].day === 3, JSON.stringify(legs));
+  ok('回程 15:30 開船、航程 60 分鐘', I.toClock(legs[1].departMin) === '15:30' && I.toClock(legs[1].arriveMin) === '16:30');
+  const seaOf = async (t, scenario) => {
+    const o = {};
+    for (let d = 1; d <= t.days + 1; d++) { const dt = I.dateOfDay(t.startDate, d); o[dt] = await SEA.seaOn('綠島', dt, scenario); }
+    return o;
+  };
+  const gv = I.validate(green, null, await seaOf(green, SEA_SCENARIO));
+  ok('港口去回各一次不算重複', !gv.violations.some((x) => x.code === 'duplicate'), JSON.stringify(gv.violations));
+  ok('模擬浪高 3.5 公尺：回程船班被擋下', gv.violations.some((x) => x.code === 'ferry_risk' && x.day === 3), JSON.stringify(gv.violations));
+  ok('拿不到海象時只提醒、不擋', I.validate(green, null, {}).violations.every((x) => x.code !== 'ferry_risk'));
+  ok('港口站不能刪除', I.applyOps(green, [{ type: 'remove', stopId: 'g19' }]).results[0].ok === false);
+  const moved = I.applyOps(green, [{ type: 'move', stopId: 'g17', day: 1, time: '17:00' }]);
+  ok('move 可以把站移到別天', moved.draft.stops.find((s) => s.id === 'g17').day === 1);
+  const crossSea = I.applyOps(green, [{ type: 'move', stopId: 'g21', day: 2, time: '19:00' }]);
+  ok('沒搭船就從島上跳到本島會被抓', I.validate(crossSea.draft, null, {}).violations.some((x) => x.code === 'wrong_side'));
+  const early = I.applyOps(green, [
+    { type: 'move', stopId: 'g19', day: 2, time: '15:00' }, { type: 'move', stopId: 'g20', day: 2, time: '16:30' },
+    { type: 'move', stopId: 'g21', day: 2, time: '17:30' }, { type: 'remove', stopId: 'g13' }, { type: 'remove', stopId: 'g14' },
+    { type: 'remove', stopId: 'g15' }, { type: 'remove', stopId: 'g16' }, { type: 'remove', stopId: 'g17' }, { type: 'remove', stopId: 'g18' }
+  ]);
+  const earlyLegs = F.legsOf(early.draft);
+  ok('提前一天回程：船班移到第 2 天', earlyLegs[1] && earlyLegs[1].day === 2, JSON.stringify(earlyLegs));
+  ok('提前回程後行程變成 2 天', early.draft.days === 2);
+  const earlyCheck = I.validate(early.draft, null, await seaOf(early.draft, SEA_SCENARIO));
+  ok('提前回程的草稿可以通過驗證', earlyCheck.ok, JSON.stringify(earlyCheck.violations));
+  const stay = I.applyOps(green, [{ type: 'move', stopId: 'g19', day: 4, time: '09:00' }, { type: 'move', stopId: 'g20', day: 4, time: '10:30' }, { type: 'move', stopId: 'g21', day: 4, time: '11:30' }]);
+  ok('多住一晚：可以 move 到第 4 天並記錄 extraNights', stay.draft.days === 4 && stay.draft.extraNights === 1);
+  const mf = I.applyOps(green, [{ type: 'move_ferry', direction: 'return', day: 2, time: '15:30' }]);
+  const mfr = mf.results[0];
+  ok('move_ferry：回程一個 op 改到第 2 天', mfr.ok && F.legsOf(mf.draft)[1].day === 2 && I.toClock(F.legsOf(mf.draft)[1].departMin) === '15:30', JSON.stringify(mfr));
+  ok('move_ferry：來不及去的島上站被刪並回報', mfr.removedIslandStops.includes('牛頭山') && mfr.removedIslandStops.includes('綠島監獄') && !mf.draft.stops.some((s) => s.name === '大白沙'));
+  ok('move_ferry：抵達後的本島晚餐跟著移', mf.draft.stops.find((s) => s.id === 'g21').day === 2);
+  const mfCheck = I.validate(mf.draft, null, await seaOf(mf.draft, SEA_SCENARIO));
+  ok('move_ferry：結果通過驗證', mfCheck.ok, JSON.stringify(mfCheck.violations));
+  ok('move_ferry：多住一晚', I.applyOps(green, [{ type: 'move_ferry', direction: 'return', day: 4, time: '10:00' }]).draft.extraNights === 1);
+  ok('最多只能延長一晚', I.applyOps(green, [{ type: 'move', stopId: 'g21', day: 5 }]).results[0].ok === false);
 
   // ── 不呼叫 AI 的路徑 ──
   const events = [];
@@ -122,6 +205,37 @@ const SCENARIO = { rain: { date: tomorrow, from: '13:00', to: '17:00', pop: 80 }
     console.log(`   結束時間 ${endBefore} → ${endAfter}、${tired.usage.llmCalls} 次 LLM、${(tired.ms / 1000).toFixed(1)}s`);
     ok('live D：產出提案', tired.type === 'proposal' && !tired.fallback);
     ok('live D：結束時間真的提早', endAfter && I.toMin(endAfter) < I.toMin(endBefore));
+
+    // 情境 A：綠島回程船班停航風險（主秀）。第 4 天的真實預報也可能很差，Agent 要自己權衡。
+    console.log('\n── 情境 A（綠島，模擬 ' + day3 + ' 浪高 3.5 公尺）──');
+    const storm = await runAgent({
+      trip: GREEN, trigger: { type: 'weather' }, scenario: SEA_SCENARIO,
+      onEvent: (e) => {
+        const t = (e.ms / 1000).toFixed(1).padStart(5) + 's ';
+        if (e.type === 'tool_call') console.log(t + '🔧 ' + e.label);
+        else if (e.type === 'tool_result') console.log(t + '   → ' + e.detail);
+        else if (['check_result', 'fallback'].includes(e.type)) console.log(t + 'ℹ️  ' + e.label + (e.issues ? '：' + e.issues.join('；') : ''));
+      }
+    });
+    console.log('');
+    if (storm.type === 'proposal') {
+      console.log('📋 ' + storm.summary);
+      storm.reasons.forEach((r) => console.log('   • ' + r));
+      storm.changes.forEach((c) => console.log('   ' + c.type + ': ' + (c.from || c.name || '') + ' ' + (c.type === 'move' ? '第' + c.fromDay + '天→第' + c.day + '天 ' + c.to : (c.to || ''))));
+      const legText = (ls) => ls.map((l) => l.direction + 'D' + l.day + ' ' + l.depart).join('、');
+      console.log('   船班 ' + legText(storm.ferry.before) + ' → ' + legText(storm.ferry.after) + (storm.extraNights ? '（多住 ' + storm.extraNights + ' 晚）' : ''));
+    } else if (storm.type === 'question') {
+      console.log('❓ ' + storm.question);
+      storm.options.forEach((o) => console.log('   - ' + o));
+    } else console.log(JSON.stringify(storm).slice(0, 400));
+    console.log('   ' + storm.usage.llmCalls + ' 次 LLM、' + storm.steps + ' 次工具、' + (storm.ms / 1000).toFixed(1) + 's');
+    ok('live A：產出提案或向使用者提問', storm.type === 'proposal' || storm.type === 'question');
+    if (storm.type === 'proposal') {
+      const after = I.normalizeTrip(storm.draft);
+      const v = I.validate(after, null, await seaOf(after, SEA_SCENARIO));
+      ok('live A：提案沒有違規（含船班風險）', v.ok, JSON.stringify(v.violations));
+      ok('live A：回程不在高風險的第 3 天', !F.legsOf(after).some((l) => l.direction === 'return' && I.dateOfDay(after.startDate, l.day) === day3));
+    }
   }
 
   console.log(`\n${pass} passed, ${fail} failed`);

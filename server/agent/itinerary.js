@@ -8,6 +8,13 @@
    座標一律由這裡填，不收 LLM 給的座標。
    ══════════════════════════════════════════════════ */
 const D = require('./data');
+const F = require('./ferry');
+
+/** 兩站間移動分鐘：船班用航程，島上↔本島沒經過港口回 Infinity，其餘用車程估算 */
+function travel(trip, a, b) {
+  const f = F.ferryMinutesBetween(a, b, trip.island);
+  return f === null ? D.travelMinutes(a, b) : f;
+}
 
 const toMin = (hhmm) => {
   const m = /^(\d{1,2}):(\d{2})$/.exec(String(hhmm || ''));
@@ -60,6 +67,7 @@ function normalizeTrip(raw) {
   });
   trip.days = Math.max(1, ...trip.stops.map((s) => s.day));
   sortStops(trip.stops);
+  trip.island = F.islandOfTrip(trip);   // 綠島／蘭嶼行程才有值
   return trip;
 }
 
@@ -72,12 +80,14 @@ function sortStops(stops) {
  * 依車程把同一天的站往後推，消除重疊。
  * 使用者手動鎖定的時間不動——推不開就留給 validate 報違規，交給 Agent 或使用者決定。
  */
-function reflow(stops) {
-  sortStops(stops);
+function reflow(trip) {
+  const stops = sortStops(trip.stops);
   for (let i = 1; i < stops.length; i++) {
     const prev = stops[i - 1], cur = stops[i];
     if (prev.day !== cur.day) continue;
-    const earliest = toMin(prev.time) + prev.stayMin + D.travelMinutes(prev, cur);
+    const move = travel(trip, prev, cur);
+    if (!Number.isFinite(move)) continue;   // 沒搭船就跨海：留給 validate 報 wrong_side
+    const earliest = toMin(prev.time) + prev.stayMin + move;
     if (toMin(cur.time) < earliest && !cur.timeLocked) cur.time = toClock(ceil5(earliest));
   }
   return stops;
@@ -102,16 +112,94 @@ function stopFromPlace(place, base) {
 }
 
 /**
+ * 把回程（或去程）船班整段改到另一天／另一個時間，簿記由程式處理：
+ * - 兩個港口站一起移；島內港的時間＝開船時間 − 候船分鐘
+ * - 回程：抵達本島後的本島站跟著移，保持與抵達時間的相對間隔
+ * - 新開船時間之後還排在島上的站一律刪除（提前回程時一定會發生），回報給 LLM
+ * 去程目前只支援改時間／日期，不會自動處理島上的站。
+ */
+function moveFerry(draft, op, maxDay) {
+  if (!draft.island) return { error: '這不是離島行程' };
+  const dir = op.direction === 'outbound' ? 'outbound' : 'return';
+  const leg = F.legsOf(draft).find((l) => l.direction === dir);
+  if (!leg) return { error: `行程裡找不到${dir === 'return' ? '回程' : '去程'}船班` };
+  const day = Number(op.day);
+  if (!Number.isInteger(day) || day < 1 || day > maxDay) return { error: `day 必須是 1～${maxDay}（${maxDay} 代表多住一晚）` };
+  const depart = toMin(op.time) !== null ? toMin(op.time) : leg.departMin;
+  if (depart < 6 * 60 || depart > 18 * 60) return { error: '開船時間要在 06:00～18:00 之間' };
+
+  const from = draft.stops.find((s) => s.id === leg.fromStopId);
+  const to = draft.stops.find((s) => s.id === leg.toStopId);
+  const arriveOld = toMin(to.time);
+  const idxTo = draft.stops.indexOf(to);
+  // 回程後面的本島站（同一段旅程的延續）
+  const tail = dir === 'return' ? draft.stops.slice(idxTo + 1).filter((s) => F.sideOf(s, draft.island) === 'mainland') : [];
+  const tailOffsets = tail.map((s) => ({ s, dayDelta: s.day - to.day, offset: toMin(s.time) - arriveOld }));
+
+  from.day = day;
+  from.time = toClock(Math.max(0, depart - from.stayMin));
+  from.timeLocked = false;
+  to.day = day;
+  to.time = toClock(depart + (F.FERRY_MINUTES[draft.island] || 60));
+  to.timeLocked = false;
+  const arriveNew = toMin(to.time);
+  for (const t of tailOffsets) {
+    t.s.day = Math.min(maxDay, day + t.dayDelta);
+    t.s.time = toClock(Math.min(23 * 60, Math.max(arriveNew + 10, arriveNew + t.offset)));
+    t.s.timeLocked = false;
+  }
+
+  const removed = [];
+  if (dir === 'return') {
+    const boarding = toMin(from.time);
+    draft.stops = draft.stops.filter((s) => {
+      if (s === from || s === to || F.sideOf(s, draft.island) !== 'island') return true;
+      const after = s.day > day || (s.day === day && toMin(s.time) + s.stayMin > boarding);
+      if (after) removed.push(s.name);
+      return !after;
+    });
+  }
+  return { direction: dir === 'return' ? '回程' : '去程', day, depart: toClock(depart), arrive: to.time, removedIslandStops: removed, movedMainlandStops: tail.map((s) => s.name) };
+}
+
+/**
  * 套用修改（只動草稿）。每個 op 個別成功或失敗，失敗原因回給 LLM 修正。
- * 支援：replace {stopId, name}、insert {day, afterStopId?, time?, name}、remove {stopId}、retime {stopId, time}
+ * 支援：replace {stopId, name}、insert {day, afterStopId?, time?, name}、remove {stopId}、
+ *       retime {stopId, time?, stayMin?}、move {stopId, day, time?}（day 可到「天數 + 1」＝多住一晚）
+ * 港口站代表搭船：不能 remove／replace，只能 move／retime 改搭船的日期與時間。
  */
 function applyOps(trip, ops) {
   const draft = { ...trip, stops: trip.stops.map((s) => ({ ...s })) };
   const results = [];
-  for (const op of (Array.isArray(ops) ? ops.slice(0, 12) : [])) {
+  const maxDay = Math.min(14, trip.days + 1);
+  for (const op of (Array.isArray(ops) ? ops.slice(0, 16) : [])) {
     const type = op && op.type;
     const idx = draft.stops.findIndex((s) => s.id === String(op && op.stopId || ''));
     const fail = (msg) => results.push({ op: type, ok: false, error: msg });
+    const isHarbor = idx >= 0 && trip.island && F.isHarbor(draft.stops[idx].name, trip.island);
+    if ((type === 'remove' || type === 'replace') && isHarbor) {
+      fail(`「${draft.stops[idx].name}」是搭船的港口站，不能刪除或替換；要改搭船的日期或時間請用 move／retime`);
+      continue;
+    }
+    if (type === 'move_ferry') {
+      const r = moveFerry(draft, op, maxDay);
+      if (r.error) fail(r.error);
+      else results.push({ op: type, ok: true, ...r });
+      continue;
+    }
+    if (type === 'move') {
+      if (idx < 0) { fail(`找不到 stopId ${op.stopId}`); continue; }
+      const day = Number(op.day);
+      if (!Number.isInteger(day) || day < 1 || day > maxDay) { fail(`day 必須是 1～${maxDay}（${maxDay} 代表多住一晚）`); continue; }
+      if (op.time !== undefined && op.time !== null && op.time !== '' && toMin(op.time) === null) { fail('time 必須是 HH:MM'); continue; }
+      const s = draft.stops[idx];
+      const fromDay = s.day;
+      s.day = day;
+      if (toMin(op.time) !== null) s.time = toClock(toMin(op.time));
+      s.timeLocked = false;
+      results.push({ op: type, ok: true, from: s.name, fromDay, day, time: s.time });
+      continue;
+    }
     if (type === 'replace' || type === 'insert') {
       const place = D.findPlace(op.name);
       if (!place) { fail(`「${op.name}」不在本地資料裡，只能用 search_local_poi／search_restaurants 回傳的名稱`); continue; }
@@ -123,10 +211,13 @@ function applyOps(trip, ops) {
         draft.stops[idx] = { ...stopFromPlace(place, { day: old.day, time: old.time, stayMin: op.stayMin }), replaces: old.id };
         results.push({ op: type, ok: true, from: old.name, to: place.name });
       } else {
-        const day = Math.min(draft.days, Math.max(1, Number(op.day) || 1));
+        const day = Math.min(maxDay, Math.max(1, Number(op.day) || 1));
         const after = draft.stops.find((s) => s.id === String(op.afterStopId || ''));
         let time = toMin(op.time);
-        if (time === null) time = after ? toMin(after.time) + after.stayMin + D.travelMinutes(after, place) : 9 * 60;
+        if (time === null) {
+          const move = after ? travel(draft, after, place) : 0;
+          time = after ? toMin(after.time) + after.stayMin + (Number.isFinite(move) ? move : 30) : 9 * 60;
+        }
         draft.stops.push(stopFromPlace(place, { day: after ? after.day : day, time: toClock(ceil5(time)), stayMin: op.stayMin }));
         results.push({ op: type, ok: true, to: place.name });
       }
@@ -149,15 +240,18 @@ function applyOps(trip, ops) {
       fail(`不支援的 op：${type}`);
     }
   }
-  reflow(draft.stops);
+  draft.days = Math.max(1, ...draft.stops.map((s) => s.day));
+  draft.extraNights = Math.max(0, draft.days - trip.days);
+  reflow(draft);
   return { draft, results };
 }
 
 /**
  * 硬規則驗證。violations 會擋下提案；warnings 只提醒。
  * forecast 為 null（拿不到預報）時跳過天氣規則，並在 warnings 註明。
+ * seaByDate：{ 'YYYY-MM-DD': sea.seaOn() 的結果 }，離島行程才需要，用來檢查船班的停航風險。
  */
-function validate(trip, forecast) {
+function validate(trip, forecast, seaByDate) {
   const violations = [];
   const warnings = [];
   const add = (list, code, s, message) => list.push({ code, stopId: s && s.id, day: s && s.day, stop: s && s.name, message });
@@ -169,11 +263,13 @@ function validate(trip, forecast) {
     const start = toMin(s.time), end = start + s.stayMin;
     const place = D.findPlace(s.name);
 
+    // 港口站去回程各出現一次是正常的，也沒有營業時間可言
+    const harbor = trip.island && F.isHarbor(s.name, trip.island);
     const key = D.normName(s.name);
-    if (seen.has(key)) add(violations, 'duplicate', s, `「${s.name}」重複出現`);
+    if (seen.has(key) && !harbor) add(violations, 'duplicate', s, `「${s.name}」重複出現`);
     seen.set(key, true);
 
-    if (place) {
+    if (place && !harbor) {
       if (D.accessOf(place).avoid) add(violations, 'suspended', s, `「${s.name}」目前暫停開放`);
       const h = D.hoursOn(place, date);
       if (h.status === 'closed') add(violations, 'closed', s, `「${s.name}」${date} 公休`);
@@ -183,9 +279,12 @@ function validate(trip, forecast) {
     }
 
     const next = trip.stops[i + 1];
-    if (next && next.day === s.day) {
-      const need = end + D.travelMinutes(s, next);
-      if (toMin(next.time) < need) add(violations, 'overlap', next, `「${next.name}」${next.time} 來不及（前一站結束加車程要 ${toClock(need)}）`);
+    const move = next ? travel(trip, s, next) : 0;
+    if (next && !Number.isFinite(move)) {
+      add(violations, 'wrong_side', next, `「${next.name}」在${F.sideOf(next, trip.island) === 'island' ? '島上' : '本島'}，但前一站「${s.name}」在${F.sideOf(s, trip.island) === 'island' ? '島上' : '本島'}，中間沒有搭船`);
+    } else if (next && next.day === s.day) {
+      const need = end + move;
+      if (toMin(next.time) < need) add(violations, 'overlap', next, `「${next.name}」${next.time} 來不及（前一站結束加${F.ferryMinutesBetween(s, next, trip.island) ? '航程' : '車程'}要 ${toClock(need)}）`);
     }
     if ((!next || next.day !== s.day) && end > endMin) add(violations, 'day_end', s, `第 ${s.day} 天結束在 ${toClock(end)}，超過 ${trip.endTime}`);
 
@@ -198,6 +297,21 @@ function validate(trip, forecast) {
     }
   });
   if (!forecast) warnings.push({ code: 'weather_unknown', message: '拿不到天氣預報，未檢查降雨' });
+
+  // 船班停航風險：高＝擋下，中＝提醒。港口站有 keepReason（使用者堅持）就只提醒。
+  for (const leg of F.legsOf(trip)) {
+    const date = dateOfDay(trip.startDate, leg.day);
+    const sea = seaByDate && seaByDate[date];
+    const from = trip.stops.find((x) => x.id === leg.fromStopId);
+    const label = `第 ${leg.day} 天 ${toClock(leg.departMin)} ${leg.direction === 'return' ? '回程' : '去程'}船班`;
+    if (!sea || sea.risk === 'unknown') {
+      warnings.push({ code: 'sea_unknown', stopId: leg.fromStopId, day: leg.day, message: `${label}：拿不到海象預報，無法判斷停航風險` });
+    } else if (sea.risk === 'high' && !(from && from.keepReason)) {
+      violations.push({ code: 'ferry_risk', stopId: leg.fromStopId, day: leg.day, message: `${label}停航風險高：${sea.reasons.join('、')}${sea.simulated ? '（模擬）' : ''}` });
+    } else if (sea.risk === 'high' || sea.risk === 'medium') {
+      warnings.push({ code: 'ferry_risk', stopId: leg.fromStopId, day: leg.day, message: `${label}停航風險${sea.risk === 'high' ? '高' : '中'}：${sea.reasons.join('、')}` });
+    }
+  }
 
   if (trip.budgetPerPerson) {
     const cost = costPerPerson(trip);
@@ -235,7 +349,9 @@ function diffTrips(before, after) {
       changes.push({ type: 'insert', day: s.day, time: s.time, to: s.name });
     } else {
       const old = before.stops.find((b) => b.id === s.id);
-      if (old && (old.time !== s.time || old.stayMin !== s.stayMin)) {
+      if (old && old.day !== s.day) {
+        changes.push({ type: 'move', name: s.name, fromDay: old.day, day: s.day, from: old.time, to: s.time });
+      } else if (old && (old.time !== s.time || old.stayMin !== s.stayMin)) {
         changes.push({ type: 'retime', day: s.day, name: s.name, from: old.time, to: s.time, stayFrom: old.stayMin, stayTo: s.stayMin });
       }
     }

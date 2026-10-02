@@ -14,10 +14,12 @@ const amd = require('../amd-llm');
 const D = require('./data');
 const I = require('./itinerary');
 const T = require('./tools');
+const F = require('./ferry');
+const SEA = require('./sea');
 
-const MAX_TOOL_CALLS = 12;
+const MAX_TOOL_CALLS = 14;   // 離島情境要多查海況與船班
 const MAX_FAILED_ROUNDS = 3;
-const MAX_LLM_CALLS = 14;
+const MAX_LLM_CALLS = 16;
 const TIMEOUT_MS = Number(process.env.AGENT_TIMEOUT_MS) || 60 * 1000;
 
 const SYSTEM_PROMPT = [
@@ -29,13 +31,15 @@ const SYSTEM_PROMPT = [
   '4. 用 propose_patch 組草稿；程式會驗證營業時間、時間順序、天氣與每天結束時間。有 violations 就修改後重送（ops 每次都要完整重給）。',
   '5. 使用者說累、想輕鬆或想早點結束時，優先用 remove 減少站數（或縮短 stayMin），不要只是替換地點。',
   '6. 驗證通過後呼叫 present_proposal，summary 用一句繁體中文說明改了什麼，reasons 寫原因（引用降雨機率、距離、營業時間等具體數字）。summary 與 reasons 只能描述草稿裡真的發生的修改，不可宣稱沒做到的效果。',
-  '7. 只有在方案之間有明顯取捨（例如多花錢 vs 少去一個景點）時才用 ask_user；確認不需要修改就呼叫 no_change_needed。',
-  '8. 每一輪都要呼叫工具，不要只回文字。全程使用繁體中文。'
+  '7. 離島（綠島／蘭嶼）行程：港口站代表搭船，不能刪除或替換。若某段船班停航風險高，可選擇 (a) 把回程提前到風險低的日子；(b) 延後回程、多住一晚（day＝天數 + 1）。兩者都用一個 「type: move_ferry、direction: return、day、time」的 op 完成，港口站、之後的本島站、來不及去的島上站都由程式處理，結果會列出被刪掉的島上景點。之後可再用 insert 在本島補景點或餐廳。先用 get_sea_conditions 確認候選日子的風險：風險高的日子不能當作新的搭船日，也不能出現在選項裡。只剩一個可行方案時直接 propose_patch，不要問；兩案都可行且取捨明顯（少玩幾個景點 vs 多一晚住宿費）時才用 ask_user。使用者已經說明選擇時就直接照做。沒有船班時刻資料，提案要提醒向船公司確認班次。',
+  'ask_user 的 question 與 options 要用旅客看得懂的話（日期、時段、景點名稱、大約花費），不可出現 stopId、op 名稱等內部代號。',
+  '8. 只有在方案之間有明顯取捨（例如多花錢 vs 少去一個景點）時才用 ask_user；確認不需要修改就呼叫 no_change_needed。',
+  '9. 每一輪都要呼叫工具，不要只回文字。全程使用繁體中文。'
 ].join('\n');
 
 function triggerText(trigger) {
   const t = trigger || {};
-  if (t.type === 'weather') return '系統偵測到行程期間有降雨機率偏高的時段，請檢查受影響的戶外行程並提出調整方案。';
+  if (t.type === 'weather') return '系統偵測到行程有天氣或海象風險（降雨、公休、或離島船班停航風險），請檢查受影響的部分並提出調整方案。';
   if (t.type === 'user') return `使用者說：「${String(t.message || '').slice(0, 200)}」。請依需求調整行程。`;
   return '請檢查行程是否需要調整。';
 }
@@ -51,6 +55,10 @@ function summarizeResult(name, r) {
     case 'search_local_poi':
     case 'search_restaurants':
       return r.results.length ? `找到 ${r.results.length} 個：${r.results.slice(0, 3).map((x) => `${x.name} ${x.distanceKm}km`).join('、')}` : '範圍內沒有符合的地點';
+    case 'get_sea_conditions':
+      return r.days ? r.days.map((d) => `${d.date.slice(5)} ${{ high: '高', medium: '中', low: '低', unknown: '未知' }[d.risk]}${d.wave ? '（' + d.wave + '）' : ''}`).join('、') : (r.note || '');
+    case 'get_ferry_status':
+      return r.legs ? r.legs.map((l) => `第${l.day}天 ${l.depart} ${l.direction} 風險${{ high: '高', medium: '中', low: '低', unknown: '未知' }[l.risk]}`).join('、') + (Array.isArray(r.officialAlerts) ? '；有官方公告' : '') : (r.note || '');
     case 'check_business_hours': return `${r.name}：${r.status === 'open' ? r.hours : r.status}`;
     case 'estimate_travel': return `約 ${r.minutes} 分鐘`;
     case 'propose_patch': return r.ok ? '✅ 驗證通過' : `❌ ${r.violations.length} 項違規：${r.violations.slice(0, 2).join('；')}`;
@@ -60,8 +68,7 @@ function summarizeResult(name, r) {
 
 /** 規則式降級：每個下雨的戶外站換成最近、當天有營業的室內景點 */
 async function fallbackProposal(ctx, reason) {
-  const forecast = await ctx.getForecast();
-  const check = I.validate(ctx.trip, forecast);
+  const check = await ctx.check(ctx.trip);
   const rainy = check.violations.filter((v) => v.code === 'rain');
   if (!rainy.length) return null;
   const used = new Set(ctx.trip.stops.map((s) => D.normName(s.name)));
@@ -86,7 +93,7 @@ async function fallbackProposal(ctx, reason) {
   }
   if (!ops.length) return null;
   const { draft } = I.applyOps(ctx.trip, ops);
-  const v = I.validate(draft, forecast);
+  const v = await ctx.check(draft);
   if (!v.ok) return null;
   ctx.draft = draft;
   ctx.draftCheck = v;
@@ -96,6 +103,8 @@ async function fallbackProposal(ctx, reason) {
     fallback: true
   };
 }
+
+const legBrief = (l) => ({ direction: l.direction === 'return' ? '回程' : '去程', day: l.day, depart: I.toClock(l.departMin) });
 
 function buildProposal(ctx, p) {
   const before = I.costPerPerson(ctx.trip);
@@ -107,7 +116,9 @@ function buildProposal(ctx, p) {
     fallback: Boolean(p.fallback),
     simulated: Boolean(ctx.scenario),
     changes: I.diffTrips(ctx.trip, ctx.draft),
-    costDelta: { perPersonBefore: before, perPersonAfter: after, diff: after - before, note: '門票加餐費估算，不含交通' },
+    costDelta: { perPersonBefore: before, perPersonAfter: after, diff: after - before, note: '門票加餐費估算，不含交通' + (ctx.draft.extraNights ? `與多 ${ctx.draft.extraNights} 晚的住宿費` : '') },
+    ...(ctx.draft.extraNights ? { extraNights: ctx.draft.extraNights } : {}),
+    ...(ctx.trip.island ? { ferry: { before: F.legsOf(ctx.trip).map(legBrief), after: F.legsOf(ctx.draft).map(legBrief), note: '依海面預報推估，實際班次與是否停航以船公司公告為準' } } : {}),
     warnings: ctx.draftCheck.warnings.slice(0, 5).map((w) => w.message),
     draft: { ...ctx.draft, stops: ctx.draft.stops.map((s) => ({ id: s.id, day: s.day, time: s.time, stayMin: s.stayMin, name: s.name, lat: s.lat, lng: s.lng, kind: s.kind, ...(s.replaces ? { replaces: s.replaces } : {}), ...(s.agentAdded ? { agentAdded: true } : {}) })) }
   };
@@ -133,10 +144,23 @@ async function runAgent({ trip: rawTrip, trigger, scenario, onEvent, onUsage }) 
   }
 
   let forecastPromise = null;
+  const seaCache = new Map();
   const ctx = {
-    trip, scenario: scenario && scenario.rain ? scenario : null,
+    trip, scenario: scenario && (scenario.rain || scenario.sea) ? scenario : null,
     draft: null, draftCheck: null, failedRounds: 0,
-    getForecast: () => (forecastPromise || (forecastPromise = D.getForecast(trip.region, scenario).then((f) => (f.periods.length ? f : null))))
+    getForecast: () => (forecastPromise || (forecastPromise = D.getForecast(trip.region, scenario).then((f) => (f.periods.length ? f : null)))),
+    // 離島行程每一天（含可能多住的一晚）的海況，同一天只查一次
+    getSea: async (t) => {
+      if (!t.island) return {};
+      const out = {};
+      for (let d = 1; d <= Math.min(14, t.days + 1); d++) {
+        const date = I.dateOfDay(t.startDate, d);
+        if (!seaCache.has(date)) seaCache.set(date, SEA.seaOn(t.island, date, scenario));
+        out[date] = await seaCache.get(date);
+      }
+      return out;
+    },
+    check: async (t) => I.validate(t, await ctx.getForecast(), await ctx.getSea(t))
   };
   const usage = { promptTokens: 0, completionTokens: 0, llmCalls: 0 };
   const finish = (e) => {
@@ -150,11 +174,11 @@ async function runAgent({ trip: rawTrip, trigger, scenario, onEvent, onUsage }) 
 
   // ── 程式先檢查：天氣觸發但沒有任何站受影響 → 不呼叫 LLM ──
   if (!trigger || trigger.type !== 'user') {
-    emit({ type: 'check', label: '程式檢查天氣與營業時間（不呼叫 AI）' });
-    const pre = I.validate(trip, await ctx.getForecast());
-    const issues = pre.violations.filter((v) => ['rain', 'closed', 'hours', 'suspended'].includes(v.code));
+    emit({ type: 'check', label: trip.island ? '程式檢查天氣、營業時間與海象（不呼叫 AI）' : '程式檢查天氣與營業時間（不呼叫 AI）' });
+    const pre = await ctx.check(trip);
+    const issues = pre.violations.filter((v) => ['rain', 'closed', 'hours', 'suspended', 'ferry_risk'].includes(v.code));
     if (!issues.length) {
-      return finish({ type: 'no_change', reason: pre.warnings.some((w) => w.code === 'weather_unknown') ? '拿不到天氣預報，暫時無法判斷' : '行程時段沒有降雨或公休問題', llmSkipped: true });
+      return finish({ type: 'no_change', reason: pre.warnings.some((w) => w.code === 'weather_unknown') ? '拿不到天氣預報，暫時無法判斷' : (trip.island ? '行程時段沒有降雨、公休或船班停航風險' : '行程時段沒有降雨或公休問題'), llmSkipped: true });
     }
     emit({ type: 'check_result', label: `發現 ${issues.length} 個問題，啟動 AI 代理人`, issues: issues.map((v) => v.message) });
   }

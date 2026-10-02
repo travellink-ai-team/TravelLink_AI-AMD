@@ -1158,9 +1158,14 @@ app.post('/api/agent/replan', agentLimiter, requireFirebaseUser, async (req, res
 
   // demo 情境注入：只改工具回傳的天氣，Agent 流程照常真實執行；提案會標 simulated
   const rain = body.scenario && body.scenario.rain;
-  const scenario = rain && typeof rain === 'object'
-    ? { rain: { date: String(rain.date || ''), from: String(rain.from || ''), to: String(rain.to || ''), pop: Number(rain.pop) || 80 } }
-    : null;
+  const sea = body.scenario && body.scenario.sea;
+  const scenario = {};
+  if (rain && typeof rain === 'object') {
+    scenario.rain = { date: String(rain.date || ''), from: String(rain.from || ''), to: String(rain.to || ''), pop: Number(rain.pop) || 80 };
+  }
+  if (sea && typeof sea === 'object' && /^\d{4}-\d{2}-\d{2}$/.test(String(sea.date || ''))) {
+    scenario.sea = { date: String(sea.date), waveMaxM: Math.min(10, Number(sea.waveMaxM) || 3.5), gustMax: Math.min(17, Number(sea.gustMax) || 9) };
+  }
 
   const run = genRuns.getOwnedRun(req.headers['x-run-id'], req.user.uid);
   if (run) genRuns.retain(run);
@@ -1178,7 +1183,7 @@ app.post('/api/agent/replan', agentLimiter, requireFirebaseUser, async (req, res
     await runAgent({
       trip: body.trip,
       trigger: { type: trigger.type, message: String(trigger.message || '').slice(0, 300) },
-      scenario,
+      scenario: Object.keys(scenario).length ? scenario : null,
       onEvent: send,
       onUsage: (u) => {
         if (!run) return;
