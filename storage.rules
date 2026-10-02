@@ -40,5 +40,12 @@ service firebase.storage {
                     && request.resource.contentType == 'video/mp4';
       allow delete: if request.auth != null && request.auth.uid == uid;
     }
+
+    // App 端：台東離線地圖包（PMTiles，OSM 圖資）—— 登入即可下載；
+    // 只由管理者用 gsutil 上傳（管理者憑證不經規則），App 端一律不可寫
+    match /offline_maps/{file} {
+      allow read: if request.auth != null;
+      allow write: if false;
+    }
   }
 }
