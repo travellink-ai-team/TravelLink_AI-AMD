@@ -14,7 +14,7 @@
 
 // 費率表版本。改任何一個數字都必須同時改這裡——
 // 歷史紀錄靠它才能解釋「這筆錢當初是怎麼算出來的」，也才有辦法回頭重算。
-const PRICING_VERSION = '2026-07-27';
+const PRICING_VERSION = '2026-10-02';
 
 /* ── Gemini 費率（USD / 每百萬 token）─────────────────
    來源：Vertex AI 官方定價頁（Standard 費率）。
@@ -24,6 +24,13 @@ const GEMINI_RATES = {
   'gemini-3-flash-preview': {
     inputPerMillion: 0.50,
     outputPerMillion: 3.00   // 含 thoughts
+  },
+
+  // AMD／工研院提供給 InnoServe 參賽隊伍的 gpt-oss-120b 端點（AI_PROVIDER=amd）。
+  // 競賽期間免費使用，所以記 0 元；用量照樣記錄，之後要換算成本還有依據。
+  'gpt-oss-120b': {
+    inputPerMillion: 0,
+    outputPerMillion: 0
   }
 
   // gemini-3.1-flash-image（行程圖生成，planner 使用）：

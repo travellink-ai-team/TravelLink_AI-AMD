@@ -33,6 +33,8 @@ const { getFirestore, Timestamp } = require('firebase-admin/firestore');
 const pricing = require('./pricing');
 const genRuns = require('./generation-runs');
 const { createUsageTap, modelIdFromPath } = require('./usage-tap');
+// AI_PROVIDER=amd 時，文字生成改走 AMD／工研院的 gpt-oss-120b（Gemini 格式在這裡轉換）
+const amdLlm = require('./amd-llm');
 // 回顧短片後端渲染 job（M8）：獨立模組，掛在既有代理上
 const { mountRecapJobs } = require('./recap-jobs');
 
@@ -957,6 +959,10 @@ app.post('/api/vertex/*', vertexLimiter, requireFirebaseUser, async (req, res) =
   }
   if (run) genRuns.retain(run);
 
+  if (amdLlm.shouldRoute(modelIdFromPath(upstreamPath))) {
+    return proxyToAmdLlm(req, res, upstreamPath, run);
+  }
+
   let upstream;
   try {
     upstream = await fetch(url, {
@@ -1027,6 +1033,107 @@ app.post('/api/vertex/*', vertexLimiter, requireFirebaseUser, async (req, res) =
   if (run) genRuns.release(run).catch(() => {});
   res.end();
 });
+
+// AMD LLM：請求／回應都在 amd-llm.js 轉成 Gemini 格式，記帳沿用同一套 usage-tap。
+// 與 Vertex 路徑相同的原則：串流逐塊轉發，不可先收完整包再送。
+async function proxyToAmdLlm(req, res, upstreamPath, run) {
+  const isStream = /:streamGenerateContent$/.test(upstreamPath);
+  const finish = () => { if (run) genRuns.release(run).catch(() => {}); };
+
+  let body;
+  try {
+    body = amdLlm.toOpenAiRequest(req.body, { stream: isStream });
+  } catch (err) {
+    finish();
+    return res.status(err.status || 400).json({ error: err.message || 'invalid request' });
+  }
+
+  // 只限制「等到回應標頭」的時間：IP 不在白名單時連線會一直掛著。
+  // 開始收流後就不設限，長行程串流本來就可能跑很久。
+  const controller = new AbortController();
+  const connectTimer = setTimeout(() => controller.abort(), 90 * 1000);
+  let upstream;
+  try {
+    upstream = await fetch(amdLlm.chatCompletionsUrl(), {
+      method: 'POST',
+      headers: amdLlm.upstreamHeaders(),
+      body: JSON.stringify(body),
+      signal: controller.signal
+    });
+  } catch (err) {
+    console.error('[proxy] amd llm upstream fetch 失敗：', err && (err.name === 'AbortError' ? '連線逾時' : err.message));
+    if (run) genRuns.markUpstreamError(run);
+    finish();
+    return res.status(502).json({ error: 'upstream fetch failed' });
+  } finally {
+    clearTimeout(connectTimer);
+  }
+
+  if (!upstream.ok) {
+    const detail = await upstream.text().catch(() => '');
+    console.error('[proxy] amd llm 回應 ' + upstream.status + '：' + detail.slice(0, 300));
+    if (run) genRuns.markUpstreamError(run);
+    finish();
+    return res.status(upstream.status).json({ error: 'amd llm failed' });
+  }
+
+  const tap = run ? createUsageTap(isStream) : null;
+  const recordUsage = () => {
+    if (!tap) return;
+    try {
+      const usage = tap.end();
+      if (usage) genRuns.addGeminiUsage(run, amdLlm.USAGE_MODEL_ID, usage);
+      else genRuns.markUsageMissing(run);
+    } catch (e) {
+      console.warn('[proxy] usage 記帳失敗（不影響回應）：', e && e.message);
+    }
+  };
+
+  if (!isStream) {
+    let out;
+    try {
+      out = Buffer.from(JSON.stringify(amdLlm.fromOpenAiResponse(await upstream.json())));
+    } catch (err) {
+      console.error('[proxy] amd llm 回應解析失敗：', err && err.message);
+      if (run) genRuns.markUpstreamError(run);
+      finish();
+      return res.status(502).json({ error: 'invalid upstream response' });
+    }
+    if (tap) tap.feed(out);
+    recordUsage();
+    finish();
+    res.set('Content-Type', 'application/json; charset=utf-8');
+    return res.end(out);
+  }
+
+  res.status(200);
+  res.set('Content-Type', 'text/event-stream; charset=utf-8');
+  res.set('X-Accel-Buffering', 'no');
+  const translator = amdLlm.createSseTranslator();
+  const decoder = new TextDecoder();
+  const send = (text) => {
+    if (!text) return;
+    const buf = Buffer.from(text);
+    res.write(buf);
+    if (tap) tap.feed(buf);
+  };
+  try {
+    const reader = upstream.body.getReader();
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      send(translator.push(decoder.decode(value, { stream: true })));
+    }
+    send(translator.push(decoder.decode()));
+    send(translator.end());
+  } catch (err) {
+    console.error('[proxy] amd llm 串流轉發中斷：', err && err.message);
+    if (run) genRuns.markUpstreamError(run);
+  }
+  recordUsage();
+  finish();
+  res.end();
+}
 
 // ══════════════ Places API (New) 代理（需登入 + 限流 + 端點白名單）══════════════
 // 搬到後端的兩個理由：金鑰不進瀏覽器，以及後端才數得到實際請求次數。
@@ -1259,4 +1366,9 @@ mountRecapJobs(app, { requireFirebaseUser, rateLimit, ipKeyGenerator });
 app.listen(PORT, '127.0.0.1', () => {
   console.log(`[proxy] 代理已啟動 http://127.0.0.1:${PORT}（僅本機；對外請經 nginx /api/）`);
   console.log('[proxy] /api/vertex：需登入 + 20req/10min/IP；/api/tdx：60req/10min/IP；/api/cwa：60req/10min/IP＋10min 快取');
+  if (amdLlm.isEnabled()) {
+    console.log('[proxy] AI_PROVIDER=amd：文字生成改走 AMD gpt-oss-120b；圖片生成仍走 Vertex');
+  } else if (String(process.env.AI_PROVIDER || '').trim().toLowerCase() === 'amd') {
+    console.warn('[proxy] AI_PROVIDER=amd 但缺少 AMD_LLM_BASE_URL，文字生成仍走 Vertex');
+  }
 });
