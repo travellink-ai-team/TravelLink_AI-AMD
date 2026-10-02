@@ -23,13 +23,13 @@ $LogDir    = Join-Path $ServerDir 'logs'
 $OutLog    = Join-Path $LogDir 'proxy.out.log'
 $ErrLog    = Join-Path $LogDir 'proxy.err.log'
 $UiLog     = Join-Path $LogDir 'control-ui.log'   # 控制台自己的操作／錯誤記錄
-$Port      = 3001
+$Port      = 3011   # 新網站（travel-link-amd）；舊網站的代理在 3001，用舊資料夾的控制台
 $HealthUrl = "http://127.0.0.1:$Port/api/health"
 
 if (-not (Test-Path $LogDir)) { New-Item -ItemType Directory -Path $LogDir | Out-Null }
 
 # ── 狀態查詢 ────────────────────────────────────────────────
-# 監聽 3001 的 PID。server.js 綁 127.0.0.1，所以只看本機回環位址。
+# 監聽 $Port 的 PID。server.js 綁 127.0.0.1，所以只看本機回環位址。
 function Get-ProxyPid {
   try {
     $conn = Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction Stop |

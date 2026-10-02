@@ -494,3 +494,29 @@ Get-Content C:\nginx\logs\error.log  -Tail 20
 netstat -an | findstr ":80"
 netstat -an | findstr ":3001"
 ```
+
+---
+
+## 附錄：第二個網站 travel-link-amd.duckdns.org（InnoServe AMD 版，2026-10-02）
+
+同一台機器、同一個 IP，nginx 依網域分流；舊網站完全不動。
+
+| | 舊網站 | 新網站（AMD） |
+|---|---|---|
+| 網域 | `travel-link-ai.duckdns.org` | `travel-link-amd.duckdns.org` |
+| 前端 | `Desktop\UIUX\app` | `Desktop\TravelLink_AI-AMD\app` |
+| 代理 | `127.0.0.1:3001`（`UIUX\server`） | `127.0.0.1:3011`（`TravelLink_AI-AMD\server`，`.env` 的 `PORT=3011`） |
+| 文字 AI | Vertex / Gemini | `AI_PROVIDER=amd`：工研院 gpt-oss-120b（圖片仍走 Vertex） |
+| 憑證 | `C:\nginx\ssl\travel-link-ai.duckdns.org-*.pem` | `C:\nginx\ssl\travel-link-amd.duckdns.org-*.pem` |
+
+- **nginx**：`C:\nginx\conf\nginx.conf` 末尾新增兩個 server（80 保留 ACME 路徑後 301、443 正站），並加了 `server_names_hash_bucket_size 64;`（兩個長網域，預設 32 放不下）。改設定前的備份是 `nginx.conf.bak-20261002-202912`。
+- **憑證**：win-acme 同一套參數（manual、HTTP-01 FileSystem、webroot 仍是 `UIUX\app`、PEM 匯出到 `C:\nginx\ssl`）。既有的 `WanderAI Cert Renew` 排程跑 `wacs --renew` 會續**所有**憑證，新網域不用另外設。
+  - ⚠️ 兩個網域的續期驗證檔都寫到 `UIUX\app\.well-known\`，所以兩個 port 80 server 的 root 都要維持 `UIUX\app`。
+- **代理常駐**：`TravelLink_AI-AMD\server\start-proxy.bat`（3011，路徑取自腳本位置）。開機自動啟動要另外註冊排程（系統管理員 PowerShell）：
+  ```powershell
+  $action  = New-ScheduledTaskAction -Execute "C:\Users\USER\Desktop\TravelLink_AI-AMD\server\start-proxy.bat"
+  $trigger = New-ScheduledTaskTrigger -AtLogOn -User "$env:USERDOMAIN\$env:USERNAME"
+  Register-ScheduledTask -TaskName "TravelLinkAI-AMD Proxy Autostart" -Action $action -Trigger $trigger -Force
+  ```
+- **控制台**：`TravelLink_AI-AMD\server\proxy-control.bat` 管 3011；舊網站的代理用 `UIUX\server` 那一份。
+- **外部設定（Console）**：Firebase Auth 授權網域、Google Maps 瀏覽器金鑰的 HTTP referrer 都要加上 `travel-link-amd.duckdns.org`。工研院端點看的是 IP，不用改。
