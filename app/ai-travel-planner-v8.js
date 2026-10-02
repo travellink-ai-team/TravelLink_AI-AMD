@@ -10978,6 +10978,7 @@
       resetTripBtn.style.display = (showEditActions && currentTripStatus !== 'planning') ? '' : 'none';
     }
     if (simulationBtn) simulationBtn.style.display = (!isReplanning && hasLoadedTrip) ? '' : 'none';
+    refreshAgentEntryUI();
   }
 
   function getSuggestedStayDurations(stop) {
@@ -20144,3 +20145,665 @@
   };
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', _flushPendingHeaderAction);
   else _flushPendingHeaderAction();
+
+  // ── 旅程應變 Agent（P3 前端）────────────────────────────────────────
+  // 後端：POST {API_PROXY_BASE}/agent/replan，回 SSE（見 docs/amd-agent/frontend-handoff.md）。
+  // mock：網址帶 ?agentMock=1（依觸發自動挑）或 =rain／tired／no-issue／fallback／question／error，
+  // 重播 app/agent-mock-fixtures.js 的錄製事件。mock 與真 SSE 都只把事件交給 handleAgentEvent，UI 不分來源。
+  // 提案只在按「套用」時才寫回 replanStops；在那之前不碰使用者的行程。
+  const AGENT_URL_PARAMS = (() => { try { return new URLSearchParams(window.location.search); } catch (_e) { return new URLSearchParams(''); } })();
+  const AGENT_MOCK_MODE = String(AGENT_URL_PARAMS.get('agentMock') || '').trim();
+  const AGENT_DEMO_MODE = AGENT_URL_PARAMS.get('demo') === '1';
+  const AGENT_MOCK_SCRIPT = './agent-mock-fixtures.js?v=20261002-agent1';
+  const AGENT_TOOL_ICONS = {
+    get_trip_state: '📋', get_weather_forecast: '🌦️', check_business_hours: '🕘',
+    search_local_poi: '🔍', search_restaurants: '🍜', estimate_travel: '🚗',
+    propose_patch: '🧩', present_proposal: '📨', ask_user: '💬', no_change_needed: '✅'
+  };
+  const agentState = {
+    running: false, controller: null, runSeq: 0, startedAt: 0, tickTimer: null,
+    terminal: false, lastMs: 0, sent: null, signature: '', proposal: null, mock: false,
+    rain: { enabled: false, date: '', from: '13:00', to: '17:00', pop: 80 }
+  };
+
+  function agentNameKey(name) {
+    return normalizeText(String(name || '').replace(/臺/g, '台'));
+  }
+
+  function agentIsoDate(value) {
+    const m = /^(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})/.exec(String(value || '').trim());
+    if (m) return `${m[1]}-${m[2].padStart(2, '0')}-${m[3].padStart(2, '0')}`;
+    const d = new Date();
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  }
+
+  function agentTripEndClock() {
+    const limits = getTripDayEndMinutes();
+    if (Array.isArray(limits) && Number.isFinite(limits[0])) return toClockFieldValue(limits[0]);
+    return '20:00';
+  }
+
+  // 可交給 Agent 調整的站：去掉頭尾錨點（出發／返回），行程進行中再去掉已走過的站。
+  // 取連續區段，套用時整段替換，前後不動 → currentStopIndex 仍然有效。
+  function agentEditableRange() {
+    const stops = Array.isArray(replanStops) ? replanStops : [];
+    let from = currentTripStatus === 'ongoing' ? Math.max(0, currentStopIndex + 1) : 0;
+    let to = stops.length - 1;
+    while (from <= to && (!stops[from] || stops[from].type === 'start' || !stops[from].name)) from += 1;
+    while (to >= from && (!stops[to] || stops[to].type === 'end' || !stops[to].name)) to -= 1;
+    return from <= to ? { from, to } : null;
+  }
+
+  function agentTripSignature() {
+    return JSON.stringify((replanStops || []).map((s) => [s.id, s.name, s.stayMin, s.manualStartMin, s.manualEndMin, s.dayIndex]));
+  }
+
+  function buildAgentTripPayload() {
+    const range = agentEditableRange();
+    if (!range) return null;
+    const schedule = buildReplanSchedule();
+    const sent = [];
+    for (let i = range.from; i <= range.to; i += 1) {
+      const stop = replanStops[i];
+      const row = schedule[i] || {};
+      const pos = readStopCoordinates(stop);
+      const item = {
+        id: String(stop.id),
+        day: clampDayIndex(stop.dayIndex, 1),
+        time: Number.isFinite(row.start) ? toClockFieldValue(row.start) : '09:00',
+        stayMin: Math.max(5, Math.round(Number.isFinite(row.end) && Number.isFinite(row.start) ? row.end - row.start : (stop.stayMin || 30))),
+        name: String(stop.name)
+      };
+      if (pos) { item.lat = pos.lat; item.lng = pos.lng; }
+      if (Number.isFinite(stop.manualStartMin)) item.timeLocked = true;
+      sent.push(item);
+    }
+    const prefs = currentTripPreferences || {};
+    const people = getPeopleCount(prefs.people);
+    return {
+      sent,
+      trip: {
+        title: currentTripTitle || '我的行程',
+        region: currentTripRegion || prefs.dest || '',
+        startDate: agentIsoDate(currentTripDepartureDate || prefs.departureDate || prefs.startDate),
+        endTime: agentTripEndClock(),
+        people: Number.isFinite(people) && people > 0 ? people : 1,
+        stops: sent
+      }
+    };
+  }
+
+  function agentAvailability() {
+    const hasTrip = String(currentItineraryId || '') && currentItineraryId !== 'TRIP-EMPTY'
+      && Array.isArray(replanStops) && replanStops.some((s) => s && s.name);
+    if (!hasTrip) return { show: false };
+    if (collabReadOnly) return { show: false };
+    if (isReplanning) return { show: false };
+    if (currentTripStatus === 'completed') return { show: true, ok: false, reason: '行程已結束，不需要再調整。' };
+    if (!agentEditableRange()) return { show: true, ok: false, reason: '後面沒有可以調整的站了。' };
+    return { show: true, ok: true };
+  }
+
+  function refreshAgentEntryUI() {
+    const box = document.getElementById('agentAssist');
+    if (!box) return;
+    const a = agentAvailability();
+    box.hidden = !a.show && !agentState.running && !agentState.proposal;
+    const hint = document.getElementById('agentEntryHint');
+    const disabled = !a.ok || agentState.running;
+    ['agentWeatherBtn', 'agentAskInput', 'agentAskSubmit'].forEach((id) => {
+      const el = document.getElementById(id);
+      if (el) el.disabled = disabled;
+    });
+    if (hint) {
+      hint.textContent = a.ok === false ? a.reason : '';
+      hint.hidden = !hint.textContent;
+    }
+    const mockBadge = document.getElementById('agentMockBadge');
+    if (mockBadge) mockBadge.hidden = !AGENT_MOCK_MODE;
+    const demo = document.getElementById('agentDemoPanel');
+    if (demo) demo.hidden = !AGENT_DEMO_MODE;
+    const dateEl = document.getElementById('agentRainDate');
+    if (dateEl && !dateEl.value) dateEl.value = agentIsoDate(currentTripDepartureDate || (currentTripPreferences || {}).departureDate);
+  }
+
+  function readAgentRainScenario() {
+    const on = document.getElementById('agentRainToggle');
+    if (!AGENT_DEMO_MODE || !on || !on.checked) return null;
+    const val = (id) => (document.getElementById(id) || {}).value || '';
+    const from = val('agentRainFrom') || '13:00';
+    const to = val('agentRainTo') || '17:00';
+    const pop = Math.max(0, Math.min(100, Math.round(Number(val('agentRainPop')) || 80)));
+    if (clockToMinutes(to) <= clockToMinutes(from)) return { error: '模擬降雨的結束時間要晚於開始時間。' };
+    return { rain: { date: agentIsoDate(val('agentRainDate')), from, to, pop } };
+  }
+
+  function agentWeatherCheck() {
+    startAgentRun({ type: 'weather' });
+  }
+
+  function submitAgentAsk(event) {
+    if (event) event.preventDefault();
+    const input = document.getElementById('agentAskInput');
+    const message = String(input && input.value || '').trim();
+    if (!message) {
+      if (input) input.focus();
+      feedbackToast('先輸入你的需求，例如「好累，想早點回飯店」', 'orange');
+      return false;
+    }
+    startAgentRun({ type: 'user', message: message.slice(0, 300) });
+    return false;
+  }
+
+  async function startAgentRun(trigger) {
+    if (agentState.running) return;
+    const a = agentAvailability();
+    if (!a.ok) { feedbackToast(a.reason || '目前無法調整這份行程', 'orange'); return; }
+    const scenario = readAgentRainScenario();
+    if (scenario && scenario.error) { feedbackToast(scenario.error, 'orange'); return; }
+    const payload = buildAgentTripPayload();
+    if (!payload) return;
+
+    const body = { trip: payload.trip, trigger };
+    if (scenario) body.scenario = scenario;
+    const seq = ++agentState.runSeq;
+    const controller = new AbortController();
+    Object.assign(agentState, {
+      running: true, controller, startedAt: performance.now(), terminal: false, lastMs: 0,
+      sent: payload.sent, signature: agentTripSignature(), proposal: null, mock: !!AGENT_MOCK_MODE
+    });
+    resetAgentPanel(trigger);
+    refreshAgentEntryUI();
+    agentState.tickTimer = setInterval(updateAgentElapsed, 100);
+
+    const onEvent = (evt) => { if (seq === agentState.runSeq) handleAgentEvent(evt); };
+    try {
+      if (agentState.mock) await playAgentMock(body, onEvent, controller.signal);
+      else await streamAgentReplan(body, onEvent, controller.signal);
+      if (seq === agentState.runSeq && !agentState.terminal) {
+        handleAgentEvent({ type: 'error', message: '連線中斷，沒有收到結果。請再試一次。' });
+      }
+    } catch (err) {
+      if (seq !== agentState.runSeq) return;
+      if (err && err.name === 'AbortError') {
+        appendAgentRow({ icon: '⏹', text: '已取消，行程沒有變更', tone: 'muted' });
+      } else {
+        handleAgentEvent({ type: 'error', message: (err && err.message) || '代理人執行失敗' });
+      }
+    } finally {
+      if (seq === agentState.runSeq) finishAgentRun();
+    }
+  }
+
+  function finishAgentRun() {
+    agentState.running = false;
+    agentState.controller = null;
+    clearInterval(agentState.tickTimer);
+    agentState.tickTimer = null;
+    updateAgentElapsed();
+    const panel = document.getElementById('agentRunPanel');
+    if (panel) panel.classList.remove('is-running');
+    const stopBtn = document.getElementById('agentStopBtn');
+    if (stopBtn) stopBtn.hidden = true;
+    refreshAgentEntryUI();
+  }
+
+  function cancelAgentRun() {
+    if (agentState.controller) agentState.controller.abort();
+  }
+
+  function closeAgentPanel() {
+    if (agentState.running) cancelAgentRun();
+    agentState.runSeq += 1; // 讓還在路上的事件失效
+    if (agentState.running) finishAgentRun();
+    agentState.proposal = null;
+    const panel = document.getElementById('agentRunPanel');
+    if (panel) panel.hidden = true;
+    refreshAgentEntryUI();
+  }
+
+  // 真正的後端：讀 SSE（每個事件一行 data: {json}，空行分隔）。
+  async function streamAgentReplan(body, onEvent, signal) {
+    const base = ((window.TRAVEL_APP_CONFIG && window.TRAVEL_APP_CONFIG.API_PROXY_BASE) || '').replace(/\/$/, '');
+    if (!base) throw new Error('這個環境沒有設定後端代理（API_PROXY_BASE），無法呼叫代理人。開發時可在網址加 ?agentMock=1 重播錄製資料。');
+    const headers = await vertexAuthHeaders();
+    if (!headers.Authorization) throw new Error('請先登入，才能使用旅程應變助理。');
+    const res = await fetch(`${base}/agent/replan`, { method: 'POST', headers, body: JSON.stringify(body), signal });
+    const type = String(res.headers.get('content-type') || '');
+    if (!res.ok || !type.includes('text/event-stream')) {
+      let msg = '';
+      try { const j = await res.json(); msg = (j && (j.error || j.message)) || ''; } catch (_e) {}
+      if (res.status === 401) throw new Error('登入已過期，請重新登入後再試。');
+      if (res.status === 429) throw new Error('使用太頻繁了，請過幾分鐘再試。');
+      throw new Error(msg || `代理人服務暫時無法使用（HTTP ${res.status}）`);
+    }
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    const flush = (block) => {
+      const data = block.split(/\r?\n/).filter((l) => l.startsWith('data:')).map((l) => l.slice(5).replace(/^ /, '')).join('\n');
+      if (!data) return;
+      try { onEvent(JSON.parse(data)); } catch (e) { console.warn('[agent] 無法解析事件', data, e); }
+    };
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const parts = buffer.split(/\r?\n\r?\n/);
+      buffer = parts.pop();
+      parts.forEach(flush);
+    }
+    buffer += decoder.decode();
+    if (buffer.trim()) flush(buffer);
+  }
+
+  function loadAgentMockFixtures() {
+    if (window.WAI_AGENT_MOCK) return Promise.resolve(window.WAI_AGENT_MOCK);
+    return new Promise((resolve, reject) => {
+      const s = document.createElement('script');
+      s.src = AGENT_MOCK_SCRIPT;
+      s.onload = () => window.WAI_AGENT_MOCK ? resolve(window.WAI_AGENT_MOCK) : reject(new Error('mock 資料格式不對'));
+      s.onerror = () => reject(new Error('載入 mock 資料失敗（agent-mock-fixtures.js）'));
+      document.head.appendChild(s);
+    });
+  }
+
+  // 錄製資料之外，再合成三種畫面狀態方便開發（標 synthetic，事件格式照後端）。
+  function pickAgentMockFixture(all, body) {
+    let key = AGENT_MOCK_MODE.toLowerCase();
+    if (!all[key] && !['fallback', 'question', 'error'].includes(key)) {
+      if (body.trigger.type === 'user') key = 'tired';
+      else key = body.scenario ? 'rain' : 'no-issue';
+    }
+    if (all[key]) return { key, fixture: all[key] };
+    const rain = all.rain;
+    const head = rain.events.filter((e) => ['start', 'check', 'check_result'].includes(e.type));
+    const clone = (x) => JSON.parse(JSON.stringify(x));
+    if (key === 'error') {
+      return { key, synthetic: true, fixture: { request: rain.request, events: [...clone(head), { type: 'error', message: 'AI 服務暫時沒有回應，請稍後再試', ms: 2400 }] } };
+    }
+    if (key === 'question') {
+      return { key, synthetic: true, fixture: { request: rain.request, events: [...clone(rain.events.slice(0, 7)),
+        { type: 'tool_call', tool: 'ask_user', label: '詢問使用者偏好', ms: 900 },
+        { type: 'question', question: '下午會下雨，你比較想改去室內景點，還是提早回飯店休息？', options: ['改去室內景點', '提早回飯店'], ms: 910 }] } };
+    }
+    const proposal = clone(rain.events[rain.events.length - 1]);
+    proposal.fallback = true;
+    proposal.summary = '把受雨影響的戶外站換成附近的室內景點';
+    proposal.reasons = ['AI 沒有在時限內完成，改用規則：降雨時段的戶外站換成最近的室內景點'];
+    proposal.usage = { promptTokens: 0, completionTokens: 0, llmCalls: 0 };
+    proposal.ms = 2600;
+    return { key: 'fallback', synthetic: true, fixture: { request: rain.request, events: [...clone(head),
+      { type: 'tool_call', tool: 'get_trip_state', label: '讀取目前行程', ms: 350 },
+      { type: 'tool_result', tool: 'get_trip_state', ok: true, detail: '1 天、5 站', ms: 352 },
+      { type: 'tool_call', tool: 'propose_patch', label: '組合修改草稿並驗證', ms: 1500 },
+      { type: 'tool_result', tool: 'propose_patch', ok: false, detail: '❌ 「臺東美術館」13:30 不在營業時間', ms: 1510 },
+      { type: 'fallback', label: 'AI 沒有在時限內完成，改用規則式替換', ms: 2500 }, proposal] } };
+  }
+
+  // 錄製的 fixture 用 s1…s5 當站 id；用站名對到目前行程的 id，才能走真正的套用流程。
+  // 對不起來（目前行程不是錄製時那份）就標 __mockMismatch：照樣顯示，但不給套用。
+  function remapAgentMockEvent(evt, idMap, mismatch) {
+    if (evt.type !== 'proposal' || !evt.draft || !Array.isArray(evt.draft.stops)) return evt;
+    const out = JSON.parse(JSON.stringify(evt));
+    out.draft.stops.forEach((s) => {
+      if (!s.agentAdded) s.id = idMap[s.id] || s.id;
+      if (s.replaces) s.replaces = idMap[s.replaces] || s.replaces;
+    });
+    if (mismatch) out.__mockMismatch = true;
+    return out;
+  }
+
+  async function playAgentMock(body, onEvent, signal) {
+    const all = await loadAgentMockFixtures();
+    const picked = pickAgentMockFixture(all, body);
+    const recorded = (picked.fixture.request && picked.fixture.request.tripStops) || [];
+    const byName = {};
+    body.trip.stops.forEach((s) => { byName[agentNameKey(s.name)] = s.id; });
+    const idMap = {};
+    recorded.forEach((s) => { if (byName[agentNameKey(s.name)]) idMap[s.id] = byName[agentNameKey(s.name)]; });
+    const mismatch = recorded.length !== body.trip.stops.length || Object.keys(idMap).length !== recorded.length;
+    appendAgentRow({ icon: '🎬', text: `mock 重播：${picked.key}（${picked.synthetic ? '合成事件' : '錄製自 gpt-oss-120b'}）`, tone: 'muted' });
+    let prev = 0;
+    for (const evt of picked.fixture.events) {
+      const wait = Math.max(0, (Number(evt.ms) || 0) - prev);
+      prev = Math.max(prev, Number(evt.ms) || 0);
+      await new Promise((resolve, reject) => {
+        if (signal.aborted) return reject(new DOMException('aborted', 'AbortError'));
+        const t = setTimeout(resolve, wait);
+        signal.addEventListener('abort', () => { clearTimeout(t); reject(new DOMException('aborted', 'AbortError')); }, { once: true });
+      });
+      onEvent(remapAgentMockEvent(evt, idMap, mismatch));
+    }
+  }
+
+  function agentElapsedText(ms) {
+    return `${(Math.max(0, Number(ms) || 0) / 1000).toFixed(1)} 秒`;
+  }
+
+  function updateAgentElapsed() {
+    const el = document.getElementById('agentElapsed');
+    if (!el) return;
+    const ms = agentState.running ? performance.now() - agentState.startedAt : agentState.lastMs;
+    el.textContent = agentElapsedText(ms);
+  }
+
+  function resetAgentPanel(trigger) {
+    const panel = document.getElementById('agentRunPanel');
+    if (!panel) return;
+    panel.hidden = false;
+    panel.classList.add('is-running');
+    const title = document.getElementById('agentRunTitle');
+    if (title) title.textContent = trigger.type === 'weather' ? '檢查天氣與營業時間' : `「${trigger.message}」`;
+    const badges = document.getElementById('agentRunBadges');
+    if (badges) badges.innerHTML = agentState.mock ? '<span class="agent-badge mock">mock</span>' : '';
+    const list = document.getElementById('agentEventList');
+    if (list) list.innerHTML = '';
+    const result = document.getElementById('agentResult');
+    if (result) result.innerHTML = '';
+    const stopBtn = document.getElementById('agentStopBtn');
+    if (stopBtn) stopBtn.hidden = false;
+    updateAgentElapsed();
+    if (typeof panel.scrollIntoView === 'function') panel.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  }
+
+  function appendAgentRow({ icon, text, detail, tone, ms, pendingTool, issues }) {
+    const list = document.getElementById('agentEventList');
+    if (!list) return null;
+    const li = document.createElement('li');
+    li.className = `agent-step${tone ? ` is-${tone}` : ''}${pendingTool ? ' is-pending' : ''}`;
+    if (pendingTool) li.dataset.tool = pendingTool;
+    const issuesHtml = Array.isArray(issues) && issues.length
+      ? `<ul class="agent-step-issues">${issues.map((x) => `<li>${escapeHtml(x)}</li>`).join('')}</ul>` : '';
+    li.innerHTML = `<span class="agent-step-icon" aria-hidden="true">${escapeHtml(icon || '•')}</span>
+      <div class="agent-step-body"><div class="agent-step-text">${escapeHtml(text || '')}</div>
+      <div class="agent-step-detail"${detail ? '' : ' hidden'}>${escapeHtml(detail || '')}</div>${issuesHtml}</div>
+      <span class="agent-step-ms">${Number.isFinite(ms) ? `+${(ms / 1000).toFixed(1)}s` : ''}</span>`;
+    list.appendChild(li);
+    return li;
+  }
+
+  function handleAgentEvent(evt) {
+    if (!evt || typeof evt !== 'object') return;
+    if (Number.isFinite(Number(evt.ms))) agentState.lastMs = Math.max(agentState.lastMs, Number(evt.ms));
+    const ms = Number.isFinite(Number(evt.ms)) ? Number(evt.ms) : undefined;
+    const badges = document.getElementById('agentRunBadges');
+    switch (evt.type) {
+      case 'start':
+        if (evt.simulated && badges && !badges.querySelector('.sim')) badges.insertAdjacentHTML('beforeend', '<span class="agent-badge sim">模擬情境</span>');
+        appendAgentRow({ icon: '🤖', text: `代理人啟動，讀入 ${Number(evt.stops) || 0} 站`, ms });
+        break;
+      case 'check':
+        appendAgentRow({ icon: '🧮', text: evt.label || '程式檢查', ms, pendingTool: '__check' });
+        break;
+      case 'check_result': {
+        const pending = document.querySelector('#agentEventList .agent-step.is-pending[data-tool="__check"]');
+        if (pending) pending.classList.remove('is-pending');
+        const issues = Array.isArray(evt.issues) ? evt.issues : [];
+        appendAgentRow({ icon: issues.length ? '⚠️' : '✅', text: evt.label || (issues.length ? `發現 ${issues.length} 個問題` : '沒有發現問題'), tone: issues.length ? 'warn' : '', ms, issues });
+        break;
+      }
+      case 'tool_call':
+        appendAgentRow({ icon: AGENT_TOOL_ICONS[evt.tool] || '🔧', text: evt.label || evt.tool || '呼叫工具', ms, pendingTool: evt.tool || '?' });
+        break;
+      case 'tool_result': {
+        const rows = document.querySelectorAll(`#agentEventList .agent-step.is-pending[data-tool="${CSS.escape(evt.tool || '?')}"]`);
+        const row = rows[rows.length - 1];
+        if (row) {
+          row.classList.remove('is-pending');
+          if (evt.ok === false) row.classList.add('is-warn');
+          const d = row.querySelector('.agent-step-detail');
+          if (d && evt.detail) { d.textContent = evt.detail; d.hidden = false; }
+        } else if (evt.detail) {
+          appendAgentRow({ icon: evt.ok === false ? '⚠️' : '↳', text: evt.detail, tone: evt.ok === false ? 'warn' : '', ms });
+        }
+        break;
+      }
+      case 'fallback':
+        appendAgentRow({ icon: '🛟', text: evt.label || 'AI 沒有完成，改用規則式替換', tone: 'warn', ms });
+        break;
+      case 'proposal':
+        agentState.terminal = true;
+        clearAgentPending();
+        agentState.proposal = evt;
+        renderAgentProposal(evt);
+        break;
+      case 'question':
+        agentState.terminal = true;
+        clearAgentPending();
+        renderAgentQuestion(evt);
+        break;
+      case 'no_change':
+        agentState.terminal = true;
+        clearAgentPending();
+        renderAgentNotice('✅', evt.llmSkipped ? '程式檢查沒發現問題，沒有呼叫 AI' : '不需要調整', evt.reason || '', 'ok');
+        break;
+      case 'error':
+        agentState.terminal = true;
+        clearAgentPending();
+        renderAgentNotice('⚠️', '代理人沒有完成', evt.message || '發生未知錯誤', 'error');
+        break;
+      default:
+        break;
+    }
+    const list = document.getElementById('agentEventList');
+    if (list) list.scrollTop = list.scrollHeight;
+  }
+
+  function clearAgentPending() {
+    document.querySelectorAll('#agentEventList .agent-step.is-pending').forEach((el) => el.classList.remove('is-pending'));
+  }
+
+  function renderAgentNotice(icon, title, text, tone) {
+    const box = document.getElementById('agentResult');
+    if (!box) return;
+    box.innerHTML = `<div class="agent-notice is-${tone}"><span aria-hidden="true">${icon}</span>
+      <div><div class="agent-notice-title">${escapeHtml(title)}</div>${text ? `<div class="agent-notice-text">${escapeHtml(text)}</div>` : ''}</div></div>`;
+  }
+
+  function renderAgentQuestion(evt) {
+    const box = document.getElementById('agentResult');
+    if (!box) return;
+    const opts = Array.isArray(evt.options) ? evt.options : [];
+    box.innerHTML = `<div class="agent-notice is-ask"><span aria-hidden="true">💬</span><div>
+      <div class="agent-notice-title">${escapeHtml(evt.question || '代理人想先確認你的偏好')}</div>
+      ${opts.length ? `<div class="agent-options">${opts.map((o) => `<button type="button" class="agent-option" data-answer="${escapeHtml(o)}">${escapeHtml(o)}</button>`).join('')}</div>` : ''}
+      <div class="agent-notice-text">點選項會填進上方的輸入框，再按「送出」告訴代理人。</div></div></div>`;
+    box.querySelectorAll('.agent-option').forEach((b) => b.addEventListener('click', () => {
+      const input = document.getElementById('agentAskInput');
+      if (!input) return;
+      input.value = b.dataset.answer || '';
+      input.focus();
+    }));
+  }
+
+  function agentMoney(n) {
+    return `NT$${Math.round(Number(n) || 0).toLocaleString('zh-TW')}`;
+  }
+
+  function agentChangeHtml(c, multiDay) {
+    const when = [multiDay && c.day ? `第 ${c.day} 天` : '', c.type === 'retime' ? '' : (c.time || '')].filter(Boolean).join(' ');
+    const whenHtml = when ? `<span class="agent-chg-when nowrap">${escapeHtml(when)}</span>` : '';
+    const tag = { replace: '替換', remove: '刪除', insert: '新增', retime: '調整' }[c.type] || '修改';
+    let body = '';
+    if (c.type === 'replace') body = `<del>${escapeHtml(c.from)}</del><span class="agent-chg-arrow" aria-label="改成">→</span><ins>${escapeHtml(c.to)}</ins>`;
+    else if (c.type === 'remove') body = `<del>${escapeHtml(c.from)}</del>`;
+    else if (c.type === 'insert') body = `<ins>${escapeHtml(c.to)}</ins>`;
+    else if (c.type === 'retime') {
+      const parts = [];
+      if (c.from && c.to && c.from !== c.to) parts.push(`<span class="nowrap">${escapeHtml(c.from)} → ${escapeHtml(c.to)}</span>`);
+      if (Number.isFinite(c.stayFrom) && Number.isFinite(c.stayTo) && c.stayFrom !== c.stayTo) {
+        parts.push(`<span class="nowrap">停留 ${escapeHtml(formatStayMinutes(c.stayFrom))} → ${escapeHtml(formatStayMinutes(c.stayTo))}</span>`);
+      }
+      body = `<span class="agent-chg-name">${escapeHtml(c.name || '')}</span> ${parts.join('、')}`;
+    } else body = escapeHtml(c.to || c.from || '');
+    return `<li class="agent-chg is-${escapeHtml(c.type || 'other')}"><span class="agent-chg-tag">${tag}</span>${whenHtml}<span class="agent-chg-body">${body}</span></li>`;
+  }
+
+  function renderAgentProposal(p) {
+    const box = document.getElementById('agentResult');
+    if (!box) return;
+    const draftStops = (p.draft && Array.isArray(p.draft.stops)) ? p.draft.stops : [];
+    const multiDay = (p.draft && Number(p.draft.days) > 1) || draftStops.some((s) => Number(s.day) > 1);
+    const badges = [];
+    if (p.fallback) badges.push('<span class="agent-badge fallback">快速替代方案（未經 AI 推理）</span>');
+    if (p.simulated) badges.push('<span class="agent-badge sim">模擬情境</span>');
+    const cost = p.costDelta || null;
+    let costHtml = '';
+    if (cost && Number.isFinite(Number(cost.perPersonBefore)) && Number.isFinite(Number(cost.perPersonAfter))) {
+      const diff = Number.isFinite(Number(cost.diff)) ? Number(cost.diff) : Number(cost.perPersonAfter) - Number(cost.perPersonBefore);
+      const diffText = diff === 0 ? '不變' : `${diff > 0 ? '+' : '−'}${agentMoney(Math.abs(diff))}`;
+      costHtml = `<div class="agent-cost"><span class="agent-cost-label">每人花費</span>
+        <span class="nowrap">${agentMoney(cost.perPersonBefore)} → ${agentMoney(cost.perPersonAfter)}</span>
+        <span class="agent-cost-diff ${diff > 0 ? 'up' : (diff < 0 ? 'down' : '')}">${diffText}</span>
+        ${cost.note ? `<span class="agent-cost-note">${escapeHtml(cost.note)}</span>` : ''}</div>`;
+    }
+    const warnings = Array.isArray(p.warnings) && p.warnings.length
+      ? `<ul class="agent-warnings">${p.warnings.map((w) => `<li>⚠️ ${escapeHtml(typeof w === 'string' ? w : (w && w.message) || '')}</li>`).join('')}</ul>` : '';
+    const usage = p.usage || {};
+    const meta = [p.model, usage.llmCalls ? `${usage.llmCalls} 次 AI 呼叫` : (p.fallback ? '規則式' : ''), agentElapsedText(p.ms)].filter(Boolean).join(' · ');
+    const removedIds = new Set((agentState.sent || []).map((s) => s.id));
+    draftStops.forEach((s) => { removedIds.delete(String(s.id)); if (s.replaces) removedIds.add(String(s.replaces)); });
+    const dayPrefix = (d) => (multiDay ? `D${d} ` : '');
+    const beforeList = (agentState.sent || []).map((s) => `<li class="${removedIds.has(s.id) ? 'is-removed' : ''}"><span class="nowrap">${dayPrefix(s.day)}${escapeHtml(s.time)}</span> ${escapeHtml(s.name)}</li>`).join('');
+    const afterList = draftStops.map((s) => `<li class="${s.agentAdded ? 'is-added' : ''}"><span class="nowrap">${dayPrefix(s.day || 1)}${escapeHtml(s.time || '')}</span> ${escapeHtml(s.name)}</li>`).join('');
+    const blocked = p.__mockMismatch
+      ? '<div class="agent-blocked">這份錄製的提案是針對「台東市區一日遊」那份行程，和目前行程對不起來，只能預覽、不能套用。</div>' : '';
+    box.innerHTML = `<article class="agent-proposal" aria-label="代理人提案">
+      <div class="agent-proposal-head">${badges.join('')}<h3 class="agent-proposal-title">${escapeHtml(p.summary || '調整提案')}</h3></div>
+      ${Array.isArray(p.changes) && p.changes.length ? `<ul class="agent-changes">${p.changes.map((c) => agentChangeHtml(c, multiDay)).join('')}</ul>` : ''}
+      ${Array.isArray(p.reasons) && p.reasons.length ? `<ul class="agent-reasons">${p.reasons.map((r) => `<li>${escapeHtml(r)}</li>`).join('')}</ul>` : ''}
+      ${costHtml}${warnings}
+      <details class="agent-compare"><summary>查看完整的前後行程</summary>
+        <div class="agent-compare-grid"><div><div class="agent-compare-label">原本</div><ol>${beforeList}</ol></div>
+        <div><div class="agent-compare-label">調整後</div><ol>${afterList}</ol></div></div></details>
+      ${meta ? `<div class="agent-meta">${escapeHtml(meta)}</div>` : ''}
+      ${blocked}
+      <div class="agent-actions">
+        <button type="button" class="replan-btn primary" id="agentApplyBtn" onclick="applyAgentProposal()"${p.__mockMismatch || !draftStops.length ? ' disabled' : ''}>套用</button>
+        <button type="button" class="replan-btn secondary" onclick="discardAgentProposal()">放棄</button>
+      </div></article>`;
+  }
+
+  function discardAgentProposal() {
+    agentState.proposal = null;
+    renderAgentNotice('↩', '已放棄提案', '行程維持原樣。', 'muted');
+    refreshAgentEntryUI();
+  }
+
+  // 套用：把 draft.stops 寫回目前行程（只換掉送出去的那一段），再走既有的 applyReplan 重繪＋存檔。
+  async function applyAgentProposal() {
+    const p = agentState.proposal;
+    if (!p || !p.draft || !Array.isArray(p.draft.stops) || p.__mockMismatch) return;
+    if (collabReadOnly) { feedbackToast('唯讀成員不能修改行程', 'orange'); return; }
+    if (agentTripSignature() !== agentState.signature) {
+      window.alert('送出後行程已經被改過（可能是你或旅伴），這份提案可能不適用了。請重新檢查一次。');
+      return;
+    }
+    const btn = document.getElementById('agentApplyBtn');
+    if (btn) btn.disabled = true;
+    let locked = false;
+    if (currentTripIsCollab && window.WAI_COLLAB && firebaseEnabled && firebaseDb) {
+      try {
+        const { email, name } = getCurrentUserIdentity();
+        const lock = await withReplanStepTimeout(WAI_COLLAB.acquireRegenLock(currentItineraryId, { email, name }), '取得重新規劃鎖', 8000);
+        if (!lock.ok) {
+          window.alert(`${lock.holder} 正在調整行程，請稍候再試。`);
+          if (btn) btn.disabled = false;
+          return;
+        }
+        locked = true;
+      } catch (e) {
+        console.warn('[agent] 取重生成鎖失敗：', e);
+        window.alert('目前無法鎖定共編行程，為避免覆蓋其他成員的修改，這次先不套用。請稍後再試。');
+        if (btn) btn.disabled = false;
+        return;
+      }
+    }
+    try {
+      replanStops = buildStopsFromAgentDraft(p.draft.stops, p.changes);
+      ensureStopDayIndexes(replanStops, currentTripPreferences || {});
+      ensureIndoorOutdoorMetadata(replanStops, currentTripRegion);
+      agentState.proposal = null;
+      applyReplan();
+      schedulePersistTrip();
+      renderAgentNotice('✅', '已套用', p.summary || '', 'ok');
+    } catch (e) {
+      console.error('[agent] 套用失敗', e);
+      window.alert(`套用失敗：${e.message || e}`);
+      if (btn) btn.disabled = false;
+    } finally {
+      if (locked) {
+        try { await withReplanStepTimeout(WAI_COLLAB.releaseRegenLock(currentItineraryId), '解除重新規劃鎖', 8000); } catch (_e) {}
+      }
+      refreshAgentEntryUI();
+    }
+  }
+
+  // 純粹組新的站點陣列（不改 replanStops 本身，失敗時原行程不受影響）。
+  function buildStopsFromAgentDraft(draftStops, changes) {
+    const retimed = new Set((Array.isArray(changes) ? changes : [])
+      .filter((c) => c && c.type === 'retime' && c.from && c.to && c.from !== c.to)
+      .map((c) => agentNameKey(c.name)));
+    const range = agentEditableRange();
+    if (!range) throw new Error('找不到可調整的區段');
+    const segment = replanStops.slice(range.from, range.to + 1);
+    const byId = new Map(segment.map((s) => [String(s.id), s]));
+    const sentById = new Map((agentState.sent || []).map((s) => [s.id, s]));
+    const middle = draftStops.map((d) => {
+      const day = clampDayIndex(d.day, 1);
+      const stayMin = Math.max(5, Math.round(Number(d.stayMin) || 30));
+      const existing = !d.agentAdded ? byId.get(String(d.id)) : null;
+      if (existing) {
+        const sent = sentById.get(String(d.id)) || {};
+        const stop = { ...existing, dayIndex: day };
+        const startDelta = (clockToMinutes(d.time) ?? 0) - (clockToMinutes(sent.time) ?? 0);
+        if (d.time && sent.time && startDelta !== 0) {
+          // 時刻只在兩種情況寫死：原本就是手動時間（順著平移），或提案明確要求改這站的時間（retime）。
+          // 其他站讓排程照車程自然重算，不要因為套用一次就整份行程都變成手動鎖定。
+          if (Number.isFinite(stop.manualStartMin)) stop.manualStartMin += startDelta;
+          else if (retimed.has(agentNameKey(stop.name))) stop.manualStartMin = (day - 1) * 1440 + clockToMinutes(d.time);
+        }
+        if (stayMin !== sent.stayMin) {
+          stop.stayMin = stayMin;
+          stop.durationLocked = false;
+          stop.manualEndMin = Number.isFinite(stop.manualEndMin) && Number.isFinite(stop.manualStartMin) ? stop.manualStartMin + stayMin : null;
+        }
+        return stop;
+      }
+      if (!d.agentAdded && !d.replaces) throw new Error(`提案裡的「${d.name}」對不到目前行程的站`);
+      const replaced = d.replaces ? byId.get(String(d.replaces)) : null;
+      const hasPos = Number.isFinite(Number(d.lat)) && Number.isFinite(Number(d.lng));
+      const created = createStopFromTemplate({
+        name: d.name, emoji: d.kind === 'food' ? '🍽️' : '📍', desc: '',
+        stayMin, dayIndex: day, baseId: 'agent',
+        scenicCoordinates: hasPos ? { lat: Number(d.lat), lng: Number(d.lng) } : null,
+        transitMode: replaced ? replaced.transitMode : getPreferredVehicleMode(),
+        transitModeManual: replaced ? replaced.transitModeManual === true : false,
+        transitMin: null
+      });
+      created.agentAdded = true;
+      if (replaced && Number.isFinite(replaced.manualStartMin)) created.manualStartMin = (day - 1) * 1440 + (clockToMinutes(d.time) ?? 0);
+      return created;
+    });
+    const oldNext = new Map();
+    segment.forEach((s, i) => oldNext.set(String(s.id), segment[i + 1] ? String(segment[i + 1].id) : '__after'));
+    middle.forEach((s, i) => {
+      const next = middle[i + 1] ? String(middle[i + 1].id) : '__after';
+      // 下一站換了，舊的車程與停車步行就不準了，交給路線重算
+      if (oldNext.get(String(s.id)) !== next) { s.transitMin = null; s.parkWalkMin = null; }
+    });
+    const before = replanStops.slice(0, range.from);
+    if (before.length) {
+      const last = { ...before[before.length - 1] };
+      if (!middle[0] || String(middle[0].id) !== String(segment[0].id)) { last.transitMin = null; }
+      before[before.length - 1] = last;
+    }
+    return [...before, ...middle, ...replanStops.slice(range.to + 1)];
+  }
+
+  function setupAgentAssist() {
+    refreshAgentEntryUI();
+  }
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', setupAgentAssist);
+  else setupAgentAssist();

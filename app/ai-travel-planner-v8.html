@@ -9,7 +9,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@300;400;500;700&family=Noto+Serif+TC:wght@500;700&family=DM+Serif+Display&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="./ai-travel-planner-v8.css?v=20260930-mapctl1">
+<link rel="stylesheet" href="./ai-travel-planner-v8.css?v=20261002-agent1">
 <link rel="stylesheet" href="./design-tokens.css?v=20260727-fix3">
 <link rel="stylesheet" href="./trip-photo-gallery.css?v=20260922-gallery1">
 <script src="./icons.js?v=20260727-fix3"></script>
@@ -100,6 +100,43 @@
           <div class="prototype-id-chip" id="prototypeTripId">原型資料</div>
         </div>
       </div>
+      <section class="agent-assist" id="agentAssist" aria-labelledby="agentAssistTitle" hidden>
+        <div class="agent-entry-head">
+          <h2 class="agent-entry-title" id="agentAssistTitle">🤖 旅程應變助理</h2>
+          <span class="agent-badge mock" id="agentMockBadge" hidden title="重播錄製的代理人事件，不會呼叫 AI">mock</span>
+        </div>
+        <p class="agent-entry-sub">天氣變了、走累了？讓代理人檢查行程並提出調整，你確認後才會改。</p>
+        <div class="agent-entry-row">
+          <button type="button" class="replan-btn primary agent-weather-btn" id="agentWeatherBtn" onclick="agentWeatherCheck()">🌦️ 檢查天氣並調整</button>
+          <form class="agent-ask" id="agentAskForm" onsubmit="return submitAgentAsk(event)">
+            <label class="sr-only" for="agentAskInput">告訴代理人你的需求</label>
+            <input type="text" id="agentAskInput" class="agent-ask-input" maxlength="300" autocomplete="off" placeholder="例如：好累，想早點回飯店">
+            <button type="submit" class="replan-btn secondary" id="agentAskSubmit">送出</button>
+          </form>
+        </div>
+        <div class="agent-entry-hint" id="agentEntryHint" hidden></div>
+        <div class="agent-demo" id="agentDemoPanel" hidden>
+          <div class="agent-demo-title">🎛 展示：情境注入</div>
+          <label class="agent-demo-toggle"><input type="checkbox" id="agentRainToggle"> 模擬：下午大雨</label>
+          <div class="agent-demo-fields">
+            <label>日期 <input type="date" id="agentRainDate"></label>
+            <label>從 <input type="time" id="agentRainFrom" value="13:00"></label>
+            <label>到 <input type="time" id="agentRainTo" value="17:00"></label>
+            <label>降雨機率 <input type="number" id="agentRainPop" value="80" min="0" max="100" step="5">%</label>
+          </div>
+          <div class="agent-demo-note">只替換天氣資料，代理人照常執行；畫面會標示「模擬情境」。</div>
+        </div>
+        <div class="agent-run" id="agentRunPanel" hidden>
+          <div class="agent-run-head">
+            <div class="agent-run-title-wrap"><span class="agent-run-spinner" aria-hidden="true"></span><span class="agent-run-title" id="agentRunTitle"></span><span id="agentRunBadges"></span></div>
+            <span class="agent-run-elapsed" id="agentElapsed" aria-label="經過時間">0.0 秒</span>
+            <button type="button" class="agent-run-stop" id="agentStopBtn" onclick="cancelAgentRun()" hidden>停止</button>
+            <button type="button" class="agent-run-close" onclick="closeAgentPanel()" aria-label="關閉代理人面板">✕</button>
+          </div>
+          <ol class="agent-steps" id="agentEventList" aria-live="polite"></ol>
+          <div class="agent-result" id="agentResult" aria-live="polite"></div>
+        </div>
+      </section>
       <div class="timeline" id="itineraryPlannedBlock"></div>
       <div class="planning-stage" id="itineraryPlanningBlock">
         <div class="planning-shell">
@@ -622,7 +659,7 @@
 <script src="./trip-photo-manager.js?v=20260928-order1"></script>
 <script src="./trip-photo-sync.js?v=20260927-ownfile1"></script>
 <script src="./trip-photo-gallery.js?v=20260927-labels1"></script>
-<script src="./ai-travel-planner-v8.js?v=20261001-posterkey1"></script>
+<script src="./ai-travel-planner-v8.js?v=20261002-agent1"></script>
 <script>
   // 動態載入 Google Maps：金鑰統一由 weather.env.js 的 TRAVEL_APP_CONFIG 提供，
   // 避免在頁面硬編金鑰（先前硬編的舊金鑰已失效，導致 InvalidKeyMapError）。
