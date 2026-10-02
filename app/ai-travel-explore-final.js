@@ -529,9 +529,32 @@ function attachStopAlternatives(stops, destination) {
   return stops;
 }
 
+// 候選景點：先用目的地半徑「篩」，再依品質「挑」。
+// 原本是資料檔順序（＝依名稱排序）取前 40 個：「台東市」對到全縣那一桶，清單開頭就是
+// 9420（大武）、都歷（成功）、三仙台，prompt 又寫「只能從清單挑選」。2026-10-02 A/B
+// （同一份 prompt 各 5 次）：Gemini 0 次、gpt-oss 3 次把 49km 外的三仙台排進台東市行程。
+// 不能改成「依距離由近到遠」：台東市 2km 內就有 35 個小景點，會把加路蘭、卑南遺址擠出清單。
+// 沒有評分的景點當 4.0（不懲罰沒被評過的地方，例如利吉惡地），Places 驗證過的稍微加分，同分再比距離。
+function rankPoisByDestination(pois, destination) {
+  const center = getDestinationCenter(destination);
+  if (!center || !Array.isArray(pois)) return pois || [];
+  const maxM = getDestinationMaxDistanceMeters(destination);
+  const scored = pois
+    .map((poi) => ({
+      poi,
+      d: haversineM(center, { lat: Number(poi.lat), lng: Number(poi.lng) }),
+      q: (Number(poi.rating) || 4.0) + (poi.placeVerified ? 0.1 : 0)
+    }))
+    .filter((x) => Number.isFinite(x.d));
+  const inside = scored.filter((x) => x.d <= maxM);
+  // 範圍內太少（資料不足）時退回「最近的那幾個」，總比給 AI 一份太短的清單好
+  if (inside.length < 8) return scored.sort((a, b) => a.d - b.d).map((x) => x.poi);
+  return inside.sort((a, b) => b.q - a.q || a.d - b.d).map((x) => x.poi);
+}
+
 // 用本地景點清單組「【已驗證景點快取】」hint（格式與 buildFirebasePoiHintBlock 一致），交給 AI 只做排序。
 function buildLocalPoiHintBlock(destination) {
-  const pois = getLocalPoiList(destination);
+  const pois = rankPoisByDestination(getLocalPoiList(destination), destination);
   if (!pois.length) return '';
   const poiLines = pois.slice(0, 40).map((poi) => {
     const poiLat = Number(poi.lat);
@@ -1695,7 +1718,37 @@ async function requestGeminiMicroTravelPlan(wizardData, options = {}) {
       text = await requestOnce(GEMINI_MODEL, false);
     }
   }
-  return parsePlanJsonFromText(text);
+  return normalizeAiPlanStops(parsePlanJsonFromText(text), hintBlock);
+}
+
+// 把 AI 回的站名對回 prompt 裡給的候選清單，並丟掉格式錯誤的「A → B」路段。
+// gpt-oss（AMD）常把名稱寫短：「榕樹下米苔目(中華路創始老店-別無分店)」→「榕樹下米苔目」，
+// 對不上本地資料就會走 Places 驗證（多花錢、也可能對到別家分店）；偶爾還把路段當成一站輸出。
+// 只在「唯一」對得上時才改名，對到兩個以上就保留原名，交給後面原本的驗證流程。
+function normalizeAiPlanStops(plan, hintBlock) {
+  if (!plan || !Array.isArray(plan.stops)) return plan;
+  const norm = (s) => String(s || '').replace(/臺/g, '台').replace(/[\s()（）【】\[\]・·*＊、,，.。'’"「」\-－—_]/g, '').toLowerCase();
+  const candidates = [...String(hintBlock || '').matchAll(/(?:景點名稱|餐廳名稱)：([^\n]+)/g)]
+    .map((m) => m[1].replace(/^[^\p{L}\p{N}]+/u, '').trim())   // 景點名稱前可能帶 emoji
+    .filter(Boolean);
+  if (!candidates.length) return plan;
+  const exact = new Set(candidates);
+  const byNorm = candidates.map((name) => ({ name, n: norm(name) }));
+
+  const stops = plan.stops.filter((stop) => {
+    const name = String((stop && stop.name) || '');
+    return !/→|->|➡|⇒/.test(name);   // 「台東車站 → TTstyle原創館」這種是路段，不是景點
+  });
+  for (const stop of stops) {
+    const name = String((stop && stop.name) || '').trim();
+    if (!name || exact.has(name)) continue;
+    const n = norm(name);
+    if (n.length < 3) continue;
+    const hits = byNorm.filter((c) => c.n === n || c.n.startsWith(n) || n.startsWith(c.n));
+    if (hits.length === 1) stop.name = hits[0].name;
+  }
+  if (stops.length !== plan.stops.length) stops.forEach((stop, i) => { if (stop && 'order' in stop) stop.order = i + 1; });
+  return { ...plan, stops };
 }
 
 function getStopCoordinate(stop) {
@@ -1956,6 +2009,9 @@ function getDestinationMaxDistanceMeters(destinationText) {
   if (!lookup) return 45000;
   if (/日本|韓國|歐洲/.test(lookup)) return 120000;
   if (/台北|新北|桃園|台中|台南|高雄|基隆|新竹/.test(lookup)) return 40000;
+  // 「台東市」是市區不是全縣：落到下一行的縣級 55km，prompt 就會寫「有效半徑約 55 公里」，
+  // 49km 外的三仙台也算範圍內（見 rankPoisByDestination 的 A/B 紀錄）。
+  if (/^台東市(區)?$/.test(String(lookup).replace(/臺/g, '台'))) return 15000;
   if (/台東|花蓮|宜蘭|屏東|南投|嘉義|苗栗/.test(lookup)) return 55000;
   if (/土坂|達仁/.test(lookup)) return 8000;
   // 離島：地域極小，嚴格限縮半徑防止 AI 座標嚴重偏移通過驗證
