@@ -176,7 +176,42 @@ function upstreamHeaders() {
   return { 'Content-Type': 'application/json', Authorization: 'Bearer ' + AMD_LLM_API_KEY };
 }
 
+/**
+ * Agent 用的 tool calling 呼叫（OpenAI 格式直進直出，不轉 Gemini）。
+ * 回傳 { message, finishReason, usage }；message 只留 role/content/tool_calls，
+ * vLLM 附帶的 reasoning 欄位不往回送，避免下一輪 prompt 越滾越大。
+ */
+async function chat({ messages, tools, temperature = 0.3, maxTokens = 2048, signal }) {
+  const body = {
+    model: AMD_LLM_MODEL,
+    messages,
+    temperature,
+    max_tokens: maxTokens,
+    reasoning_effort: AMD_LLM_REASONING_EFFORT
+  };
+  if (Array.isArray(tools) && tools.length) {
+    body.tools = tools;
+    body.tool_choice = 'auto';
+  }
+  const r = await fetch(chatCompletionsUrl(), {
+    method: 'POST', headers: upstreamHeaders(), body: JSON.stringify(body), signal
+  });
+  if (!r.ok) {
+    const detail = await r.text().catch(() => '');
+    const err = new Error('AMD LLM ' + r.status + '：' + detail.slice(0, 200));
+    err.status = r.status;
+    throw err;
+  }
+  const data = await r.json();
+  const choice = (data.choices && data.choices[0]) || {};
+  const m = choice.message || {};
+  const message = { role: 'assistant', content: m.content || '' };
+  if (Array.isArray(m.tool_calls) && m.tool_calls.length) message.tool_calls = m.tool_calls;
+  return { message, finishReason: choice.finish_reason || '', usage: data.usage || null };
+}
+
 module.exports = {
+  chat,
   USAGE_MODEL_ID,
   isEnabled,
   shouldRoute,

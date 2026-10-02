@@ -35,6 +35,8 @@ const genRuns = require('./generation-runs');
 const { createUsageTap, modelIdFromPath } = require('./usage-tap');
 // AI_PROVIDER=amd 時，文字生成改走 AMD／工研院的 gpt-oss-120b（Gemini 格式在這裡轉換）
 const amdLlm = require('./amd-llm');
+// 旅程應變 Agent（docs/amd-agent/agent-tools-and-replanning.md）
+const { runAgent } = require('./agent/loop');
 // 回顧短片後端渲染 job（M8）：獨立模組，掛在既有代理上
 const { mountRecapJobs } = require('./recap-jobs');
 
@@ -1134,6 +1136,67 @@ async function proxyToAmdLlm(req, res, upstreamPath, run) {
   finish();
   res.end();
 }
+
+// ══════════════ 旅程應變 Agent（需登入 + 限流，SSE 逐步回報）══════════════
+// 每一步（查天氣、搜尋、驗證…）即時推給前端的動態面板；最後一個事件是
+// proposal／question／no_change／error。只產生提案，不寫入任何行程。
+
+const agentLimiter = rateLimit({
+  windowMs: 10 * 60 * 1000,
+  max: 15,   // 一次執行最多 14 次 LLM 呼叫，這裡限的是「執行次數」
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'rate limited', message: 'AI 代理人使用太頻繁，請稍後再試。' }
+});
+
+app.post('/api/agent/replan', agentLimiter, requireFirebaseUser, async (req, res) => {
+  const body = req.body || {};
+  const trigger = body.trigger && typeof body.trigger === 'object' ? body.trigger : {};
+  if (!['weather', 'user'].includes(trigger.type)) return res.status(400).json({ error: 'invalid trigger' });
+  if (trigger.type === 'user' && !String(trigger.message || '').trim()) return res.status(400).json({ error: 'message required' });
+  if (!body.trip || !Array.isArray(body.trip.stops)) return res.status(400).json({ error: 'invalid trip' });
+
+  // demo 情境注入：只改工具回傳的天氣，Agent 流程照常真實執行；提案會標 simulated
+  const rain = body.scenario && body.scenario.rain;
+  const scenario = rain && typeof rain === 'object'
+    ? { rain: { date: String(rain.date || ''), from: String(rain.from || ''), to: String(rain.to || ''), pop: Number(rain.pop) || 80 } }
+    : null;
+
+  const run = genRuns.getOwnedRun(req.headers['x-run-id'], req.user.uid);
+  if (run) genRuns.retain(run);
+
+  res.status(200);
+  res.set('Content-Type', 'text/event-stream; charset=utf-8');
+  res.set('Cache-Control', 'no-cache');
+  res.set('X-Accel-Buffering', 'no');
+  res.flushHeaders();
+  let closed = false;
+  res.on('close', () => { closed = true; });
+  const send = (e) => { if (!closed) res.write('data: ' + JSON.stringify(e) + '\n\n'); };
+
+  try {
+    await runAgent({
+      trip: body.trip,
+      trigger: { type: trigger.type, message: String(trigger.message || '').slice(0, 300) },
+      scenario,
+      onEvent: send,
+      onUsage: (u) => {
+        if (!run) return;
+        genRuns.addGeminiUsage(run, amdLlm.USAGE_MODEL_ID, {
+          promptTokens: Number(u.prompt_tokens) || 0,
+          outputTokens: Number(u.completion_tokens) || 0,
+          thoughtTokens: 0
+        });
+      }
+    });
+  } catch (err) {
+    console.error('[agent] 執行失敗：', err && err.message);
+    if (run) genRuns.markUpstreamError(run);
+    send({ type: 'error', message: 'AI 代理人發生錯誤，請稍後再試。' });
+  }
+  if (run) genRuns.release(run).catch(() => {});
+  res.end();
+});
 
 // ══════════════ Places API (New) 代理（需登入 + 限流 + 端點白名單）══════════════
 // 搬到後端的兩個理由：金鑰不進瀏覽器，以及後端才數得到實際請求次數。

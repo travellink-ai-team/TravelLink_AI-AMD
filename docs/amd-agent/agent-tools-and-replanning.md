@@ -1,6 +1,6 @@
 # TravelLinkAI Agent：工具清單與自主應變流程（AMD AI 代理人創新應用組）
 
-> 狀態：設計稿（2026-10-02）。尚未實作。
+> 狀態：設計稿（2026-10-02）。**後端已實作 P1、P2 的一部分與情境 B、D**，見文末「實作狀態」。前端尚未接上。
 > 目標：讓 AI 從「幫你寫一份行程」升級成「旅途中自己發現問題、自己查資料、自己修好行程、再請你確認」的代理人。
 > 評分對應：創新性 30%（自主應變）、市場性 40%（實際效益）、技術性 20%（共通性、資安、成熟度）。
 
@@ -200,3 +200,28 @@ D2 下午 14:00 後降雨機率 70%，原本排的是戶外步道 → 換成附�
 - CWA 海面天氣預報的資料集代號和欄位
 - 綠島、蘭嶼船班資料能不能從 TDX 取得
 - 前端 planner 的邏輯是包在 IIFE 裡的瀏覽器程式，要讓 server 端也能用，需要抽成共用模組（類似 `business-hours.js` 的 UMD 寫法）
+
+---
+
+## 9. 實作狀態（2026-10-02）
+
+**LLM：** 大會（AMD／工研院）提供的 gpt-oss-120b vLLM 端點，OpenAI 相容、支援 tool calling。第 1 節第 5 點的「AMD Developer Cloud」改成這個端點；端點只開放登記 IP，網址放 `server/.env` 的 `AMD_LLM_BASE_URL`，不進 repo。雲端 session 連不到，實測要在登記 IP 的機器上跑。
+
+**已完成（server/agent/）：**
+
+| 檔案 | 內容 |
+|---|---|
+| `loop.js` | Agent loop：程式先檢查，沒問題就不呼叫 LLM；工具白名單、最多 12 次工具呼叫、驗證失敗 3 輪、總時限 60 秒；失敗降級成規則式替換（標 `fallback`） |
+| `tools.js` | `get_trip_state`、`get_weather_forecast`、`check_business_hours`、`search_local_poi`、`search_restaurants`、`estimate_travel`、`propose_patch`（自動驗證）、`ask_user`、`present_proposal`、`no_change_needed` |
+| `itinerary.js` | `validate_itinerary` 的硬規則（營業時間含午休多時段、時間順序與車程、每天結束時間、降雨 ≥ 50% 的戶外站、重複、暫停開放、預算）、套用修改（replace／insert／remove／retime 含 stayMin）、差異 |
+| `data.js` | 直接讀 `app/poi-data.js`、`restaurant-data.js`、`business-hours.js`；室內外用名稱與簡介推估；CWA 一週預報；情境注入 `scenario.rain` |
+
+**API：** `POST /api/agent/replan`（需登入、每 IP 10 分鐘 15 次），body `{ trip, trigger: { type: 'weather'|'user', message? }, scenario? }`，回應是 SSE，事件 `start`／`check`／`check_result`／`tool_call`／`tool_result`／`fallback`，最後是 `proposal`／`question`／`no_change`／`error`。`trip.stops[]` 每站 `{ id, day, time, stayMin, name, lat?, lng?, timeLocked?, keepReason? }`。
+
+**實測（2026-10-02，`node test/agent.test.js --live`）：**
+- 情境 B（模擬 13:00–17:00 降雨 80%）：兩個戶外站換成附近室內景點（臺東美術館、寶町藝文中心等），5–7 次 LLM、1.4–2.9 秒，連跑多次結果一致。
+- 情境 D（「好累，想早點回飯店」）：刪站並縮短停留，結束時間 19:00 → 14:30，約 1 秒。
+
+**還沒做：** 前端動態面板與提案卡（P3）、套用提案寫回行程（`applyReplan`）、`notify_companions`、海象與船班（P4，資料源待確認）、`estimate_cost` 的交通費、延誤觸發（T4）。
+
+**已知限制：** 室內外是用名稱推估的，不是資料欄位；本地資料有少數店家同時出現在景點資料且被標成景點（例如「榕樹下米苔目」），完全同名時會抓到景點那筆。
