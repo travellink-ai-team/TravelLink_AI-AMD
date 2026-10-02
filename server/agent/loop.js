@@ -37,6 +37,27 @@ const SYSTEM_PROMPT = [
   '9. 每一輪都要呼叫工具，不要只回文字。全程使用繁體中文。'
 ].join('\n');
 
+/**
+ * gpt-oss 在 vLLM 上偶爾會吐出格式錯亂的回應，vLLM 解析失敗回 500
+ * （例如 "unexpected tokens remaining in message header"）。這是暫時性的，
+ * 同樣的對話再送一次通常就好，所以 5xx 重試最多 2 次；4xx 是請求本身的問題，不重試。
+ */
+async function chatWithRetry(messages, t0) {
+  let lastErr;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const budget = TIMEOUT_MS - (Date.now() - t0);   // 重試也算在整次執行的總時限內
+    if (budget <= 0) break;
+    try {
+      return await amd.chat({ messages, tools: T.DEFINITIONS, temperature: 0.2, maxTokens: 2048, signal: AbortSignal.timeout(budget) });
+    } catch (err) {
+      lastErr = err;
+      if (!(err.status >= 500)) throw err;
+      console.warn(`[agent] LLM ${err.status}，重試第 ${attempt + 1} 次`);
+    }
+  }
+  throw lastErr || Object.assign(new Error('timeout'), { code: 'timeout' });
+}
+
 function triggerText(trigger) {
   const t = trigger || {};
   if (t.type === 'weather') return '系統偵測到行程有天氣或海象風險（降雨、公休、或離島船班停航風險），請檢查受影響的部分並提出調整方案。';
@@ -198,7 +219,7 @@ async function runAgent({ trip: rawTrip, trigger, scenario, onEvent, onUsage }) 
     for (let call = 0; call < MAX_LLM_CALLS; call++) {
       const remaining = TIMEOUT_MS - (Date.now() - t0);
       if (remaining <= 0) throw Object.assign(new Error('timeout'), { code: 'timeout' });
-      const res = await amd.chat({ messages, tools: T.DEFINITIONS, temperature: 0.2, maxTokens: 2048, signal: AbortSignal.timeout(remaining) });
+      const res = await chatWithRetry(messages, t0);
       usage.llmCalls += 1;
       if (res.usage) {
         usage.promptTokens += Number(res.usage.prompt_tokens) || 0;
@@ -238,11 +259,16 @@ async function runAgent({ trip: rawTrip, trigger, scenario, onEvent, onUsage }) 
   } catch (err) {
     const why = {
       timeout: 'AI 代理人逾時', max_steps: 'AI 代理人步數超過上限', validation: 'AI 草稿連續 3 輪驗證失敗', no_tools: 'AI 代理人沒有完成流程'
-    }[err.code] || `AI 代理人發生錯誤（${err.name === 'TimeoutError' ? '逾時' : err.message}）`;
-    console.warn('[agent] 降級：' + why);
-    emit({ type: 'fallback', label: why + '，改用快速替代方案' });
-    const fb = await fallbackProposal(ctx, why);
-    return fb ? finish(buildProposal(ctx, fb)) : finish({ type: 'error', message: why + '，也找不到快速替代方案' });
+    }[err.code] || (err.name === 'TimeoutError' ? 'AI 代理人逾時' : 'AI 服務暫時無法回應');
+    // 原始錯誤只進伺服器日誌：上游訊息可能含模型內部格式，不該出現在使用者畫面
+    console.warn('[agent] 降級：' + why + (err.code ? '' : '｜' + String(err.message || err).slice(0, 300)));
+    // 規則式替換只會處理「下雨的戶外站」；使用者主動提的需求（好累、想早點結束）沒有規則可套，直接請他再試
+    const fb = trigger && trigger.type === 'user' ? null : await fallbackProposal(ctx, why);
+    if (fb) {
+      emit({ type: 'fallback', label: why + '，改用快速替代方案' });
+      return finish(buildProposal(ctx, fb));
+    }
+    return finish({ type: 'error', message: why + '，請稍後再試一次。' });
   }
 }
 
