@@ -9,7 +9,9 @@
    範圍：只有文字生成（generateContent / streamGenerateContent）。
    圖片生成（gemini-3.1-flash-image）沒有對應模型，維持走 Vertex。
 
-   ⚠ 端點只開放登記過的 IP，而且是 http——只能由後端呼叫，
+   ⚠ 端點是 http——只能由後端呼叫（正式站是 https，瀏覽器會擋 mixed content）。
+     工研院說會開通登記的 IP，但 2026-10-02 實測未登記的 IP 也連得上；日後收緊的話，
+     把 AMD_LLM_BASE_URL 改指登記過 IP 的轉送機並重啟代理即可，
      網址放在 server/.env 的 AMD_LLM_BASE_URL，不可寫進 repo 或前端。
    ══════════════════════════════════════════════════ */
 
@@ -111,7 +113,8 @@ function fromOpenAiResponse(data) {
       finishReason: FINISH_REASON[choice.finish_reason] || 'STOP',
       index: 0
     }],
-    modelVersion: USAGE_MODEL_ID
+    // 端點實際回報的模型（openai/gpt-oss-120b）；沒回報才退回常數。是「真的有打到 AMD」的證據
+    modelVersion: (data && data.model) || USAGE_MODEL_ID
   };
   const usage = toUsageMetadata(data && data.usage);
   if (usage) out.usageMetadata = usage;
@@ -147,7 +150,7 @@ function createSseTranslator() {
       out.candidates = [cand];
     }
     if (usage) out.usageMetadata = usage;
-    out.modelVersion = USAGE_MODEL_ID;
+    out.modelVersion = evt.model || USAGE_MODEL_ID;
     return 'data: ' + JSON.stringify(out) + '\r\n\r\n';
   }
 
@@ -207,7 +210,7 @@ async function chat({ messages, tools, temperature = 0.3, maxTokens = 2048, sign
   const m = choice.message || {};
   const message = { role: 'assistant', content: m.content || '' };
   if (Array.isArray(m.tool_calls) && m.tool_calls.length) message.tool_calls = m.tool_calls;
-  return { message, finishReason: choice.finish_reason || '', usage: data.usage || null };
+  return { message, finishReason: choice.finish_reason || '', usage: data.usage || null, model: data.model || '' };
 }
 
 module.exports = {

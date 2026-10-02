@@ -5,7 +5,7 @@
 
 ## 你的環境限制（重要）
 
-- **連不到 AI 端點。** gpt-oss-120b 是 AMD／工研院提供的，只開放登記的 IP；雲端環境沒有 `server/.env`、沒有 Firebase 服務帳戶，**跑不起後端**。
+- **連不到 AI 端點。** gpt-oss-120b 是 AMD／工研院提供的 http 端點，網址只在本機的 `server/.env`；雲端環境沒有 `server/.env`、沒有 Firebase 服務帳戶，**跑不起後端**。
 - 所以前端要做 **mock 模式**：重播 [server/test/fixtures/](../../server/test/fixtures/) 裡真實錄下的事件（下面有格式）。真的接後端、上正式站測試，由本機那邊負責。
 - **不要動 `server/`**（除非是修明顯的 bug，並在 commit 說明）。後端的行為以 `node server/test/agent.test.js`（離線，不需網路）為準，改了要跑過。
 - 端點網址**絕對不能**寫進 repo 任何地方。

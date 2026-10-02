@@ -184,8 +184,10 @@ async function runAgent({ trip: rawTrip, trigger, scenario, onEvent, onUsage }) 
     check: async (t) => I.validate(t, await ctx.getForecast(), await ctx.getSea(t))
   };
   const usage = { promptTokens: 0, completionTokens: 0, llmCalls: 0 };
+  const upstreamModels = new Set();
   const finish = (e) => {
-    const out = { ...e, usage, steps: toolCalls, model: amd.USAGE_MODEL_ID, ms: Date.now() - t0 };
+    // model：端點實際回報的名稱（每次呼叫都收集，正常只會有一個）。沒呼叫 LLM 時是空陣列
+    const out = { ...e, usage, steps: toolCalls, model: amd.USAGE_MODEL_ID, upstreamModels: [...upstreamModels], ms: Date.now() - t0 };
     emit(out);
     return out;
   };
@@ -221,6 +223,7 @@ async function runAgent({ trip: rawTrip, trigger, scenario, onEvent, onUsage }) 
       if (remaining <= 0) throw Object.assign(new Error('timeout'), { code: 'timeout' });
       const res = await chatWithRetry(messages, t0);
       usage.llmCalls += 1;
+      if (res.model) upstreamModels.add(res.model);
       if (res.usage) {
         usage.promptTokens += Number(res.usage.prompt_tokens) || 0;
         usage.completionTokens += Number(res.usage.completion_tokens) || 0;

@@ -205,7 +205,7 @@ D2 下午 14:00 後降雨機率 70%，原本排的是戶外步道 → 換成附�
 
 ## 9. 實作狀態（2026-10-02）
 
-**LLM：** 大會（AMD／工研院）提供的 gpt-oss-120b vLLM 端點，OpenAI 相容、支援 tool calling。第 1 節第 5 點的「AMD Developer Cloud」改成這個端點；端點只開放登記 IP，網址放 `server/.env` 的 `AMD_LLM_BASE_URL`，不進 repo。雲端 session 連不到，實測要在登記 IP 的機器上跑。
+**LLM：** 大會（AMD／工研院）提供的 gpt-oss-120b vLLM 端點，OpenAI 相容、支援 tool calling。第 1 節第 5 點的「AMD Developer Cloud」改成這個端點；網址放 `server/.env` 的 `AMD_LLM_BASE_URL`，不進 repo（http，只能後端呼叫）。**IP 限制：** 申請只登記了組員的 GCP 跳板 VM，但 2026-10-02 實測本機（210.240.160.150）與手機行動網路都連得上，代表目前**沒有擋 IP**；工研院日後若收緊，把 `AMD_LLM_BASE_URL` 改指 VM 上的反向代理並重啟 3011 代理即可。雲端 session 沒有 `.env`，所以仍在本機實測。證據：`node server/test/amd-evidence.js`。
 
 **已完成（server/agent/）：**
 
