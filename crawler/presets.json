@@ -1,0 +1,10 @@
+{
+  "popular": [
+    {
+      "name": "Green Island Lighthouse",
+      "lat": 22.6645,
+      "lng": 121.4803,
+      "note": "Example preset to override ambiguous search results"
+    }
+  ]
+}

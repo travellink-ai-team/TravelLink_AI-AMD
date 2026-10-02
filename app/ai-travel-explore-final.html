@@ -1,0 +1,482 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>TravelLinkAI — 找點樂子</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><text x='1' y='14' font-size='14'>🧭</text></svg>">
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@300;400;500;700&family=DM+Serif+Display&display=swap" rel="stylesheet">
+<script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-auth-compat.js"></script>
+<script src="weather.env.js"></script>
+<script src="poi-data.js" defer></script>
+<script src="restaurant-data.js" defer></script>
+<script src="attraction-fee-config.js" defer></script>
+<script src="ferry-config.js"></script>
+<script src="cost-config.js"></script>
+<script src="avoid-tags.js"></script>
+<script src="collab.js?v=20260726-fix3"></script>
+<script src="friends.js?v=20260722-friends3"></script>
+<script src="notifications.js?v=20260722-friends2"></script>
+<script src="wheel-picker.js?v=20260923-ux13"></script>
+<script src="qr-encode.js?v=20260923-qr2"></script>
+<link rel="stylesheet" href="./ai-travel-explore-final.css?v=20260930-tablet11">
+<link rel="stylesheet" href="./design-tokens.css?v=20260727-fix3">
+<script src="./icons.js?v=20260727-fix3"></script>
+<script src="./ui-feedback.js?v=20260727-fix3"></script>
+<script src="./cost-tracking.js?v=20260728-e2e2"></script>
+<script src="./business-hours.js?v=20260922-access1"></script>
+<script src="./explore-templates.js?v=20260922-home2" defer></script>
+</head>
+<body>
+
+<!-- TOAST -->
+<div class="toast" id="toast"></div>
+
+<!-- ─── OVERLAY: PREVIEW ─── -->
+<div class="overlay" id="previewOverlay" onclick="if(event.target===this)closePreview()">
+  <div class="preview-modal" id="previewModal">
+    <div class="pm-header" id="pmHeader">
+      <button class="pm-close" onclick="closePreview()" aria-label="關閉行程預覽">✕</button>
+      <div class="pm-title" id="pmTitle"></div>
+      <div class="pm-tags" id="pmTags"></div>
+      <div class="pm-stats" id="pmStats"></div>
+      <!-- 原本是假作者（Marco旅遊／Ken／Jenny）＋星等評分列。
+           官方精選範本沒有作者，也不該讓使用者對「範本」評分——改成組成說明。 -->
+      <div class="pm-author-row">
+        <div class="pm-author-ava" id="pmAva">✦</div>
+        <div class="pm-author-info">
+          <div class="pm-author-name" id="pmAuthor">官方精選範本</div>
+          <div class="pm-author-sub" id="pmAuthorSub"></div>
+        </div>
+      </div>
+    </div>
+    <div class="pm-body" id="pmBody"></div>
+    <!-- 原本有「喜歡」按鈕（假讚數）。範本沒有社群互動，只留「用這份開始」。 -->
+    <div class="pm-footer">
+      <button class="pm-copy-btn" id="pmCopyBtn" onclick="copyTrip()">✨ 用這份開始規劃</button>
+    </div>
+  </div>
+</div>
+
+<!-- ─── OVERLAY: LOGIN ─── -->
+<div class="overlay" id="loginOverlay" onclick="if(event.target===this)closeLogin()" style="z-index:300">
+  <div class="login-modal" style="position:relative">
+    <button class="lm-close" onclick="closeLogin()" aria-label="關閉登入視窗">✕</button>
+    <div class="lm-title">歡迎回來 🗺</div>
+    <div class="lm-sub">登入後可以儲存行程、複製他人規劃</div>
+    <div class="lm-tabs">
+      <button class="lm-tab active" id="loginTab" onclick="switchAuthTab('login')">登入</button>
+      <button class="lm-tab" id="registerTab" onclick="switchAuthTab('register')">註冊</button>
+    </div>
+    <div id="loginForm">
+      <div class="lm-field"><label>電子信箱</label><input type="email" id="loginEmail" placeholder="you@example.com"></div>
+      <div class="lm-field"><label>密碼</label><input type="password" id="loginPwd" placeholder="••••••••"></div>
+      <button class="lm-submit" onclick="doLogin()">登入</button>
+    </div>
+    <div id="registerForm" style="display:none">
+      <div class="lm-field"><label>暱稱</label><input type="text" id="regName" placeholder="旅遊達人小美"></div>
+      <div class="lm-field"><label>電子信箱</label><input type="email" id="regEmail" placeholder="you@example.com"></div>
+      <div class="lm-field"><label>密碼</label><input type="password" id="regPwd" placeholder="至少 8 個字元"></div>
+      <button class="lm-submit" onclick="doRegister()">建立帳號</button>
+    </div>
+    <div class="lm-divider">或</div>
+    <button class="lm-social-btn" onclick="doSocialLogin('Google')">🌐 以 Google 帳號登入</button>
+    <button class="lm-social-btn" style="margin-top:8px" onclick="doSocialLogin('Facebook')">📘 以 Facebook 帳號登入</button>
+  </div>
+</div>
+
+<!-- ─── OVERLAY: PREF WIZARD ─── -->
+<div class="overlay" id="prefWizardOverlay" onclick="if(event.target===this)closePrefWizard()" style="z-index:300">
+  <div class="login-modal" style="position:relative;max-width:500px">
+    <button class="lm-close" onclick="closePrefWizard()" aria-label="關閉喜好設定">✕</button>
+    <div class="lm-title">設定個人喜好 ✨</div>
+    <div class="lm-sub">這些長期偏好會成為每趟行程的預設值與 AI 規劃的參考；飲食禁忌則會套用到所有行程。建立行程時仍可為單趟自由調整。</div>
+    <div class="wizard-field" style="margin-top:20px;text-align:left">
+      <label>平常偏好的旅遊興趣（可多選）</label>
+      <div class="wizard-chips" id="prefInterestsGrid">
+        <button class="wizard-tag" type="button" onclick="togglePrefInterest(this,'美食')">🍜 美食</button>
+        <button class="wizard-tag" type="button" onclick="togglePrefInterest(this,'文化')">🏛️ 文化</button>
+        <button class="wizard-tag" type="button" onclick="togglePrefInterest(this,'自然')">🌿 自然</button>
+        <button class="wizard-tag" type="button" onclick="togglePrefInterest(this,'打卡')">📸 打卡</button>
+        <button class="wizard-tag" type="button" onclick="togglePrefInterest(this,'運動')">🏃 運動</button>
+        <button class="wizard-tag" type="button" onclick="togglePrefInterest(this,'放鬆')">😌 放鬆</button>
+      </div>
+    </div>
+    <div class="wizard-field" style="text-align:left">
+      <label>平常偏好的行程節奏</label>
+      <div class="wizard-chips" id="prefPaceGrid">
+        <button class="wizard-tag" type="button" data-pace="輕快" onclick="setPrefPace('輕快')">🏃 緊湊充實</button>
+        <button class="wizard-tag active" type="button" data-pace="平衡" onclick="setPrefPace('平衡')">🚶 標準步調</button>
+        <button class="wizard-tag" type="button" data-pace="悠閒" onclick="setPrefPace('悠閒')">🐢 放鬆慢遊</button>
+      </div>
+    </div>
+    <div class="wizard-field" style="text-align:left">
+      <label>飲食禁忌 / 想避免的事物 <span style="font-size:13px;color:#8fa4b8;font-weight:normal;">（選填，每趟行程都會自動套用）</span></label>
+      <div id="prefAvoidTags" style="margin-bottom:8px"></div>
+      <textarea id="prefAvoid" rows="2" placeholder="其他想避免的（自由填寫）…例：想避開夜市、不愛人擠人…" oninput="tempPrefs.avoid=this.value" style="width:100%;box-sizing:border-box;padding:10px 12px;border:1px solid #d8e2ef;border-radius:10px;font-size:17px;font-family:inherit;resize:vertical;background:#f7fbff"></textarea>
+    </div>
+    <button class="lm-submit" onclick="saveUserPreferences()" style="margin-top:24px">完成設定</button>
+    <div style="text-align:center;margin-top:12px">
+      <button class="topbar-new-btn secondary" style="border:none;background:transparent;padding:0;color:var(--ink3)" onclick="closePrefWizard()">先跳過，下次再說</button>
+    </div>
+  </div>
+</div>
+
+<!-- ─── OVERLAY: NEW TRIP WIZARD ─── -->
+<div class="overlay" id="wizardOverlay" onclick="if(event.target===this)closeWizard()" style="z-index:250">
+  <div class="wizard-modal">
+    <button class="lm-close wizard-close" onclick="closeWizard()" aria-label="關閉建立行程">✕</button>
+    <div class="wizard-header">
+      <div class="wizard-hero">
+        <h1 class="wizard-title">建立微旅行</h1>
+        <p class="wizard-sub">0.5小時～2天的輕便旅程，讓 AI 根據你的喜好、節奏與角色風格規劃最適合的在地體驗</p>
+      </div>
+      <div class="wizard-badge" id="wizardBadge">Step 1 / 4</div>
+    </div>
+    <div class="wizard-preview-status" id="wizardPreviewStatus" role="status" aria-live="polite" hidden></div>
+    <div class="wizard-body">
+      <div class="wizard-panel">
+        <div class="wizard-panel-head">
+          <h2 class="wizard-panel-title">微旅行規劃</h2>
+          <p class="wizard-panel-sub">4 步驟設定，AI 根據你的偏好客製化</p>
+        </div>
+        <div class="wizard-steps" id="wizSteps"></div>
+        <div class="wizard-form">
+          <div class="wizard-card" id="wizBody"></div>
+        </div>
+        <div class="wizard-nav">
+          <button class="wizard-btn secondary" id="wizBackBtn" onclick="wizPrev()">← 上一步</button>
+          <button class="wizard-btn primary" id="wizNextBtn" onclick="wizNext()">下一步 →</button>
+        </div>
+      </div>
+      <div class="wizard-panel">
+        <div class="wizard-panel-head">
+          <h2 class="wizard-panel-title">行程預覽</h2>
+          <p class="wizard-panel-sub">即時看到你的微旅行大綱在成形</p>
+        </div>
+        <div class="wizard-flow-wrap">
+          <div class="wizard-theme-note" id="themeNote">目前主題：經典旅人風格</div>
+          <h3 class="wizard-flow-title" id="flowTitle">台東・1天微旅行</h3>
+          <div class="wizard-flow-col" id="flowNodes"></div>
+          <div class="wizard-summary" id="flowSummary">先完成左側步驟，AI 會在這裡生成你的個人化微旅行流程故事。</div>
+          <div class="wizard-flow-note" id="flowParkingNote" style="display:none"></div>
+          <div class="wiz-gen-progress" id="wizGenProgress" hidden>
+            <div class="wgp-title" id="wgpTitle">正在為你生成行程…</div>
+            <div class="wgp-steps">
+              <div class="wgp-step" data-step="0"><span class="wgp-dot"></span><span class="wgp-label">查景點</span></div>
+              <div class="wgp-step" data-step="1"><span class="wgp-dot"></span><span class="wgp-label">AI 規劃</span></div>
+              <div class="wgp-step" data-step="2"><span class="wgp-dot"></span><span class="wgp-label">對應地圖</span></div>
+              <div class="wgp-step" data-step="3"><span class="wgp-dot"></span><span class="wgp-label">完成</span></div>
+            </div>
+            <div class="wgp-cta" id="wgpCta"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ─── OVERLAY: COPY SUCCESS ─── -->
+<div class="overlay" id="copySuccessOverlay" onclick="if(event.target===this)closeCopySuccess()" style="z-index:300">
+  <div class="copy-success-modal">
+    <div class="cs-icon">🎉</div>
+    <div class="cs-title" id="csTitle">行程複製成功！</div>
+    <div class="cs-desc" id="csDesc"></div>
+    <div class="cs-actions">
+      <button class="cs-primary" onclick="goToMyTrips()">📋 前往我的微旅行</button>
+      <button class="cs-secondary" onclick="closeCopySuccess()">繼續瀏覽</button>
+    </div>
+  </div>
+</div>
+
+<!-- ─── OVERLAY: INVITE CODE ─── -->
+<div class="overlay" id="inviteOverlay" onclick="if(event.target===this)closeInvite()" style="z-index:300">
+  <div class="login-modal" style="position:relative">
+    <button class="lm-close" onclick="closeInvite()" aria-label="關閉邀請碼輸入">✕</button>
+    <div class="lm-title">加入共編行程 🔑</div>
+    <div class="lm-sub">請輸入朋友分享的 8 碼邀請碼</div>
+    <div class="lm-field">
+      <input type="text" id="inviteCodeInput" placeholder="例如：WNDR-88A" style="text-transform:uppercase; letter-spacing:2px; font-family:monospace; font-size:22px; text-align:center;">
+    </div>
+    <button class="lm-submit" onclick="submitInviteCode()">確認加入</button>
+  </div>
+</div>
+
+<!-- ─── OVERLAY: CHANGE PASSWORD ─── -->
+<div class="overlay" id="changePwdOverlay" onclick="if(event.target===this)closeChangePwd()" style="z-index:300">
+  <div class="login-modal" style="position:relative">
+    <button class="lm-close" onclick="closeChangePwd()" aria-label="關閉修改密碼">✕</button>
+    <div class="lm-title">修改密碼 🔒</div>
+    <div class="lm-sub">為了安全，請先輸入目前的密碼</div>
+    <div class="lm-field"><label>目前密碼</label><input type="password" id="cpwCurrent" placeholder="目前的密碼"></div>
+    <div class="lm-field"><label>新密碼</label><input type="password" id="cpwNew" placeholder="至少 8 個字元"></div>
+    <div class="lm-field"><label>確認新密碼</label><input type="password" id="cpwConfirm" placeholder="再次輸入新密碼"></div>
+    <button class="lm-submit" onclick="doChangePassword()">更新密碼</button>
+  </div>
+</div>
+
+<!-- ─── OVERLAY: TRIP MODE CHOICE ─── -->
+<div class="overlay" id="modeChoiceOverlay" onclick="if(event.target===this)closeModeChoice()" style="z-index:300">
+  <div class="login-modal" style="position:relative;max-width:480px;text-align:center;">
+    <button class="lm-close" onclick="closeModeChoice()" aria-label="關閉模式選擇">✕</button>
+    <div class="lm-title">建立微旅行</div>
+    <div class="lm-sub">選擇你的製作方式</div>
+    <div class="mode-choice-cards">
+      <button class="mode-choice-card" onclick="selectTripMode('solo')">
+        <div class="mode-choice-icon">🧍</div>
+        <div class="mode-choice-name">單人製作</div>
+        <div class="mode-choice-desc">自己規劃，獨享專屬行程</div>
+      </button>
+      <button class="mode-choice-card" onclick="selectTripMode('collab')">
+        <div class="mode-choice-icon">👥</div>
+        <div class="mode-choice-name">共編行程</div>
+        <div class="mode-choice-desc">邀請朋友一起規劃行程</div>
+      </button>
+    </div>
+  </div>
+</div>
+
+<!-- ─── OVERLAY: COLLAB PANEL (members + prefs + group generate) ─── -->
+<div class="overlay" id="collabPanelOverlay" style="z-index:360">
+  <div class="login-modal collab-panel" style="position:relative">
+    <button class="lm-close" onclick="closeCollabPanel()" aria-label="關閉共編面板">✕</button>
+    <div class="lm-title">👥 共編行程</div>
+    <div class="lm-sub">分享邀請碼、填好各自偏好，擁有者隨時可生成團體行程</div>
+    <div id="collabPanelBody"></div>
+  </div>
+</div>
+
+<!-- ─── OVERLAY: JOURNEY JOIN ─── -->
+<div class="overlay" id="journeyOverlay" onclick="if(event.target===this)closeJourneyJoin()" style="z-index:300">
+  <div class="journey-modal">
+    <button class="lm-close" onclick="closeJourneyJoin()" aria-label="關閉邀請碼加入">✕</button>
+    <div class="journey-kicker">📱 手機快速進入</div>
+    <div class="journey-title">輸入邀請碼，加入共編行程</div>
+    <div class="journey-preview">
+      <div class="journey-preview-label">目前綁定的旅程</div>
+      <div class="journey-preview-title" id="journeyPreviewTitle">左營站外 2 小時微旅行</div>
+      <div class="journey-preview-meta" id="journeyPreviewMeta">14:00 - 15:45 · 邀請碼 WNDR-88A</div>
+    </div>
+    <div class="lm-field" style="margin-bottom:0;">
+      <label for="journeyCodeInput">邀請碼</label>
+      <input type="text" id="journeyCodeInput" placeholder="例如：WNDR-88A" style="text-transform:uppercase; letter-spacing:2px; font-family:monospace; font-size:22px; text-align:center;">
+    </div>
+    <div class="journey-actions">
+      <button class="lm-submit" onclick="submitJourneyCode()">進入旅遊</button>
+    </div>
+    <div class="journey-note">輸入正確後，系統會先帶你看這次旅程的預覽行程。手機上可以直接從群組訊息複製後貼上。</div>
+  </div>
+</div>
+
+<div class="overlay" id="journeyItineraryOverlay" onclick="if(event.target===this)closeJourneyItineraryPreview()" style="z-index:320">
+  <div class="journey-itinerary-modal">
+    <div class="journey-itinerary-hero">
+      <button class="lm-close" onclick="closeJourneyItineraryPreview()" aria-label="關閉行程檢視">✕</button>
+      <div class="journey-itinerary-kicker">行前預覽</div>
+      <div class="journey-itinerary-title" id="journeyItineraryTitle">左營站外 2 小時微旅行</div>
+      <div class="journey-itinerary-sub" id="journeyItinerarySub">先快速確認集合資訊與沿途節奏，進入旅遊前就知道這段路線會怎麼走。</div>
+    </div>
+    <div class="journey-itinerary-meta">
+      <div class="journey-itinerary-stat">
+        <div class="journey-itinerary-stat-label">旅程時間</div>
+        <div class="journey-itinerary-stat-value" id="journeyItineraryTime">14:00 - 15:45</div>
+      </div>
+      <div class="journey-itinerary-stat">
+        <div class="journey-itinerary-stat-label">集合地點</div>
+        <div class="journey-itinerary-stat-value" id="journeyItineraryMeeting">左營站 1 號出口</div>
+      </div>
+      <div class="journey-itinerary-stat">
+        <div class="journey-itinerary-stat-label">邀請碼</div>
+        <div class="journey-itinerary-stat-value" id="journeyItineraryCode">WNDR-88A</div>
+      </div>
+    </div>
+    <div class="journey-itinerary-body">
+      <div class="journey-itinerary-section-title">本次行程安排</div>
+      <div id="journeyItineraryStops"></div>
+    </div>
+    <div class="journey-itinerary-footer">
+      <button class="topbar-new-btn secondary" onclick="closeJourneyItineraryPreview()">返回</button>
+      <button class="lm-submit" onclick="confirmJourneyEntry()">開始旅遊</button>
+    </div>
+  </div>
+</div>
+
+<!-- ─── TOPBAR ─── -->
+<header class="topbar">
+  <div class="topbar-logo" onclick="showMainView('explore')">🗺 TravelLinkAI</div>
+  <nav class="topbar-nav">
+    <a href="#" id="navExplore" class="active" onclick="showMainView('explore');return false"><svg class="wai-icon" aria-hidden="true"><use href="#wai-compass"></use></svg> 探索</a>
+    <a href="#" id="navMyTrips" onclick="showMainView('mytrips');return false"><svg class="wai-icon" aria-hidden="true"><use href="#wai-clipboard-list"></use></svg> 我的微旅行</a>
+    <a href="#" id="navFriends" onclick="showMainView('friends');return false"><svg class="wai-icon" aria-hidden="true"><use href="#wai-users"></use></svg> 好友</a>
+  </nav>
+  <div class="topbar-search">
+    <span class="search-icon">🔍</span>
+    <input type="text" id="searchInput" placeholder="搜尋目的地、行程名稱…" oninput="handleSearch()">
+  </div>
+  <button class="topbar-new-btn" onclick="openWizard()">＋ 建立微旅行</button>
+  <button class="topbar-new-btn secondary" id="journeyJoinBtn" onclick="openJourneyJoin()" style="display:none;"><svg class="wai-icon" aria-hidden="true"><use href="#wai-user-plus"></use></svg> 邀請碼快速加入</button>
+  <div class="notif-wrap" id="notifWrap" style="display:none;">
+    <button class="notif-bell" id="notifBellBtn" onclick="toggleNotifPanel()" aria-label="通知"><svg class="wai-icon" aria-hidden="true"><use href="#wai-bell"></use></svg><span class="notif-badge" id="notifBadge" style="display:none"></span></button>
+    <div class="notif-panel" id="notifPanel"></div>
+  </div>
+  <div class="user-menu-wrap" id="userMenuWrap">
+    <!-- injected by JS -->
+  </div>
+</header>
+
+<!-- ─── EXPLORE VIEW ─── -->
+<div id="exploreView">
+  <div class="hero-strip">
+    <div class="hero-strip-text">
+      <h1>台東怎麼玩，挑一份範本就開始</h1>
+      <p>挑一份台東各鄉鎮的精選範本直接開始，或用 AI 依你的節奏重新規劃。</p>
+      <div class="hero-btns">
+        <button class="hero-btn-primary" onclick="openWizard()">＋ 建立微旅行</button>
+        <button class="hero-btn-secondary" onclick="document.querySelector('.trips-grid').scrollIntoView({behavior:'smooth'})">看看精選範本 ↓</button>
+        <!-- intro.html 原本站內沒有任何入口，網域根目錄直接進這頁，等於那份介紹頁沒人看得到 -->
+        <a class="hero-link-tertiary" href="intro.html">這是什麼？看產品介紹</a>
+      </div>
+    </div>
+    <!-- 數據由 renderHeroStats() 依 poi-data.js 實算填入；原本是寫死的 2,481/18,340/4.8 -->
+    <div class="hero-stats">
+      <div class="hstat"><div class="hstat-num" id="hstatSpots">--</div><div class="hstat-label">可規劃景點</div></div>
+      <div class="hstat"><div class="hstat-num" id="hstatDistricts">--</div><div class="hstat-label">鄉鎮市</div></div>
+      <div class="hstat"><div class="hstat-num" id="totalRating">--</div><div class="hstat-label">平均評分</div></div>
+    </div>
+  </div>
+  <!-- 分頁由 renderDistrictTabs() 依 poi-data.js 的 district 產生（台東縣各鄉鎮市，
+       依地理分成海線/市區/縱谷/南迴/離島）。原本寫死台北/日本/韓國/歐洲，
+       但那些目的地的本地景點資料是 0，點進去生不出行程。 -->
+  <div class="filter-bar" id="districtTabs"></div>
+  <div class="explore-layout">
+    <div class="trips-section">
+      <div class="sec-head">
+        <h2 class="sec-title">✦ 官方精選範本</h2>
+        <span class="sec-note" id="secNote"></span>
+      </div>
+      <div class="trips-grid" id="tripsGrid"></div>
+
+      <div class="sec-head sec-head-mt">
+        <h2 class="sec-title">📋 我的行程</h2>
+        <span class="sec-note" id="myTripsNote"></span>
+      </div>
+      <div id="homeMyTrips"></div>
+    </div>
+    <aside class="explore-sidebar">
+      <!-- 由 renderDestSidebar() 依 poi-data.js 實算填入。原本是寫死的
+           「台東 348 份行程 ❤️4.2k」「日本 6.1k」——這個 app 沒有公開行程功能，
+           那些數字全是編的，而且日本/韓國/歐洲根本沒有本地景點資料。 -->
+      <div class="sw">
+        <div class="sw-title">🗺 可規劃的目的地</div>
+        <div class="sw-note">景點越多，AI 能排出的組合越豐富。</div>
+        <div id="destSidebar"></div>
+      </div>
+      <div class="sw">
+        <div class="sw-title">🏷 熱門標籤</div>
+        <div class="tag-cloud">
+          <button class="tc-cloud" onclick="searchTag('海岸')">🌊 海岸</button>
+          <button class="tc-cloud" onclick="searchTag('離島')">🏝 離島</button>
+          <button class="tc-cloud" onclick="searchTag('溫泉')">♨️ 溫泉</button>
+          <button class="tc-cloud" onclick="searchTag('熱氣球')">🎈 熱氣球</button>
+          <button class="tc-cloud" onclick="searchTag('部落')">🏘 部落</button>
+          <button class="tc-cloud" onclick="searchTag('森林')">🌲 森林</button>
+          <button class="tc-cloud" onclick="searchTag('南迴')">🛣 南迴</button>
+          <button class="tc-cloud" onclick="searchTag('瀑布')">💦 瀑布</button>
+        </div>
+      </div>
+    </aside>
+  </div>
+</div>
+
+<!-- ─── MY TRIPS VIEW ─── -->
+<div id="myTripsView" style="display:none">
+  <div class="my-page">
+    <div class="my-page-header">
+      <div class="my-page-title" id="myPageTitle">我的微旅行</div>
+      <div style="display:flex;gap:12px">
+        <button class="topbar-new-btn" style="background:var(--surface);color:var(--ink);border:1px solid var(--border);" onclick="openInvite()">🔑 輸入邀請碼</button>
+        <button class="topbar-new-btn" onclick="openWizard()">＋ 建立微旅行</button>
+      </div>
+    </div>
+    <div class="mt-toolbar">
+      <div class="mt-search">
+        <span class="mt-search-icon">🔍</span>
+        <input id="mtSearch" type="text" autocomplete="off"
+               placeholder="搜尋關鍵字（地區、日期、名稱…可空格組合，如「台東 6/10」）"
+               oninput="mtOnSearch(this.value)">
+        <button class="mt-search-clear" id="mtSearchClear" title="清除" aria-label="清除搜尋"
+                style="display:none" onclick="mtClearSearch()">✕</button>
+      </div>
+      <div class="mt-sort">
+        <span class="sort-label">排序</span>
+        <select class="sort-select" id="mtSort" onchange="mtOnSort(this.value)">
+          <option value="date_desc">建立時間（新→舊）</option>
+          <option value="date_asc">建立時間（舊→新）</option>
+          <option value="region">地區</option>
+          <option value="status">狀態</option>
+          <option value="collab">共編優先</option>
+        </select>
+      </div>
+    </div>
+    <div class="my-trips-grid" id="myTripsGrid"></div>
+  </div>
+</div>
+
+<!-- Week4 D1：我的好友頁（內容由 renderFriendsView 渲染） -->
+<div id="friendsView" style="display:none">
+  <div class="my-page">
+    <div class="my-page-header">
+      <div class="my-page-title">我的好友</div>
+      <div style="display:flex;gap:12px">
+        <button class="topbar-new-btn" onclick="openAddFriendModal()">➕ 加好友</button>
+      </div>
+    </div>
+    <div id="friendsFeed"></div>
+    <div id="friendsPendingList"></div>
+    <div id="friendsList"></div>
+  </div>
+</div>
+
+<!-- UIUX#1：手機底部主導覽（≤700px 顯示；桌機由頂列導覽負責、此列隱藏） -->
+<nav id="mobileBottomNav" aria-label="主導覽">
+  <button class="mbn-item active" id="mbnExplore" onclick="showMainView('explore')"><span class="mbn-ico" aria-hidden="true"><svg class="wai-icon lg" aria-hidden="true"><use href="#wai-compass"></use></svg></span>探索</button>
+  <button class="mbn-item" id="mbnMyTrips" onclick="showMainView('mytrips')"><span class="mbn-ico" aria-hidden="true"><svg class="wai-icon lg" aria-hidden="true"><use href="#wai-clipboard-list"></use></svg></span>我的微旅行</button>
+  <button class="mbn-item" id="mbnFriends" onclick="showMainView('friends')"><span class="mbn-ico" aria-hidden="true"><svg class="wai-icon lg" aria-hidden="true"><use href="#wai-users"></use></svg></span>好友</button>
+</nav>
+
+<script src="./ai-travel-explore-final.js?v=20261001-avoidlabel1"></script>
+<!-- 浮動小進度卡：建立行程視窗關閉後仍可看進度並點回 -->
+<div id="genMiniBar" hidden onclick="reopenWizGen()">
+  <button class="gmb-close" onclick="event.stopPropagation();hideGenMiniBar()" aria-label="關閉">✕</button>
+  <div class="gmb-title">生成中…</div>
+  <div class="gmb-dots">
+    <span class="gmb-dot"></span><span class="gmb-dot"></span><span class="gmb-dot"></span><span class="gmb-dot"></span>
+  </div>
+  <div class="gmb-hint">點此返回進度視窗</div>
+</div>
+<div id="genOverlay" style="display:none">
+  <div class="gen-container">
+    <div class="gen-header">
+      <div class="gen-title" id="genTitle">🤖 AI 正在規劃你的行程</div>
+      <div class="gen-phase" id="genPhase">連接中…</div>
+    </div>
+    <div class="gen-terminal">
+      <div class="gen-terminal-bar">
+        <span class="gen-dot gen-dot-r"></span>
+        <span class="gen-dot gen-dot-y"></span>
+        <span class="gen-dot gen-dot-g"></span>
+        <span class="gen-terminal-label">TravelLinkAI · 行程生成</span>
+      </div>
+      <div class="gen-output" id="genOutput"></div>
+      <div class="gen-cursor-row" id="genCursor">◌</div>
+    </div>
+    <div class="gen-footer" id="genFooter"></div>
+  </div>
+</div>
+</body>
+</html>

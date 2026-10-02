@@ -1,0 +1,65 @@
+# Claude Code local settings (machine-specific)
+.claude/settings.local.json
+
+# Local environment files
+weather.env
+weather.env.js
+.env
+.env.*
+# 但保留範本檔（不含真實金鑰，供他人參照）
+!**/.env.example
+
+# Secrets / service accounts (Firebase 私鑰等，絕不可進版控)
+serviceAccount.json
+**/serviceAccount.json
+# 爬蟲專用 Google Maps key（排程 bat 會 call）
+crawler/crawler-key.local.bat
+
+# Node modules
+node_modules/
+
+# Logs
+*.log
+
+# VS Code settings
+.vscode/
+
+# OS cruft
+.DS_Store
+Thumbs.db
+
+# 開發計畫文件（個人排程，不進版控）
+/docs/planning/TravelLink_AI_*.md
+
+# /codex-verify 產出的審查報告（本機參考用）
+/codex-review.md
+
+# Agent / Codex 本機設定與產出（非專案程式碼，不進版控）
+/.agents/
+/.codex/
+# UI/UX 修改建議（個人清單，本機參考用）
+/docs/design/uiux-recommendations.md
+/docs/UIUX修改建議.md
+
+# 測試截圖（大、會一直長，不進版控）；但文字驗證報告要留下來——
+# COLLAB.md 與 docs/ISSUE-INVENTORY-*.md 會連到它們，
+# 全部排除的話那些連結在 GitHub 上是 404，「已驗收」也就失去證據。
+# 注意寫法：必須排除「目錄內容」(/test-artifacts/*) 而不是目錄本身
+# (/test-artifacts/)。git 不會進入被忽略的目錄，寫成後者的話下面那條
+# 反向規則永遠不會被套用。
+/test-artifacts/*
+!/test-artifacts/*.md
+
+# Python 編譯快取（跑 skill 腳本時產生）
+__pycache__/
+*.pyc
+
+# 安全性驗證頁（含攻擊探測，僅本機／展示用，不公開進版控）
+/app/security-audit.html
+
+# 回顧短片 App 交接文件（僅內部傳閱，不進版控）
+/docs/travel-story/TRAVEL_STORY_RECAP_APP_HANDOFF.md
+/docs/travel-story/RECAP_VIDEO_TEMPLATE_HANDOFF.md
+
+# 探索首頁改版 DEMO（設計對照用，不進版控）
+prototypes/explore-home-redesign.html

@@ -1,0 +1,67 @@
+<!doctype html>
+<meta charset='utf-8'><title>recap headless renderer</title>
+<style>html,body{margin:0;background:#0a1214}#c{display:block}</style>
+<canvas id='c' width='1080' height='1920'></canvas>
+<!-- 後端無頭渲染頁：由 Puppeteer 載入（file:// 或本機靜態），注入 manifest、逐幀截圖。
+     真 Chrome 無沙箱攔截器，可直接以 <script src> 載入模組。 -->
+<script src='recap-manifest.js'></script>
+<script src='recap-route.js'></script>
+<script src='recap-camera.js'></script>
+<script src='recap-render.js'></script>
+<script>
+(function () {
+  var canvas = document.getElementById('c');
+  var ctx = canvas.getContext('2d');
+  var session = null, viewport = null;
+  window.__recap = {
+    // 以 manifest 與尺寸初始化；回傳總長 ms。等字型載入完成再回傳，確保首幀不缺字。
+    init: function (manifest, w, h) {
+      canvas.width = w; canvas.height = h;
+      viewport = { w: w, h: h };
+      session = WAI_RECAP_RENDER.createSession(ctx, manifest, viewport);
+      return Promise.all([
+        document.fonts && document.fonts.ready ? document.fonts.ready : Promise.resolve(),
+        session.ready || Promise.resolve()
+      ]).then(function () { return session.totalMs; });
+    },
+    // 畫某時刻一幀（同步）。逐幀截圖路徑（fallback）用。
+    frame: function (tMs) { if (!session) return false; session.renderAt(tMs); return true; },
+    // 即時錄製：播放動畫並以 MediaRecorder 錄 canvas → 回傳 webm 的 dataURL（base64）。
+    // 這條路避開「每幀 CDP 截圖」的巨大開銷，錄製時間≈影片長度。
+    record: function (totalMs, fps) {
+      return new Promise(function (resolve, reject) {
+        if (!session) return reject(new Error('not initialized'));
+        if (typeof canvas.captureStream !== 'function' || typeof window.MediaRecorder !== 'function') {
+          return reject(new Error('MediaRecorder unsupported'));
+        }
+        try {
+          var stream = canvas.captureStream(fps);
+          var types = ['video/webm;codecs=vp9', 'video/webm;codecs=vp8', 'video/webm'];
+          var mime = '';
+          for (var i = 0; i < types.length; i++) { if (MediaRecorder.isTypeSupported(types[i])) { mime = types[i]; break; } }
+          var rec = new MediaRecorder(stream, mime ? { mimeType: mime, videoBitsPerSecond: 8000000 } : {});
+          var chunks = [];
+          rec.ondataavailable = function (e) { if (e.data && e.data.size) chunks.push(e.data); };
+          rec.onerror = function () { reject(new Error('recorder error')); };
+          rec.onstop = function () {
+            var blob = new Blob(chunks, { type: chunks.length ? chunks[0].type : 'video/webm' });
+            var fr = new FileReader();
+            fr.onload = function () { resolve({ mime: blob.type, dataUrl: String(fr.result) }); };
+            fr.onerror = function () { reject(new Error('read blob failed')); };
+            fr.readAsDataURL(blob);
+          };
+          rec.start();
+          var t0 = performance.now();
+          (function loop() {
+            var t = performance.now() - t0;
+            session.renderAt(Math.min(t, totalMs));
+            if (t < totalMs) requestAnimationFrame(loop);
+            else setTimeout(function () { try { rec.stop(); } catch (e) { reject(e); } }, 150);
+          })();
+        } catch (err) { reject(err); }
+      });
+    },
+    ready: function () { return !!session; }
+  };
+})();
+</script>

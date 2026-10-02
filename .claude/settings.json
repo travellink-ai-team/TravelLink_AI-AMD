@@ -1,0 +1,59 @@
+{
+  "permissions": {
+    "allow": [
+      "PowerShell(*)"
+    ]
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Write|Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node .claude/hooks/guard-generated-files.js",
+            "timeout": 10,
+            "statusMessage": "檢查是否為自動生成檔案…"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Write|Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node .claude/hooks/check-edited-js.js",
+            "timeout": 30,
+            "statusMessage": "語法檢查中 (node --check)…"
+          },
+          {
+            "type": "command",
+            "command": "node .claude/hooks/check-hardcoded-keys.js",
+            "timeout": 10,
+            "statusMessage": "檢查 hardcode 金鑰…"
+          },
+          {
+            "type": "command",
+            "command": "node .claude/hooks/check-es-modules.js",
+            "timeout": 10,
+            "statusMessage": "檢查 ES module 語法…"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node .claude/hooks/remind-user-flow.js",
+            "timeout": 10,
+            "statusMessage": "檢查是否有待測試的 app/ 變更…"
+          }
+        ]
+      }
+    ]
+  }
+}

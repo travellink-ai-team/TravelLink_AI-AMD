@@ -1,0 +1,196 @@
+/* ══════════════════════════════════════════════════
+   TravelLinkAI 共用設計 token
+   兩頁（explore / planner）原本各自宣告一份 :root，同名變數色值不同步
+   （--accent #2a6b5e vs #2e7d6d、--bg #f7f5f0 vs #faf9f6…），
+   造成跨頁品牌色有溫差。此檔在各頁主 CSS「之後」載入，
+   同名變數以這裡為準；頁面專屬變數仍留在各自的 CSS。
+   改品牌色改這裡即可，兩頁同時生效。
+   ══════════════════════════════════════════════════ */
+:root{
+  --accent:#2a6b5e;   /* 品牌主色（teal，取 explore 版為準） */
+  --accent2:#e8733a;  /* 品牌強調色（橘） */
+  --bg:#f7f5f0;       /* 頁面底色（暖米白） */
+  --ink:#1a1814;      /* 主要文字 */
+  --ink2:#5a5750;     /* 次要文字 */
+  --ink3:#767068;     /* 輔助文字（已校正至 WCAG AA 對比） */
+
+  /* 焦點環：色相取自 --accent，但不用 color-mix()（Safari 16.3 以前不支援，
+     一失敗整條 outline 宣告會被丟棄＝焦點環消失，比降級成純色更糟） */
+  --focus-ring:rgba(42,107,94,.55);
+}
+
+/* ══════════════════════════════════════════════════
+   鍵盤焦點（UIUX 建議 P0-3）
+   兩頁主 CSS 有多處 input/select/textarea 寫死 outline:none（explore 6 處、
+   planner 5 處），且既有的 focus-visible 規則只挑 button/.nav-pill/.tool-btn，
+   表單元素全裸——Tab 過去看不出停在哪。
+   這裡用「元素+偽類」(0,1,1) 對上那些 (0,1,1) 的 .xxx input 選擇器算平手，
+   靠本檔在各頁 CSS 之後載入取勝；少數 (0,2,0) 的（如 .tripfb-textarea:focus）
+   壓不過，已在該頁 CSS 就地改成 :focus:not(:focus-visible)。
+   用 :focus-visible 而非 :focus：滑鼠點擊不會冒出外框，只有鍵盤操作才顯示。
+   ══════════════════════════════════════════════════ */
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible,
+button:focus-visible,
+a:focus-visible,
+summary:focus-visible,
+[tabindex]:focus-visible,
+[role="button"]:focus-visible,
+[contenteditable]:focus-visible{
+  outline:3px solid var(--focus-ring);
+  outline-offset:2px;
+}
+
+/* ══════════════════════════════════════════════════
+   減少動態效果（UIUX 建議 P2-12）
+   使用者在 OS 開啟「減少動態」時（前庭系統敏感、暈動症），關掉全站動畫與轉場。
+   不用 0s 而用 0.01ms：動畫仍會「跑完」並觸發 animationend，
+   靠 animationend 收尾的程式碼（如彈窗關閉）才不會卡住。
+   ══════════════════════════════════════════════════ */
+@media (prefers-reduced-motion:reduce){
+  *,*::before,*::after{
+    animation-duration:.01ms !important;
+    animation-iteration-count:1 !important;
+    transition-duration:.01ms !important;
+    scroll-behavior:auto !important;
+  }
+}
+
+/* ══════════════════════════════════════════════════
+   共用圖示（UIUX 建議 #4）——搭配 app/icons.js 的 sprite
+   stroke:currentColor 讓圖示自動跟隨按鈕文字色（含 hover/active 狀態），
+   不必為每個情境各寫一份顏色。
+   尺寸用 em 而非 px：圖示自動跟著所在文字的字級縮放，
+   在 ≤700px 的字級下限規則下也會等比放大，不會變成一顆小點。
+   ══════════════════════════════════════════════════ */
+.wai-icon{
+  width:1.15em;
+  height:1.15em;
+  fill:none;
+  stroke:currentColor;
+  stroke-width:2;
+  stroke-linecap:round;
+  stroke-linejoin:round;
+  vertical-align:-.18em;   /* 與中文字基線對齊 */
+  flex-shrink:0;           /* flex 容器裡不被壓扁 */
+}
+/* 需要比文字更醒目時（獨立的 icon-only 按鈕） */
+.wai-icon.lg{width:1.5em;height:1.5em;vertical-align:-.3em;}
+
+/* ══════════════════════════════════════════════════
+   載入與回饋（UIUX 建議 #11）——搭配 app/ui-feedback.js
+   ══════════════════════════════════════════════════ */
+.wai-spinner{
+  display:inline-block;
+  width:1em;
+  height:1em;
+  border:2px solid currentColor;
+  border-right-color:transparent;   /* 缺一角才看得出在轉 */
+  border-radius:50%;
+  vertical-align:-.15em;
+  animation:wai-spin .7s linear infinite;
+}
+.wai-busy-text{margin-left:.45em;}
+
+button.is-busy{
+  cursor:progress;
+  opacity:.75;
+}
+/* 忙碌中攔掉所有指標事件：即使 disabled 被外部程式改掉也點不到，雙保險防重複提交 */
+button.is-busy{pointer-events:none;}
+
+@keyframes wai-spin{to{transform:rotate(360deg);}}
+
+/* 骨架列：清單載入中的佔位，避免整片空白讓人以為壞了 */
+.wai-skeleton-wrap{display:flex;flex-direction:column;gap:10px;padding:4px 0;}
+.wai-skeleton{
+  height:44px;
+  border-radius:10px;
+  background:linear-gradient(90deg,
+    rgba(0,0,0,.05) 25%,
+    rgba(0,0,0,.09) 37%,
+    rgba(0,0,0,.05) 63%);
+  background-size:400% 100%;
+  animation:wai-shimmer 1.3s ease-in-out infinite;
+}
+@keyframes wai-shimmer{0%{background-position:100% 50%;}100%{background-position:0 50%;}}
+
+/* prefers-reduced-motion 的全域規則會把上面兩個動畫壓到 0.01ms。
+   spinner 不轉就完全看不出在載入，骨架也會停成一片死灰——
+   對這兩者改用「不會位移、不閃爍」的透明度呼吸，仍傳達「進行中」。 */
+@media (prefers-reduced-motion:reduce){
+  .wai-spinner{
+    animation:wai-pulse 1.6s ease-in-out infinite !important;
+    animation-duration:1.6s !important;
+  }
+  .wai-skeleton{
+    animation:wai-pulse 1.6s ease-in-out infinite !important;
+    animation-duration:1.6s !important;
+    background:rgba(0,0,0,.07);
+  }
+  @keyframes wai-pulse{0%,100%{opacity:1;}50%{opacity:.45;}}
+}
+
+/* ══════════════════════════════════════════════════
+   通知中心：篩選列／分區／空與載入狀態（UIUX 建議 #8）
+   兩頁的通知大視窗共用同一組 class，樣式放這裡只寫一份。
+   ══════════════════════════════════════════════════ */
+.notif-filter-bar{
+  display:flex;
+  gap:8px;
+  padding:10px 16px 4px;
+  border-bottom:1px solid rgba(0,0,0,.06);
+}
+.notif-filter-btn{
+  min-height:40px;            /* 觸控目標（P0-1） */
+  padding:8px 16px;
+  border:1px solid transparent;
+  border-radius:999px;
+  background:rgba(0,0,0,.04);
+  color:var(--ink2);
+  font-family:inherit;
+  font-size:14px;
+  font-weight:700;
+  cursor:pointer;
+}
+.notif-filter-btn.active{
+  background:var(--accent);
+  color:#fff;
+}
+
+.notif-section + .notif-section{margin-top:6px;}
+.notif-section-title{
+  padding:12px 16px 6px;
+  font-size:13px;
+  font-weight:800;
+  color:var(--ink2);
+  letter-spacing:.02em;
+}
+/* 待處理件數用強調色：這是「需要你動作」的訊號，不只是分類標題 */
+.notif-section-count{
+  display:inline-block;
+  min-width:20px;
+  padding:1px 7px;
+  border-radius:999px;
+  background:var(--accent2);
+  color:#fff;
+  font-size:12px;
+  text-align:center;
+}
+
+.notif-empty,
+.notif-loading-hint{
+  padding:28px 20px;
+  text-align:center;
+  font-size:15px;
+  line-height:1.7;
+  color:var(--ink2);
+}
+.notif-loading-hint{padding-bottom:8px;}
+.notif-empty-sub{
+  font-size:13px;
+  color:var(--ink3);
+}
+.notif-skeleton{height:56px;}
+.wai-skeleton-wrap{padding:0 16px 16px;}

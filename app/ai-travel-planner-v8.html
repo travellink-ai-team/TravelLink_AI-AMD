@@ -1,0 +1,758 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<title>TravelLinkAI — 專屬旅遊畫布</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><text x='1' y='14' font-size='14'>🗺️</text></svg>">
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@300;400;500;700&family=Noto+Serif+TC:wght@500;700&family=DM+Serif+Display&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="./ai-travel-planner-v8.css?v=20260930-mapctl1">
+<link rel="stylesheet" href="./design-tokens.css?v=20260727-fix3">
+<link rel="stylesheet" href="./trip-photo-gallery.css?v=20260922-gallery1">
+<script src="./icons.js?v=20260727-fix3"></script>
+<script src="./ui-feedback.js?v=20260727-fix3"></script>
+<script src="./cost-tracking.js?v=20260929-dailyusage1"></script>
+<script src="./business-hours.js?v=20260922-access1"></script>
+<script>
+  // header 的按鈕（第 30 行起）一解析完就能點，但實作它們的 ai-travel-planner-v8.js
+  // 約 1MB、掛在 </body> 前 —— 中間的空窗期點下去是 ReferenceError，而且 inline onclick
+  // 的錯誤不會有任何畫面回饋，使用者只會看到「按了沒反應」。
+  // 這裡先擺同名佔位函式接住那一次點擊，主 JS 載入後由檔尾的 flush 補做。
+  (function () {
+    function queue(name, arg) { window.__waiPendingHeaderAction = { name: name, arg: arg }; }
+    function placeholder(fn) { fn.__waiPlaceholder = true; return fn; }
+    // __waiPlaceholder 讓檔尾的 flush 認得「這顆還沒被真正的實作覆蓋掉」，避免自己呼叫自己。
+    window.switchView = placeholder(function (viewId) { queue('switchView', viewId); });
+    window.toggleAI = placeholder(function () { queue('toggleAI'); });
+    window.openLogin = placeholder(function () { queue('openLogin'); });
+  })();
+</script>
+</head>
+<body>
+
+<header class="glass-header">
+  <div class="header-left">
+    <a class="header-back-link" href="ai-travel-explore-final.html" aria-label="返回我的微旅行"><svg class="wai-icon" aria-hidden="true"><use href="#wai-arrow-left"></use></svg></a>
+    <div class="logo">TravelLinkAI</div>
+  </div>
+  
+  <div class="header-center">
+    <div class="nav-pill-group" role="navigation" aria-label="旅程功能">
+      <button class="nav-pill active" onclick="switchView('itinerary')">行程</button>
+      <button class="nav-pill" onclick="switchView('budget')">預算</button>
+      <button class="nav-pill" onclick="switchView('members')">旅伴</button>
+      <button class="nav-pill" onclick="switchView('weather')">天氣</button>
+      <button class="nav-pill" onclick="switchView('travellog')">旅記</button>
+      <button class="nav-pill nav-pill-rideflow" onclick="switchView('rideflow')">說明</button>
+    </div>
+  </div>
+
+  <div class="header-right" style="display: flex; align-items: center; gap: 12px;">
+    <div class="notif-wrap" id="notifWrap" style="display:none;">
+      <button class="notif-bell" id="notifBellBtn" onclick="toggleNotifPanel()" aria-label="通知">
+        <svg class="wai-icon" aria-hidden="true"><use href="#wai-bell"></use></svg><span class="notif-badge" id="notifBadge" style="display:none"></span>
+      </button>
+      <div class="notif-panel" id="notifPanel"></div>
+    </div>
+    <div class="user-menu-wrap" id="userMenuWrap">
+      <button class="login-prompt-btn" onclick="openLogin()">登入 / 註冊</button>
+    </div>
+    <button class="tool-btn primary" onclick="toggleAI()" aria-label="開啟 AI 隨行管家"><svg class="wai-icon" aria-hidden="true"><use href="#wai-sparkles"></use></svg><span class="tool-btn-label">AI 隨行管家</span></button>
+  </div>
+</header>
+
+<div class="split-layout">
+  
+  <main class="left-panel">
+    
+    <div id="view-itinerary" class="view-section active">
+      <div class="hero-section">
+        <div class="hero-title" id="itineraryTitle">尚未載入行程</div>
+        <div class="hero-meta">
+          <div class="hero-tag">⏱️ 等待匯入時間</div>
+          <div class="hero-tag">📍 等待匯入目的地</div>
+        </div>
+        <div class="hero-actions" id="itineraryHeroActions" role="toolbar" aria-label="行程操作">
+          <label class="trip-vehicle-wrap" id="tripPrimaryVehicleWrap" title="切換全程主要交通工具（走路的路段不受影響）" style="display:none;">
+            🚦 主要交通工具
+            <select id="tripPrimaryVehicleSelect" class="trip-vehicle-select" onchange="setTripPrimaryVehicle(this.value)">
+              <option value="taxi">🚕 計程車</option>
+              <option value="scooter">🛵 機車</option>
+              <option value="car">🚗 汽車</option>
+            </select>
+          </label>
+          <button class="replan-btn primary" id="replanStartTripBtn" onclick="startTripProgress()" style="display:none;">▶ 開始行程</button>
+          <button class="replan-btn primary" id="replanCompleteTripBtn" onclick="window.markTripAsCompleted()" style="display:none;">🏁 結束行程</button>
+          <button class="replan-btn secondary" id="replanResetTripBtn" onclick="window.resetTripProgress()" style="display:none;">↩ 重設進度</button>
+          <span id="heroMoreGroup">
+            <button class="replan-btn secondary" id="replanEditOrderBtn" onclick="enterReplanMode()">✏️ 調整順序</button>
+            <button class="replan-btn secondary" id="replanStartBtn" onclick="replanWithAI()">重新規劃</button>
+            <button class="replan-btn maps-route-btn" onclick="openFullTripNavigation()" title="以 Google Maps 開啟整趟路線" aria-label="以 Google Maps 開啟整趟路線（新分頁）">🗺 Google Maps 路線 <span aria-hidden="true">↗</span></button>
+            <button class="replan-btn secondary" onclick="openMapShareDialog()" title="分享整趟 Google Maps 路線">📤 分享地圖</button>
+            <button class="replan-btn secondary" onclick="openTravelTools('export')">匯出行程圖</button>
+          </span>
+          <button class="replan-btn secondary" id="heroMoreBtn" onclick="toggleHeroMore()" aria-label="更多行程操作" aria-controls="heroMoreGroup" aria-haspopup="menu" aria-expanded="false"><svg class="wai-icon" aria-hidden="true"><use href="#wai-more-horizontal"></use></svg> 更多</button>
+          <button class="replan-btn primary" id="replanApplyBtn" onclick="applyReplan()" style="display:none;">套用新規劃</button>
+          <button class="replan-btn secondary" id="replanCancelBtn" onclick="cancelReplan()" style="display:none;">取消</button>
+          <div class="prototype-id-chip" id="prototypeTripId">原型資料</div>
+        </div>
+      </div>
+      <div class="timeline" id="itineraryPlannedBlock"></div>
+      <div class="planning-stage" id="itineraryPlanningBlock">
+        <div class="planning-shell">
+          <div class="planning-title">重新規劃階段</div>
+          <div class="planning-sub">拖曳每個停靠點調整順序，系統會即時重新計算時段。</div>
+          <div class="planning-headline">
+            <div>
+              <div class="planning-headline-title">拖曳重排行程順序</div>
+              <div class="planning-headline-sub">提示：按住卡片左側手把可重排，時間會自動更新</div>
+            </div>
+            <div class="planning-total-time" id="replanTotalWindow">--</div>
+          </div>
+          <div class="replan-list" id="replanSortableList">
+          </div>
+          <div class="replan-bottom-actions">
+            <button class="replan-bottom-btn add" onclick="addStopFromBottom()">＋ 搜尋新增景點</button>
+            <button class="replan-bottom-btn nearby" onclick="exploreNearbyPlaces()">🧭 探索附近景點</button>
+          </div>
+          <div class="planning-actions">
+            <button class="replan-btn primary" onclick="applyReplan()">完成重新規劃</button>
+            <button class="replan-btn secondary" onclick="cancelReplan()">維持原行程</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div id="view-budget" class="view-section">
+      <div class="hero-section" style="padding-bottom: 24px;">
+        <div class="hero-title">微旅行花費追蹤</div>
+        <div class="hero-meta"><div class="hero-tag">💰 預估花費 $500</div></div>
+      </div>
+      <div class="budget-water-level">
+        <div class="budget-amount">$180</div>
+        <div class="budget-label">目前已花費</div>
+        <div class="progress-track">
+          <div class="progress-fill"></div>
+        </div>
+        <div style="display: flex; justify-content: space-between; margin-top: 12px; font-size: 13px; color: var(--ink2); font-weight: 500;">
+          <span>剩餘預算 $320</span>
+          <span>使用率 36%</span>
+        </div>
+      </div>
+      <div class="receipt-container">
+        <div class="receipt-card">
+          <div class="receipt-header">
+            <div class="receipt-day">本日花費</div>
+            <div class="receipt-total">$180</div>
+          </div>
+          <div class="receipt-item">
+            <div class="receipt-item-name"><span>🎒</span> 寄放行李</div>
+            <div>$30</div>
+          </div>
+          <div class="receipt-item">
+            <div class="receipt-item-name"><span>☕</span> 手沖咖啡</div>
+            <div>$150</div>
+          </div>
+          <div class="receipt-item">
+            <div class="receipt-item-name"><span>⏳</span> 尚未消費</div>
+            <div>$0</div>
+          </div>
+        </div>
+        <div style="display:none; background: var(--accent-light); padding: 20px; border-radius: 16px; display: flex; align-items: center; justify-content: space-between;">
+          <div>
+            <div style="font-weight: 600; color: var(--accent-dark); margin-bottom: 4px;">小明 ➔ 小美</div>
+            <div style="font-size: 13px; color: var(--accent);">需支付代墊款 $760</div>
+          </div>
+          <button class="tool-btn" style="border: none; color: var(--accent); font-weight: 600;">🔔 提醒付款</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="view-members" class="view-section">
+      <div class="hero-section" style="padding-bottom: 24px;">
+        <div class="hero-title">同行旅伴</div>
+        <div class="hero-meta"><div class="hero-tag" id="membersCount">👥 -- 人</div></div>
+      </div>
+      <div class="members-container">
+        <div class="avatar-stack" id="membersAvatarStack">
+          <div class="avatar">👤</div>
+          <div class="avatar-info">
+            <div style="font-weight: 600; font-size: 16px;">載入中…</div>
+            <div style="font-size: 13px; color: var(--ink3);"></div>
+          </div>
+        </div>
+
+        <div class="boarding-pass">
+          <div class="bp-top">
+            <div class="bp-label" style="color: rgba(255,255,255,0.7);">Destination</div>
+            <div class="bp-dest" id="membersDest">--</div>
+            <div style="font-size: 14px; opacity: 0.9;" id="membersTripTitle">尚未載入行程</div>
+          </div>
+          <div class="bp-divider"></div>
+          <div class="bp-bottom">
+            <div class="bp-row">
+              <div>
+                <div class="bp-label">Date</div>
+                <div class="bp-value" id="membersDate">待設定</div>
+              </div>
+              <div style="text-align: right;">
+                <div class="bp-label">Organizer</div>
+                <div class="bp-value" id="membersOrganizer">--</div>
+              </div>
+            </div>
+            <div>
+              <div class="bp-label" style="text-align: center; margin-bottom: 8px;">Invite Code</div>
+              <div class="bp-code" id="inviteCodeDisplay">--</div>
+            </div>
+            <div style="display: flex; flex-direction: column; align-items: center; margin: 8px 0 16px;">
+              <div id="inviteQrCode" style="border-radius: 12px; border: 1px dashed rgba(255,255,255,0.45); width: 120px; height: 120px; display:flex; align-items:center; justify-content:center; color: rgba(255,255,255,0.72); font-size: 12px; text-align:center; padding: 12px;">尚未產生邀請碼</div>
+              <div id="inviteQrHint" style="font-size: 11px; color: var(--ink3); margin-top: 8px;">建立或匯入行程後才會顯示分享 QR Code</div>
+            </div>
+            <button class="tool-btn" style="width: 100%; justify-content: center; background: #00C300; color: white; border: none;" onclick="shareViaLine()">💬 透過 LINE 分享邀請</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div id="view-weather" class="view-section">
+      <div class="hero-section" style="padding-bottom: 24px;">
+        <div class="hero-title">行程天氣</div>
+        <div class="hero-meta"><div class="hero-tag">🌤 載入有出發日期的行程後顯示</div></div>
+      </div>
+      <div class="weather-container">
+        <!-- 卡片由 refreshWeatherView() 依行程日期動態產生；以下為尚未載入行程時的 placeholder -->
+        <div class="weather-card sunny">
+          <div class="wc-header">
+            <div>
+              <div style="font-weight: 600; margin-bottom: 8px;">載入行程後顯示天氣</div>
+              <div class="wc-temp">–°</div>
+            </div>
+            <div class="wc-icon">🌤</div>
+          </div>
+          <div class="wc-advice">建立或開啟一份有出發日期的行程，這裡會依行程長短顯示每天的天氣。</div>
+        </div>
+      </div>
+    </div>
+
+    <div id="view-current-spot" class="view-section">
+      <div class="spot-detail-header">
+        <button class="spot-detail-back" onclick="switchView('itinerary')">←</button>
+        <div class="spot-detail-status" id="spotDetailStatus">未開始</div>
+      </div>
+      <div class="spot-detail-hero">
+        <div class="spot-detail-title" id="spotDetailTitle">尚未載入行程</div>
+        <div class="spot-detail-distance" id="spotDetailDistance">載入或生成行程後，這裡會顯示目前景點</div>
+      </div>
+      <div class="spot-detail-image" id="spotDetailImage">🏞️</div>
+      <div class="spot-detail-content">
+        <div class="spot-detail-card">
+          <div class="spot-detail-card-title">景點介紹</div>
+          <div class="spot-detail-card-desc" id="spotDetailDesc">
+            開始行程後，這裡會顯示目前景點的介紹。
+          </div>
+        </div>
+        <div class="spot-detail-card" id="spotDetailNoticeCard" style="display:none">
+          <div class="spot-detail-card-title">注意事項</div>
+          <div class="spot-detail-card-desc" id="spotDetailNotice"></div>
+        </div>
+        <div class="spot-detail-actions">
+          <div class="spot-action-btn" onclick="playVoiceGuide()">
+            <div class="spot-action-icon">🎧</div>
+            <div class="spot-action-label">語音導覽</div>
+          </div>
+          <div class="spot-action-btn" onclick="switchView('itinerary')">
+            <div class="spot-action-icon">📍</div>
+            <div class="spot-action-label">行程詳情</div>
+          </div>
+          <div class="spot-action-btn" onclick="switchView('travellog')">
+            <div class="spot-action-icon">📸</div>
+            <div class="spot-action-label">照片分享</div>
+          </div>
+          <div class="spot-action-btn" onclick="openTripFeedback()">
+            <div class="spot-action-icon">💬</div>
+            <div class="spot-action-label">評分回饋</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div id="view-rideflow" class="view-section">
+      <div class="hero-section" style="padding-bottom: 24px;">
+        <div class="hero-title desktop-only-title" style="display: none;">TravelLinkAI 功能說明</div>
+        <div class="hero-meta desktop-only-meta" style="display: none;">
+          <div class="hero-tag">💡 探索 AI 隨行管家的各項功能</div>
+        </div>
+        <div class="hero-title mobile-only-title">路線與行程流程說明</div>
+        <div class="hero-meta mobile-only-meta">
+          <div class="hero-tag">🗺️ 改道 · 位置 · 行程 · 回憶</div>
+        </div>
+      </div>
+
+      <!-- 桌面端功能說明 -->
+      <div class="features-shell desktop-only-content" style="display: none; padding: 24px 40px; display: flex; flex-direction: column; gap: 24px;">
+        <div style="background: var(--surface); border: 1px solid var(--border); border-radius: 24px; padding: 32px; box-shadow: var(--shadow-sm);">
+          <div style="font-size: 32px; margin-bottom: 12px;">🗺️</div>
+          <h3 style="font-size: 20px; font-weight: 800; color: var(--ink); margin-bottom: 8px;">行程規劃與地圖導覽</h3>
+          <p style="color: var(--ink2); line-height: 1.6; font-size: 15px;">在左側面板瀏覽詳細的行程節點，點擊景點可查看詳細資訊或進行語音導覽。右側地圖會即時同步顯示你的位置與景點連線，輕鬆掌握路線動態。</p>
+        </div>
+        <div style="background: var(--surface); border: 1px solid var(--border); border-radius: 24px; padding: 32px; box-shadow: var(--shadow-sm);">
+          <div style="font-size: 32px; margin-bottom: 12px;">🤖</div>
+          <h3 style="font-size: 20px; font-weight: 800; color: var(--ink); margin-bottom: 8px;">AI 隨行管家即時輔助</h3>
+          <p style="color: var(--ink2); line-height: 1.6; font-size: 15px;">點擊右上角「✨ AI 隨行管家」展開抽屜，無論是行程建議、周邊美食推薦，還是臨時更改計畫，AI 都能即時回答並提供卡片式的推薦選項。</p>
+        </div>
+        <div style="background: var(--surface); border: 1px solid var(--border); border-radius: 24px; padding: 32px; box-shadow: var(--shadow-sm);">
+          <div style="font-size: 32px; margin-bottom: 12px;">💰</div>
+          <h3 style="font-size: 20px; font-weight: 800; color: var(--ink); margin-bottom: 8px;">預算與旅伴管理</h3>
+          <p style="color: var(--ink2); line-height: 1.6; font-size: 15px;">透過頂部導覽列切換至「預算」與「旅伴」頁面，可以清楚追蹤每一筆共同開銷、設定個人預算上限，並隨時邀請朋友加入共同編輯行程。</p>
+        </div>
+        <div style="background: var(--surface); border: 1px solid var(--border); border-radius: 24px; padding: 32px; box-shadow: var(--shadow-sm);">
+          <div style="font-size: 32px; margin-bottom: 12px;">📱</div>
+          <h3 style="font-size: 20px; font-weight: 800; color: var(--ink); margin-bottom: 8px;">跨裝置完美支援</h3>
+          <p style="color: var(--ink2); line-height: 1.6; font-size: 15px;">無論是在電腦前詳細規劃，或是旅行中用手機即時查看，介面皆會自動適應，讓你隨時掌握行程節奏。</p>
+        </div>
+      </div>
+
+      <!-- 手機端共乘流程 -->
+      <div class="rideflow-shell mobile-only-content">
+        <div class="mode-rail" id="rideModeRail"></div>
+        <div class="ride-preview-card">
+          <div class="ride-preview-top">
+            <div>
+              <div class="ride-preview-kicker" id="rideModeKicker">trip detail</div>
+              <div class="ride-preview-title" id="rideModeTitle">今天行程</div>
+              <div class="ride-preview-subtitle" id="rideModeSubtitle">完整時間線與地點清單，方便總覽與分享。</div>
+            </div>
+            <div class="ride-preview-badge" id="rideModeBadge">行程總覽</div>
+          </div>
+          <div class="phone-shell">
+            <div class="phone-screen" id="rideModeScreen"></div>
+          </div>
+        </div>
+        <div class="screen-footnote">點選上方任一畫面卡，就能切換下方手機預覽。這一區展示改道、現在位置、今天行程與回憶等功能流程。</div>
+      </div>
+    </div>
+
+    <div id="view-travellog" class="view-section">
+      <div class="hero-section" style="padding-bottom: 16px;">
+        <div class="hero-title">我的旅遊紀錄</div>
+        <div class="hero-meta">
+          <div class="hero-tag" id="travellog-count">0 個景點</div>
+        </div>
+      </div>
+      <div style="padding: 0 16px 16px;">
+        <p style="font-size:13px;color:var(--ink2);margin-bottom:16px;">已標記的景點會在 AI 重新規劃時自動排除，讓每次旅行都有新體驗。</p>
+        <button class="travellog-rate-btn" onclick="openTripFeedback()">⭐ 為這趟旅程評分</button>
+        <button class="travellog-sort-photo-btn" type="button" onclick="addTripPhotosForSorting()">📷 批次上傳並自動整理</button>
+        <div id="travellog-collage-bar" style="margin-top:10px;"></div>
+        <input type="file" id="tripPhotoInput" accept="image/*" multiple hidden>
+        <section class="travellog-shared-gallery" aria-label="共同行程相簿">
+          <div id="tripPhotoGallery" aria-live="polite"></div>
+        </section>
+        <div id="travellog-list" style="margin-top:16px;"></div>
+        <div id="travellog-empty" style="text-align:center;padding:48px 16px;color:var(--ink3,#aaa);">
+          <div style="font-size:40px;margin-bottom:12px;">🗺️</div>
+          <div style="font-size:15px;font-weight:600;color:var(--ink2);">還沒有旅遊紀錄</div>
+          <div style="font-size:13px;margin-top:6px;">在行程中點景點，選「📌 去過了」即可加入</div>
+        </div>
+      </div>
+    </div>
+
+  </main>
+
+  <aside class="map-panel" id="mapPanel">
+    <div id="googleMap" style="width: 100%; height: 100%;"></div>
+
+    <!-- ── 地圖右上角總流程時間 ── -->
+    <div class="map-time-banner" id="mapTimeBanner">
+      <div class="map-time-banner-range" id="mapTimeBannerRange">09:00 – 17:00</div>
+      <div class="map-time-banner-duration" id="mapTimeBannerDuration">共 8 小時</div>
+      <div class="map-time-banner-warn" id="mapTimeBannerWarn">⚠ 超出行程規劃時間</div>
+    </div>
+
+    <!-- ── 路線文字導航面板 (預設隱藏) ── -->
+    <div id="directionsPanel" style="position: absolute; top: 16px; left: 16px; max-height: calc(100vh - 200px); width: 320px; background: rgba(255, 255, 255, 0.95); border-radius: 16px; overflow-y: auto; box-shadow: var(--shadow-lg); font-size: 13px; z-index: 90; display: none; padding: 12px; border: 1px solid var(--border);"></div>
+    <!-- 階段面板的邊緣收合把手（slide-to-edge）；面板內容會被清空重建，故把手獨立於面板之外 -->
+    <button id="directionsPanelHandle" type="button" onclick="toggleDirectionsPanel()" hidden>階段 ◂</button>
+
+    <div class="mobile-route-sheet" id="mobileRouteSheet">
+      <button class="mobile-route-toggle" type="button" onclick="toggleMobileRouteSheet()" aria-controls="mobileRouteList" aria-label="展開或收合階段路徑" aria-expanded="false">
+        <div class="mobile-route-copy">
+          <div class="mobile-route-title">階段路徑</div>
+          <div class="mobile-route-sub" id="mobileRouteSummary">載入路線中</div>
+        </div>
+        <div class="mobile-route-toggle-icon" id="mobileRouteToggleIcon">▴</div>
+      </button>
+      <div class="mobile-route-list" id="mobileRouteList"></div>
+    </div>
+
+    <!-- ── 地圖底部浮出資訊卡 ── -->
+    <div class="map-info-card" id="mapInfoCard" onmousedown="event.stopPropagation()">
+      <div class="mic-header">
+        <div class="mic-title" id="micTitle">標點名稱</div>
+        <button class="mic-close" onclick="closePinInfo()" aria-label="關閉景點資訊">✕</button>
+      </div>
+      <div class="mic-body">
+        <div class="mic-desc" id="micDesc">這裡會顯示導覽說明。</div>
+        <div class="mic-nearby" id="micNearby" style="display:none"></div>
+        <div class="mic-hours" id="micHours" style="display:none"></div>
+        <div class="mic-notice">
+          <span>⚠️</span>
+          <span id="micNotice">這裡會顯示注意事項。</span>
+        </div>
+      </div>
+      <div class="mic-visited-row" id="micVisitedRow" style="display:none;">
+        <button class="mic-visited-btn visited-toggle-btn" id="micVisitedBtn" type="button">📌 去過了</button>
+      </div>
+    </div>
+  </aside>
+
+  <div class="ai-drawer" id="aiDrawer">
+    <div class="ai-header">
+      <div class="ai-title"><span>🤖</span> 隨行管家 AI</div>
+      <button class="close-btn" onclick="toggleAI()" aria-label="關閉 AI 助手">✕</button>
+    </div>
+    <div class="ai-chat-area" id="aiChatArea"></div>
+    <div class="ai-input-area">
+      <div class="chat-input-box">
+        <input id="aiChatInput" type="text" placeholder="告訴我你想吃什麼、玩什麼...">
+        <button id="aiChatSendBtn" type="button" aria-label="送出訊息">➤</button>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<div class="add-place-overlay" id="addPlaceOverlay" onclick="closeAddPlaceDialog()">
+  <div class="add-place-dialog" role="dialog" aria-modal="true" aria-labelledby="addPlaceTitle" onclick="event.stopPropagation()">
+    <div class="add-place-head">
+      <div>
+        <div class="add-place-title" id="addPlaceTitle">新增景點</div>
+        <div class="add-place-subtitle" id="addPlaceSubtitle">搜尋 Google Maps 上的景點，再加入目前行程。</div>
+      </div>
+      <button class="add-place-close" type="button" onclick="closeAddPlaceDialog()" aria-label="關閉新增景點視窗">✕</button>
+    </div>
+    <form class="add-place-search" onsubmit="event.preventDefault(); searchPlacesToAdd()">
+      <div class="add-place-day-field" id="addPlaceDayField" hidden>
+        <label class="add-place-label" for="addPlaceDaySelect">安排在哪一天</label>
+        <select id="addPlaceDaySelect" aria-label="選擇新增景點的日期"></select>
+      </div>
+      <label class="add-place-label" for="addPlaceSearchInput">景點名稱或類型</label>
+      <div class="add-place-search-row">
+        <input id="addPlaceSearchInput" type="search" autocomplete="off" placeholder="例如：台東美術館、咖啡廳">
+        <button type="submit">搜尋</button>
+      </div>
+    </form>
+    <div class="add-place-results" id="addPlaceResults" aria-live="polite">
+      <div class="add-place-empty">輸入景點名稱，搜尋後再選擇要加入的地點。</div>
+    </div>
+  </div>
+</div>
+
+<div class="delete-place-overlay" id="deletePlaceOverlay" onclick="closeDeletePlaceDialog()">
+  <div class="delete-place-dialog" role="alertdialog" aria-modal="true" aria-labelledby="deletePlaceTitle" aria-describedby="deletePlaceDescription" onclick="event.stopPropagation()">
+    <div class="delete-place-icon">🗑️</div>
+    <div class="delete-place-title" id="deletePlaceTitle">刪除這個景點？</div>
+    <div class="delete-place-description" id="deletePlaceDescription">刪除後會重新計算後續行程時間。</div>
+    <div class="delete-place-actions">
+      <button class="delete-place-cancel" type="button" onclick="closeDeletePlaceDialog()">保留景點</button>
+      <button class="delete-place-confirm" type="button" onclick="confirmRemoveStop()">確認刪除</button>
+    </div>
+  </div>
+</div>
+
+<div class="modify-overlay" id="modifyOverlay" onclick="closeModifyWindow()">
+  <div class="modify-window" onclick="event.stopPropagation()">
+    <div class="modify-window-head">
+      <button class="modify-back-btn" onclick="closeModifyWindow()">← 返回</button>
+      <div>
+        <div class="modify-window-title">修改景點</div>
+        <div class="modify-window-sub" id="modifyWindowTarget">選擇要替換的新景點</div>
+      </div>
+    </div>
+    <div class="modify-source-tabs">
+      <button class="modify-source-tab active" id="modifyTabWall" onclick="switchModifySource('wall')">景點牆</button>
+      <button class="modify-source-tab" id="modifyTabMap" onclick="switchModifySource('map')">地圖</button>
+    </div>
+    <div class="modify-window-body" id="modifyWindowBody"></div>
+  </div>
+</div>
+
+<div class="travel-tools-overlay" id="travelToolsOverlay" onclick="closeTravelTools()">
+  <div class="travel-tools-modal" onclick="event.stopPropagation()">
+    <div class="travel-tools-head">
+      <div>
+        <div class="travel-tools-title" id="travelToolsTitle">匯出行程圖</div>
+        <div class="travel-tools-subtitle" id="travelToolsSubtitle">把目前行程輸出成可分享的圖檔與邀請碼。</div>
+      </div>
+      <button class="travel-tools-close" onclick="closeTravelTools()" aria-label="關閉旅遊工具">✕</button>
+    </div>
+    <!-- 「網址匯入」已移除（實用性不足）。原本這裡是「網址匯入／匯出行程圖」兩個分頁，
+         現在只剩匯出一種用途，分頁列就沒有意義了，整列拿掉。
+         ⚠️ 若日後要加回分頁，記得 renderTravelTools() 的 guard 會檢查這些元素是否存在。 -->
+    <div class="travel-tools-body" id="travelToolsBody"></div>
+  </div>
+</div>
+
+<!-- ─── OVERLAY: TRIP MEMORY STUDIO ─── -->
+<div class="memory-studio-overlay" id="memoryStudioOverlay" hidden>
+  <section class="memory-studio-panel" id="memoryStudioPanel" role="dialog" aria-modal="true" aria-labelledby="memoryStudioTitle" tabindex="-1">
+    <div class="memory-studio-handle" aria-hidden="true"></div>
+    <header class="memory-studio-head">
+      <button class="memory-studio-back" id="memoryStudioBackBtn" type="button" aria-label="返回上一步" hidden>←</button>
+      <div class="memory-studio-heading">
+        <div class="memory-studio-step" id="memoryStudioStep" aria-live="polite"></div>
+        <h2 class="memory-studio-title" id="memoryStudioTitle">製作旅程回憶</h2>
+      </div>
+      <button class="memory-studio-close" id="memoryStudioCloseBtn" type="button" aria-label="關閉旅程回憶工作室">✕</button>
+    </header>
+    <div class="memory-studio-body" id="memoryStudioBody"></div>
+  </section>
+</div>
+
+<div class="parking-record-overlay" id="parkingRecordOverlay" onclick="closeParkingRecordSheet()">
+  <section class="parking-record-sheet" role="dialog" aria-modal="true" aria-labelledby="parkingRecordTitle" onclick="event.stopPropagation()">
+    <header class="parking-record-head">
+      <div>
+        <h2 class="parking-record-title" id="parkingRecordTitle">記錄停車位置</h2>
+        <p class="parking-record-subtitle" id="parkingRecordSubtitle">正在取得目前位置…</p>
+      </div>
+      <button class="parking-record-close" type="button" onclick="closeParkingRecordSheet()" aria-label="關閉停車位置視窗">✕</button>
+    </header>
+    <div class="parking-adjust-map" id="parkingAdjustMap" aria-label="拖曳或點擊地圖調整停車位置"></div>
+    <div class="parking-location-meta">
+      <span class="parking-accuracy-badge" id="parkingAccuracyBadge">GPS 定位中</span>
+      <span class="parking-coordinate" id="parkingCoordinate">--</span>
+    </div>
+    <label class="parking-note-label" for="parkingNoteInput">停車位置備註</label>
+    <input class="parking-note-input" id="parkingNoteInput" type="text" maxlength="60" autocomplete="off" placeholder="例如：B2 紅區 12 號柱">
+    <div class="parking-note-chips" aria-label="快速填入停車備註">
+      <button type="button" onclick="appendParkingNote('B1')">B1</button>
+      <button type="button" onclick="appendParkingNote('B2')">B2</button>
+      <button type="button" onclick="appendParkingNote('1F')">1F</button>
+      <button type="button" onclick="appendParkingNote('紅區')">紅區</button>
+      <button type="button" onclick="appendParkingNote('靠近出口')">靠近出口</button>
+    </div>
+    <div class="parking-record-actions">
+      <button class="parking-save-btn" id="parkingSaveBtn" type="button" onclick="saveParkingRecord()" disabled>確認停在這裡</button>
+      <button class="parking-release-sheet-btn" id="parkingReleaseSheetBtn" type="button" onclick="releaseActiveParking()" hidden>我已取車</button>
+    </div>
+  </section>
+</div>
+
+<div class="parking-report-overlay" id="parkingReportOverlay" onclick="closeParkingReportSheet()">
+  <section class="parking-report-sheet" role="dialog" aria-modal="true" aria-labelledby="parkingReportTitle" onclick="event.stopPropagation()">
+    <header class="parking-report-head">
+      <div>
+        <h2 class="parking-report-title" id="parkingReportTitle">回報停車資訊</h2>
+        <p class="parking-report-subtitle" id="parkingReportSubtitle">回報停車狀況，幫助之後來的人。</p>
+      </div>
+      <button class="parking-report-close" type="button" onclick="closeParkingReportSheet()" aria-label="關閉停車資訊回報視窗">✕</button>
+    </header>
+    <div class="parking-report-context" id="parkingReportContext"></div>
+    <label class="parking-report-label" for="parkingReportType">目前狀況</label>
+    <!-- 兩組的收件人不同：上組是給之後來的人的停車狀況，下組是給系統的資料修正。
+         預設留在未選取（value=""），避免誤按送出就記成「我停好了」。 -->
+    <select class="parking-report-select" id="parkingReportType" onchange="updateParkingReportKindVisibility()">
+      <option value="" disabled selected>請選擇…</option>
+      <optgroup label="這一站有沒有地方停？">
+        <option value="found">✅ 有，我停好了（下一步標記停車位置）</option>
+        <option value="full">⚠️ 有停車場，但已經滿了</option>
+        <option value="closed">⚠️ 有停車場，但今天沒開</option>
+        <option value="none">❌ 附近真的沒有停車場</option>
+      </optgroup>
+      <optgroup label="資料有錯">
+        <option value="wrong">🛠 停車場位置標錯了</option>
+        <option value="missing">🛠 這個停車場不存在</option>
+      </optgroup>
+    </select>
+    <div id="parkingReportKindField" hidden>
+      <label class="parking-report-label" for="parkingReportKind">停車位置類型</label>
+      <select class="parking-report-select" id="parkingReportKind">
+        <option value="unknown">不確定</option>
+        <option value="lot">停車場</option>
+        <option value="roadside">路邊停車格</option>
+      </select>
+    </div>
+    <label class="parking-report-label" for="parkingReportNote">補充說明（選填）</label>
+    <textarea class="parking-report-note" id="parkingReportNote" maxlength="240" rows="3" placeholder="例如：入口在景點南側、B2 已滿、只接受現金…"></textarea>
+    <div class="parking-report-actions">
+      <button class="parking-report-cancel" type="button" onclick="closeParkingReportSheet()">取消</button>
+      <button class="parking-report-submit" type="button" onclick="submitParkingReport()">送出回報</button>
+    </div>
+  </section>
+</div>
+
+<aside class="find-car-bar" id="findCarBar" aria-live="polite" hidden>
+  <div class="find-car-icon" aria-hidden="true">🚗</div>
+  <button class="find-car-copy" type="button" onclick="openActiveParkingDetails()">
+    <strong id="findCarDistance">已記錄停車位置</strong>
+    <span id="findCarMeta">點一下查看停車資訊</span>
+  </button>
+  <button class="find-car-nav" type="button" onclick="navigateToActiveParking()">導航回車</button>
+  <button class="find-car-more" type="button" onclick="openActiveParkingDetails()" aria-label="查看停車位置詳細資料">⌄</button>
+</aside>
+
+<div class="mobile-view-switch" id="mobileViewSwitch" role="navigation" aria-label="手機主要畫面">
+  <!-- UIUX#5：原標籤「功能頁」語意不明（使用者不知道裡面是什麼），改為內容本身「行程」 -->
+  <button class="mobile-switch-btn active" id="mobileSwitchFunctions" onclick="switchView('itinerary')">行程</button>
+  <button class="mobile-switch-btn" id="mobileSwitchSpot" onclick="switchView('current-spot')">現在景點</button>
+  <button class="mobile-switch-btn" id="mobileSwitchMap" onclick="setMobileMode('map')">地圖</button>
+</div>
+
+<!-- 「司機/乘客權限模式」與「司機行程掌控」面板已移除（C8 不符 app 定位，導航交給 Google Maps）。 -->
+
+<script src="./weather.env.js"></script>
+<script src="./poi-data.js"></script>
+<script src="./restaurant-data.js"></script>
+<script src="./parking-data.js"></script>
+<script src="./ferry-config.js"></script>
+<script src="./cost-config.js"></script>
+<script src="./attraction-fee-config.js"></script>
+<script src="./wheel-picker.js?v=20260923-ux13"></script>
+<script src="./qr-encode.js?v=20260923-qr2"></script>
+<script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-storage-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-auth-compat.js"></script>
+<script src="./collab.js?v=20260726-fix3"></script>
+<script src="./notifications.js?v=20260722-friends2"></script>
+<script src="./trip-photo-manager.js?v=20260928-order1"></script>
+<script src="./trip-photo-sync.js?v=20260927-ownfile1"></script>
+<script src="./trip-photo-gallery.js?v=20260927-labels1"></script>
+<script src="./ai-travel-planner-v8.js?v=20261001-posterkey1"></script>
+<script>
+  // 動態載入 Google Maps：金鑰統一由 weather.env.js 的 TRAVEL_APP_CONFIG 提供，
+  // 避免在頁面硬編金鑰（先前硬編的舊金鑰已失效，導致 InvalidKeyMapError）。
+  (function loadGoogleMaps() {
+    var cfg = window.TRAVEL_APP_CONFIG || {};
+    var key = cfg.GOOGLE_MAPS_API_KEY || '';
+    if (!key) {
+      console.error('[Maps] 未設定 GOOGLE_MAPS_API_KEY，請檢查 weather.env.js');
+      return;
+    }
+    // 註冊全域回呼以配合 loading=async
+    window.initGoogleMapsCallback = function () {
+      if (typeof window.initMap === 'function') {
+        window.initMap();
+      }
+    };
+    var s = document.createElement('script');
+    s.src = 'https://maps.googleapis.com/maps/api/js?key=' + encodeURIComponent(key) +
+      '&libraries=places&language=zh-TW&region=TW&loading=async&callback=initGoogleMapsCallback';
+    s.async = true;
+    s.defer = true;
+    s.onerror = function () { console.error('[Maps] Google Maps 載入失敗，請確認金鑰有效且已啟用 Maps JavaScript API'); };
+    document.head.appendChild(s);
+  })();
+</script>
+
+<div id="imgLightbox" class="img-lightbox" onclick="closeImageLightbox(event)">
+  <div class="img-lightbox-inner" onclick="event.stopPropagation()">
+    <button class="img-lightbox-close" onclick="closeImageLightbox()" aria-label="關閉圖片預覽">✕</button>
+    <img id="imgLightboxImg" src="" alt="行程圖預覽" onclick="toggleLightboxZoom(this)">
+    <div class="img-lightbox-actions">
+      <button class="img-lightbox-btn" onclick="downloadFromLightbox()">↓ 下載</button>
+      <button class="img-lightbox-btn" onclick="shareGeneratedImage()">↗ 分享</button>
+    </div>
+  </div>
+</div>
+<div id="stayModal" style="display:none" onclick="if(event.target===this)closeStayModal()">
+  <div class="stay-modal-box">
+    <div class="stay-modal-title" id="stayModalTitle">⏱ 調整停留時間</div>
+    <div class="stay-modal-sub" id="stayModalSub"></div>
+    <div class="stay-modal-grid" id="stayModalGrid"></div>
+    <button class="stay-modal-cancel" onclick="closeStayModal()">取消</button>
+  </div>
+</div>
+<!-- Week4 C6：旅遊紀錄「景點備註」輸入（個人資料，存 visitedSpots.note） -->
+<div id="noteModal" style="display:none" onclick="if(event.target===this)closeNoteModal()">
+  <div class="stay-modal-box">
+    <div class="stay-modal-title">📝 景點備註</div>
+    <div class="stay-modal-sub" id="noteModalSub"></div>
+    <textarea id="noteModalText" class="note-modal-textarea" maxlength="500" rows="5" placeholder="寫下這個景點的回憶或心得…（最多 500 字）"></textarea>
+    <div class="note-modal-hint">同行旅伴也看得到這則備註（App 旅記會顯示在這站底下）</div>
+    <div class="note-modal-actions">
+      <button class="stay-modal-cancel" onclick="closeNoteModal()">取消</button>
+      <button class="note-modal-save" onclick="saveVisitedNote()">儲存</button>
+    </div>
+  </div>
+</div>
+<div id="replanGenOverlay" style="display:none">
+  <div class="replan-gen-container">
+    <div class="replan-gen-header">
+      <div class="replan-gen-title">🤖 AI 重新規劃行程</div>
+      <div class="replan-gen-phase" id="replanGenPhase">連接中…</div>
+    </div>
+    <div class="replan-gen-terminal">
+      <div class="replan-gen-bar">
+        <span class="replan-gen-dot replan-gen-dot-r"></span>
+        <span class="replan-gen-dot replan-gen-dot-y"></span>
+        <span class="replan-gen-dot replan-gen-dot-g"></span>
+        <span class="replan-gen-label">TravelLinkAI · 重新規劃</span>
+      </div>
+      <div class="replan-gen-output" id="replanGenOutput"></div>
+      <div class="replan-gen-cursor" id="replanGenCursor">◌</div>
+    </div>
+  </div>
+</div>
+
+<!-- ─── OVERLAY: DESKTOP SINGLE-STOP EDITOR ───
+     必須直屬 body；放進 .left-panel 會受其 stacking context 限制，遭頁首與地圖浮窗覆蓋。 -->
+<div class="stop-editor-backdrop" id="stopEditorBackdrop" hidden onclick="if(event.target===this)closeStopEditor()">
+  <aside class="stop-editor-drawer" id="stopEditorDrawer" role="dialog" aria-modal="true" aria-labelledby="stopEditorTitle" aria-describedby="stopEditorSummary" tabindex="-1">
+    <div class="stop-editor-header">
+      <div class="stop-editor-heading">
+        <div class="stop-editor-kicker">單站設定</div>
+        <h2 class="stop-editor-title" id="stopEditorTitle">編輯景點</h2>
+        <p class="stop-editor-summary" id="stopEditorSummary">集中調整這一站的時間、停留與交通方式。</p>
+      </div>
+      <button class="stop-editor-close" type="button" onclick="closeStopEditor()" aria-label="關閉單站設定">✕</button>
+    </div>
+    <div class="stop-editor-body" id="stopEditorBody"></div>
+  </aside>
+</div>
+
+<!-- ─── OVERLAY: LOGIN ─── -->
+<div class="overlay" id="loginOverlay" onclick="if(event.target===this)closeLogin()" style="z-index:300">
+  <div class="login-modal" style="position:relative">
+    <button class="lm-close" onclick="closeLogin()" aria-label="關閉登入視窗">✕</button>
+    <div class="lm-title">歡迎回來 🗺</div>
+    <div class="lm-sub">登入後可以儲存行程、複製他人規劃</div>
+    <div class="lm-tabs">
+      <button class="lm-tab active" id="loginTab" onclick="switchAuthTab('login')">登入</button>
+      <button class="lm-tab" id="registerTab" onclick="switchAuthTab('register')">註冊</button>
+    </div>
+    <div id="loginForm">
+      <div class="lm-field"><label>電子信箱</label><input type="email" id="loginEmail" placeholder="you@example.com"></div>
+      <div class="lm-field"><label>密碼</label><input type="password" id="loginPwd" placeholder="••••••••"></div>
+      <button class="lm-submit" onclick="doLogin()">登入</button>
+    </div>
+    <div id="registerForm" style="display:none">
+      <div class="lm-field"><label>暱稱</label><input type="text" id="regName" placeholder="旅遊達人小美"></div>
+      <div class="lm-field"><label>電子信箱</label><input type="email" id="regEmail" placeholder="you@example.com"></div>
+      <div class="lm-field"><label>密碼</label><input type="password" id="regPwd" placeholder="至少 8 個字元"></div>
+      <button class="lm-submit" onclick="doRegister()">建立帳號</button>
+    </div>
+    <div class="lm-divider">或</div>
+    <button class="lm-social-btn" onclick="doSocialLogin('Google')">🌐 以 Google 帳號登入</button>
+    <button class="lm-social-btn" style="margin-top:8px" onclick="doSocialLogin('Facebook')">📘 以 Facebook 帳號登入</button>
+  </div>
+</div>
+
+<!-- ─── OVERLAY: CHANGE PASSWORD ─── -->
+<div class="overlay" id="changePwdOverlay" onclick="if(event.target===this)closeChangePwd()" style="z-index:300">
+  <div class="login-modal" style="position:relative">
+    <button class="lm-close" onclick="closeChangePwd()" aria-label="關閉修改密碼">✕</button>
+    <div class="lm-title">修改密碼 🔒</div>
+    <div class="lm-sub">請輸入您目前的密碼與新密碼。</div>
+    <div class="lm-field"><label>目前密碼</label><input type="password" id="cpwCurrent" placeholder="••••••••"></div>
+    <div class="lm-field"><label>新密碼</label><input type="password" id="cpwNew" placeholder="至少 8 個字元"></div>
+    <div class="lm-field"><label>確認新密碼</label><input type="password" id="cpwConfirm" placeholder="至少 8 個字元"></div>
+    <button class="lm-submit" onclick="doChangePassword()">更新密碼</button>
+  </div>
+</div>
+</body>
+</html>

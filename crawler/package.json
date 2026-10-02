@@ -1,0 +1,36 @@
+{
+  "name": "poi-crawler",
+  "version": "0.1.0",
+  "description": "Background worker to enrich scenic_points (Firestore) with coordinates and metadata",
+  "main": "worker.js",
+  "scripts": {
+    "start": "node worker.js",
+    "dry": "node worker.js --dry-run",
+    "import": "node worker.js --import",
+    "import:dry": "node worker.js --import --dry-run",
+    "import:taitung": "node worker.js --import --source=taitung",
+    "import:taitung:dry": "node worker.js --import --source=taitung --dry-run",
+    "export:local": "node worker.js --export-local",
+    "export:local:dry": "node worker.js --export-local --dry-run",
+    "verify:places": "node worker.js --verify-places",
+    "verify:places:dry": "node worker.js --verify-places --dry-run",
+    "enrich:fees": "node worker.js --enrich-fees",
+    "enrich:fees:dry": "node worker.js --enrich-fees --dry-run",
+    "crawl:food": "node worker.js --crawl-food",
+    "crawl:food:dry": "node worker.js --crawl-food --dry-run",
+    "crawl:parking": "node worker.js --crawl-parking",
+    "crawl:parking:dry": "node worker.js --crawl-parking --dry-run",
+    "crawl:parking:osm": "node worker.js --crawl-parking --source=osm",
+    "crawl:parking:osm:dry": "node worker.js --crawl-parking --source=osm --dry-run",
+    "cleanup:collab": "node worker.js --cleanup-collab",
+    "cleanup:collab:dry": "node worker.js --cleanup-collab --dry-run"
+  },
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "axios": "^1.4.0",
+    "firebase": "^12.13.0",
+    "firebase-admin": "^11.10.0",
+    "minimist": "^1.2.8"
+  }
+}

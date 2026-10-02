@@ -1,0 +1,1203 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>WanderAI 停車點記錄 Prototype</title>
+  <style>
+    :root {
+      --bg: #f7f5f1;
+      --surface: #ffffff;
+      --surface-2: #f1eee8;
+      --ink: #22201d;
+      --ink-2: #67625b;
+      --ink-3: #8a847c;
+      --border: #ded9d0;
+      --accent: #2e7d6d;
+      --accent-dark: #225f52;
+      --accent-light: #e9f4f1;
+      --orange: #e86f35;
+      --orange-light: #fff0e8;
+      --blue: #2d6fbb;
+      --blue-light: #eaf2fb;
+      --warning: #a85912;
+      --warning-light: #fff6df;
+      --shadow: 0 18px 48px rgba(45, 42, 37, 0.14);
+    }
+
+    * { box-sizing: border-box; }
+
+    html, body { margin: 0; min-height: 100%; }
+
+    body {
+      min-width: 320px;
+      background: var(--bg);
+      color: var(--ink);
+      font-family: "Noto Sans TC", "Microsoft JhengHei", system-ui, sans-serif;
+      font-size: 15px;
+      line-height: 1.6;
+      letter-spacing: 0;
+    }
+
+    button, input {
+      font: inherit;
+      letter-spacing: 0;
+    }
+
+    button {
+      cursor: pointer;
+      white-space: nowrap;
+      flex-shrink: 0;
+    }
+
+    button:focus-visible, input:focus-visible {
+      outline: 3px solid rgba(45, 111, 187, 0.28);
+      outline-offset: 2px;
+    }
+
+    .nowrap { white-space: nowrap; }
+
+    .prototype-bar {
+      min-height: 54px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      padding: 8px 18px;
+      border-bottom: 1px solid var(--border);
+      background: #262b2a;
+      color: #fff;
+    }
+
+    .prototype-title {
+      min-width: 0;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      font-weight: 800;
+    }
+
+    .prototype-title span:last-child {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .scenario-control {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      padding: 3px;
+      border: 1px solid rgba(255, 255, 255, 0.18);
+      border-radius: 7px;
+      background: rgba(255, 255, 255, 0.08);
+    }
+
+    .scenario-btn {
+      min-height: 32px;
+      padding: 5px 10px;
+      border: 0;
+      border-radius: 5px;
+      background: transparent;
+      color: rgba(255, 255, 255, 0.72);
+      font-size: 13px;
+      font-weight: 700;
+    }
+
+    .scenario-btn.active {
+      background: #fff;
+      color: #26312f;
+    }
+
+    .app-header {
+      height: 66px;
+      display: flex;
+      align-items: center;
+      gap: 20px;
+      padding: 0 22px;
+      border-bottom: 1px solid var(--border);
+      background: var(--surface);
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      font-size: 19px;
+      font-weight: 900;
+      white-space: nowrap;
+    }
+
+    .brand-mark {
+      width: 34px;
+      height: 34px;
+      display: grid;
+      place-items: center;
+      border-radius: 7px;
+      background: var(--accent);
+      color: #fff;
+      font-size: 17px;
+    }
+
+    .trip-meta {
+      min-width: 0;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      color: var(--ink-2);
+    }
+
+    .trip-meta strong {
+      overflow: hidden;
+      color: var(--ink);
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .status-badge {
+      padding: 3px 8px;
+      border-radius: 999px;
+      background: var(--accent-light);
+      color: var(--accent-dark);
+      font-size: 12px;
+      font-weight: 800;
+      white-space: nowrap;
+    }
+
+    .app-shell {
+      height: calc(100vh - 120px);
+      min-height: 560px;
+      display: grid;
+      grid-template-columns: minmax(320px, 410px) minmax(0, 1fr);
+    }
+
+    .itinerary-panel {
+      overflow-y: auto;
+      padding: 22px;
+      border-right: 1px solid var(--border);
+      background: var(--bg);
+    }
+
+    .panel-kicker {
+      color: var(--accent-dark);
+      font-size: 12px;
+      font-weight: 900;
+      text-transform: uppercase;
+    }
+
+    .panel-title {
+      margin: 4px 0 2px;
+      font-size: 24px;
+      line-height: 1.25;
+    }
+
+    .panel-subtitle {
+      margin: 0 0 18px;
+      color: var(--ink-2);
+      text-wrap: pretty;
+    }
+
+    .stop-row {
+      display: grid;
+      grid-template-columns: 34px minmax(0, 1fr);
+      gap: 12px;
+      position: relative;
+    }
+
+    .stop-row + .stop-row { margin-top: 18px; }
+
+    .stop-row:not(:last-child)::before {
+      content: "";
+      position: absolute;
+      top: 36px;
+      bottom: -19px;
+      left: 16px;
+      width: 2px;
+      background: var(--border);
+    }
+
+    .stop-dot {
+      width: 34px;
+      height: 34px;
+      display: grid;
+      place-items: center;
+      position: relative;
+      z-index: 1;
+      border: 2px solid var(--surface);
+      border-radius: 50%;
+      background: var(--surface-2);
+      box-shadow: 0 0 0 1px var(--border);
+    }
+
+    .stop-row.active .stop-dot {
+      background: var(--orange);
+      color: #fff;
+      box-shadow: 0 0 0 4px var(--orange-light);
+    }
+
+    .stop-card {
+      min-width: 0;
+      padding: 15px;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: var(--surface);
+    }
+
+    .stop-row.active .stop-card {
+      border-color: var(--accent);
+      box-shadow: 0 12px 30px rgba(46, 125, 109, 0.09);
+    }
+
+    .stop-time {
+      color: var(--ink-3);
+      font-size: 12px;
+      font-weight: 700;
+    }
+
+    .stop-name {
+      margin: 3px 0 4px;
+      font-size: 18px;
+      line-height: 1.35;
+      text-wrap: pretty;
+    }
+
+    .stop-desc {
+      margin: 0;
+      color: var(--ink-2);
+      font-size: 13px;
+      text-wrap: pretty;
+    }
+
+    .parking-action {
+      width: 100%;
+      min-height: 48px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      margin-top: 14px;
+      border: 1px solid var(--accent);
+      border-radius: 7px;
+      background: var(--accent);
+      color: #fff;
+      font-weight: 900;
+    }
+
+    .parking-action:hover { background: var(--accent-dark); }
+
+    .parked-inline {
+      display: none;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      margin-top: 14px;
+      padding: 10px 11px;
+      border: 1px solid #bddbd4;
+      border-radius: 7px;
+      background: var(--accent-light);
+    }
+
+    .parked-inline-copy {
+      min-width: 0;
+      color: var(--accent-dark);
+      font-size: 13px;
+      font-weight: 800;
+      text-wrap: pretty;
+    }
+
+    .inline-edit {
+      border: 0;
+      background: transparent;
+      color: var(--blue);
+      font-size: 13px;
+      font-weight: 900;
+    }
+
+    .secondary-actions {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 6px;
+      margin-top: 10px;
+    }
+
+    .secondary-action {
+      min-width: 0;
+      min-height: 36px;
+      padding: 6px;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      background: var(--surface);
+      color: var(--ink-2);
+      font-size: 12px;
+      font-weight: 800;
+    }
+
+    .map-panel {
+      min-width: 0;
+      min-height: 420px;
+      position: relative;
+      overflow: hidden;
+      background: #dfe7df;
+    }
+
+    .map-art {
+      position: absolute;
+      inset: -70px;
+      transform: translate(var(--map-x, 0px), var(--map-y, 0px));
+      transition: transform 160ms ease;
+      background-color: #edf0e8;
+      background-image:
+        linear-gradient(22deg, transparent 48%, #c3d8a9 49%, #c3d8a9 58%, transparent 59%),
+        linear-gradient(102deg, transparent 43%, #bed9e5 44%, #bed9e5 54%, transparent 55%),
+        linear-gradient(157deg, transparent 46%, #fff 47%, #fff 51%, transparent 52%),
+        linear-gradient(72deg, transparent 45%, #fff 46%, #fff 50%, transparent 51%);
+      background-size: 390px 320px, 510px 400px, 260px 220px, 300px 270px;
+    }
+
+    .map-art::before,
+    .map-art::after {
+      content: "";
+      position: absolute;
+      border: 2px solid rgba(255, 255, 255, 0.88);
+      background: rgba(199, 220, 171, 0.58);
+    }
+
+    .map-art::before {
+      width: 230px;
+      height: 150px;
+      top: 18%;
+      left: 15%;
+      border-radius: 48% 52% 38% 62%;
+    }
+
+    .map-art::after {
+      width: 300px;
+      height: 190px;
+      right: 9%;
+      bottom: 12%;
+      border-radius: 42% 58% 64% 36%;
+    }
+
+    .map-label {
+      position: absolute;
+      z-index: 2;
+      padding: 3px 6px;
+      border-radius: 4px;
+      background: rgba(255, 255, 255, 0.86);
+      color: #4b5652;
+      font-size: 12px;
+      font-weight: 800;
+      white-space: nowrap;
+      box-shadow: 0 2px 7px rgba(45, 60, 55, 0.1);
+    }
+
+    .label-stop { top: 37%; left: 57%; }
+    .label-road { top: 64%; left: 36%; transform: rotate(-9deg); }
+    .label-park { top: 24%; left: 23%; }
+
+    .route-line {
+      position: absolute;
+      z-index: 3;
+      width: 230px;
+      height: 96px;
+      top: 43%;
+      left: 43%;
+      border-top: 6px dotted var(--orange);
+      border-radius: 50%;
+      transform: rotate(-17deg);
+      opacity: 0;
+      transition: opacity 180ms ease;
+    }
+
+    .actual-parking-marker {
+      width: 48px;
+      height: 48px;
+      display: none;
+      place-items: center;
+      position: absolute;
+      z-index: 7;
+      top: 52%;
+      left: 47%;
+      border: 3px solid #fff;
+      border-radius: 50% 50% 50% 12%;
+      background: var(--orange);
+      color: #fff;
+      font-size: 21px;
+      transform: translate(-50%, -100%) rotate(-45deg);
+      box-shadow: 0 8px 18px rgba(108, 58, 26, 0.26);
+    }
+
+    .actual-parking-marker span { transform: rotate(45deg); }
+
+    .user-dot {
+      width: 20px;
+      height: 20px;
+      position: absolute;
+      z-index: 6;
+      top: 69%;
+      left: 61%;
+      border: 4px solid #fff;
+      border-radius: 50%;
+      background: #4285f4;
+      box-shadow: 0 0 0 15px rgba(66, 133, 244, 0.16);
+    }
+
+    .map-toolbar {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      position: absolute;
+      z-index: 9;
+      right: 16px;
+      bottom: 16px;
+    }
+
+    .map-tool {
+      min-height: 38px;
+      padding: 7px 11px;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      background: var(--surface);
+      color: var(--ink);
+      font-size: 13px;
+      font-weight: 800;
+      box-shadow: 0 5px 16px rgba(40, 45, 42, 0.13);
+    }
+
+    .find-car-bar {
+      display: none;
+      align-items: center;
+      justify-content: space-between;
+      gap: 14px;
+      position: absolute;
+      z-index: 10;
+      top: 16px;
+      left: 16px;
+      right: 16px;
+      min-height: 66px;
+      padding: 10px 12px 10px 14px;
+      border: 1px solid #bcd8d1;
+      border-radius: 8px;
+      background: rgba(255, 255, 255, 0.96);
+      box-shadow: var(--shadow);
+    }
+
+    .find-car-copy {
+      min-width: 0;
+      display: grid;
+      grid-template-columns: 38px minmax(0, 1fr);
+      gap: 10px;
+      align-items: center;
+    }
+
+    .car-icon {
+      width: 38px;
+      height: 38px;
+      display: grid;
+      place-items: center;
+      border-radius: 7px;
+      background: var(--orange-light);
+      font-size: 19px;
+    }
+
+    .find-car-title {
+      font-weight: 900;
+      line-height: 1.35;
+      text-wrap: pretty;
+    }
+
+    .find-car-meta {
+      overflow: hidden;
+      color: var(--ink-2);
+      font-size: 12px;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .find-car-actions {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .nav-car-btn,
+    .details-btn {
+      min-height: 38px;
+      padding: 7px 12px;
+      border-radius: 6px;
+      font-size: 13px;
+      font-weight: 900;
+    }
+
+    .nav-car-btn {
+      border: 1px solid var(--accent);
+      background: var(--accent);
+      color: #fff;
+    }
+
+    .details-btn {
+      width: 38px;
+      padding: 0;
+      border: 1px solid var(--border);
+      background: var(--surface);
+      color: var(--ink-2);
+    }
+
+    .sheet-backdrop {
+      display: none;
+      align-items: flex-end;
+      justify-content: center;
+      position: fixed;
+      z-index: 100;
+      inset: 0;
+      padding: 24px;
+      background: rgba(28, 30, 29, 0.48);
+    }
+
+    .sheet-backdrop.open { display: flex; }
+
+    .parking-sheet {
+      width: min(560px, 100%);
+      max-height: min(820px, calc(100vh - 32px));
+      overflow-y: auto;
+      border-radius: 10px 10px 8px 8px;
+      background: var(--surface);
+      box-shadow: var(--shadow);
+      animation: sheet-in 200ms ease-out;
+    }
+
+    @keyframes sheet-in {
+      from { transform: translateY(28px); opacity: 0; }
+      to { transform: translateY(0); opacity: 1; }
+    }
+
+    .sheet-header {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 14px;
+      padding: 18px 18px 14px;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .sheet-title {
+      margin: 0;
+      font-size: 20px;
+      line-height: 1.35;
+    }
+
+    .sheet-subtitle {
+      margin: 3px 0 0;
+      color: var(--ink-2);
+      font-size: 13px;
+      text-wrap: pretty;
+    }
+
+    .close-btn {
+      width: 36px;
+      height: 36px;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      background: var(--surface);
+      color: var(--ink-2);
+      font-size: 20px;
+      line-height: 1;
+    }
+
+    .sheet-body { padding: 16px 18px 18px; }
+
+    .adjust-map {
+      height: 220px;
+      position: relative;
+      overflow: hidden;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: #e7ebe3;
+      touch-action: none;
+      user-select: none;
+      cursor: grab;
+    }
+
+    .adjust-map:active { cursor: grabbing; }
+
+    .adjust-map .map-art { inset: -120px; }
+
+    .crosshair {
+      width: 34px;
+      height: 34px;
+      position: absolute;
+      z-index: 8;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+    }
+
+    .crosshair::before,
+    .crosshair::after {
+      content: "";
+      position: absolute;
+      background: var(--orange);
+      box-shadow: 0 0 0 2px #fff;
+    }
+
+    .crosshair::before {
+      width: 3px;
+      height: 34px;
+      left: 15px;
+    }
+
+    .crosshair::after {
+      width: 34px;
+      height: 3px;
+      top: 15px;
+    }
+
+    .map-hint {
+      position: absolute;
+      z-index: 9;
+      left: 10px;
+      bottom: 10px;
+      padding: 5px 8px;
+      border-radius: 5px;
+      background: rgba(37, 42, 40, 0.82);
+      color: #fff;
+      font-size: 12px;
+      white-space: nowrap;
+    }
+
+    .accuracy-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      margin: 12px 0 14px;
+    }
+
+    .accuracy-badge {
+      padding: 5px 9px;
+      border-radius: 999px;
+      background: var(--accent-light);
+      color: var(--accent-dark);
+      font-size: 12px;
+      font-weight: 900;
+      white-space: nowrap;
+    }
+
+    .accuracy-badge.warning {
+      background: var(--warning-light);
+      color: var(--warning);
+    }
+
+    .accuracy-badge.manual {
+      background: var(--blue-light);
+      color: var(--blue);
+    }
+
+    .coordinate {
+      min-width: 0;
+      overflow: hidden;
+      color: var(--ink-3);
+      font-size: 12px;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .field-label {
+      display: block;
+      margin-bottom: 6px;
+      font-weight: 900;
+    }
+
+    .note-input {
+      width: 100%;
+      min-height: 45px;
+      padding: 10px 12px;
+      border: 1px solid var(--border);
+      border-radius: 7px;
+      background: var(--surface);
+      color: var(--ink);
+    }
+
+    .note-input:focus { border-color: var(--blue); }
+
+    .quick-notes {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      margin-top: 8px;
+    }
+
+    .note-chip {
+      min-height: 31px;
+      padding: 4px 9px;
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      background: var(--surface-2);
+      color: var(--ink-2);
+      font-size: 12px;
+      font-weight: 800;
+    }
+
+    .sheet-actions {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr);
+      gap: 8px;
+      margin-top: 18px;
+    }
+
+    .confirm-btn {
+      min-height: 48px;
+      border: 1px solid var(--accent);
+      border-radius: 7px;
+      background: var(--accent);
+      color: #fff;
+      font-weight: 900;
+    }
+
+    .release-btn {
+      display: none;
+      min-height: 42px;
+      border: 1px solid var(--border);
+      border-radius: 7px;
+      background: var(--surface);
+      color: var(--ink-2);
+      font-weight: 900;
+    }
+
+    .toast {
+      max-width: min(420px, calc(100vw - 32px));
+      position: fixed;
+      z-index: 200;
+      left: 50%;
+      bottom: 24px;
+      padding: 10px 14px;
+      border-radius: 7px;
+      background: #26312f;
+      color: #fff;
+      font-size: 13px;
+      font-weight: 800;
+      text-align: center;
+      text-wrap: pretty;
+      transform: translate(-50%, 24px);
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 180ms ease, transform 180ms ease;
+    }
+
+    .toast.show {
+      transform: translate(-50%, 0);
+      opacity: 1;
+    }
+
+    body.has-parking .parking-action { display: none; }
+    body.has-parking .parked-inline { display: flex; }
+    body.has-parking .find-car-bar { display: flex; }
+    body.has-parking .actual-parking-marker { display: grid; }
+    body.has-parking .route-line { opacity: 1; }
+
+    @media (max-width: 820px) {
+      .prototype-bar {
+        align-items: flex-start;
+        flex-direction: column;
+        gap: 7px;
+        padding: 10px 12px;
+      }
+
+      .scenario-control {
+        width: 100%;
+        overflow-x: auto;
+      }
+
+      .scenario-btn { flex: 1 0 auto; }
+
+      .app-header {
+        height: 60px;
+        padding: 0 14px;
+      }
+
+      .brand span:last-child { display: none; }
+
+      .trip-meta {
+        gap: 7px;
+        font-size: 13px;
+      }
+
+      .app-shell {
+        height: auto;
+        min-height: 0;
+        display: flex;
+        flex-direction: column-reverse;
+      }
+
+      .itinerary-panel {
+        overflow: visible;
+        padding: 18px 14px 34px;
+        border-top: 1px solid var(--border);
+        border-right: 0;
+      }
+
+      .map-panel { min-height: 390px; }
+
+      .find-car-bar {
+        align-items: stretch;
+        flex-direction: column;
+        gap: 8px;
+        top: 10px;
+        left: 10px;
+        right: 10px;
+      }
+
+      .find-car-actions { width: 100%; }
+      .nav-car-btn { flex: 1; }
+
+      .sheet-backdrop {
+        align-items: flex-end;
+        padding: 0;
+      }
+
+      .parking-sheet {
+        max-height: 92vh;
+        border-radius: 10px 10px 0 0;
+      }
+    }
+
+    @media (max-width: 390px) {
+      .prototype-title { font-size: 13px; }
+      .app-header { gap: 10px; }
+      .trip-meta strong { max-width: 160px; }
+      .status-badge { display: none; }
+      .panel-title { font-size: 22px; }
+      .secondary-actions { grid-template-columns: 1fr; }
+      .accuracy-row { align-items: flex-start; flex-direction: column; }
+      .coordinate { width: 100%; }
+      .map-toolbar { right: 10px; bottom: 10px; }
+      .map-tool:first-child { display: none; }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after {
+        scroll-behavior: auto !important;
+        transition-duration: 0.01ms !important;
+        animation-duration: 0.01ms !important;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="prototype-bar">
+    <div class="prototype-title">
+      <span aria-hidden="true">🧪</span>
+      <span>停車點記錄 Prototype</span>
+    </div>
+    <div class="scenario-control" aria-label="定位情境">
+      <button class="scenario-btn active" type="button" data-scenario="good">戶外精準</button>
+      <button class="scenario-btn" type="button" data-scenario="weak">訊號偏弱</button>
+      <button class="scenario-btn" type="button" data-scenario="underground">地下停車場</button>
+    </div>
+  </div>
+
+  <header class="app-header">
+    <div class="brand">
+      <span class="brand-mark" aria-hidden="true">W</span>
+      <span>WanderAI</span>
+    </div>
+    <div class="trip-meta">
+      <strong>台東海岸慢遊</strong>
+      <span class="status-badge">進行中</span>
+      <span class="nowrap">第 2 / 5 站</span>
+    </div>
+  </header>
+
+  <main class="app-shell">
+    <section class="itinerary-panel" aria-label="行程站點">
+      <div class="panel-kicker">Driver mode</div>
+      <h1 class="panel-title">駕駛模式</h1>
+      <p class="panel-subtitle">現在前往加路蘭遊憩區，預計於 <span class="nowrap">10:24</span> 抵達。</p>
+
+      <div class="stop-row">
+        <div class="stop-dot" aria-hidden="true">✓</div>
+        <article class="stop-card">
+          <div class="stop-time">09:20 已離開</div>
+          <h2 class="stop-name">台東森林公園</h2>
+          <p class="stop-desc">已完成停留，下一站距離約 <span class="nowrap">6.8 公里</span>。</p>
+        </article>
+      </div>
+
+      <div class="stop-row active">
+        <div class="stop-dot" aria-hidden="true">2</div>
+        <article class="stop-card">
+          <div class="stop-time">目前站 · 預計 10:24 抵達</div>
+          <h2 class="stop-name">加路蘭遊憩區</h2>
+          <p class="stop-desc">海岸草地與裝置藝術，建議停留約 <span class="nowrap">50 分鐘</span>。</p>
+
+          <button class="parking-action" id="recordParkingBtn" type="button">
+            <span aria-hidden="true">🅿</span>
+            <span>我停在這</span>
+          </button>
+
+          <div class="parked-inline">
+            <div class="parked-inline-copy" id="inlineParkingText">🅿 10:24 停車</div>
+            <button class="inline-edit" id="inlineEditBtn" type="button">修改</button>
+          </div>
+
+          <div class="secondary-actions">
+            <button class="secondary-action" type="button">景點資訊</button>
+            <button class="secondary-action" type="button">導航</button>
+            <button class="secondary-action" type="button">跳過</button>
+          </div>
+        </article>
+      </div>
+
+      <div class="stop-row">
+        <div class="stop-dot" aria-hidden="true">3</div>
+        <article class="stop-card">
+          <div class="stop-time">預計 11:28</div>
+          <h2 class="stop-name">小野柳</h2>
+          <p class="stop-desc">沿著海岸步道欣賞特殊岩層。</p>
+        </article>
+      </div>
+    </section>
+
+    <section class="map-panel" aria-label="行程地圖">
+      <div class="map-art" aria-hidden="true"></div>
+      <span class="map-label label-park">台東森林公園</span>
+      <span class="map-label label-stop">加路蘭遊憩區</span>
+      <span class="map-label label-road">台 11 線</span>
+      <div class="route-line" aria-hidden="true"></div>
+      <div class="actual-parking-marker" title="我的停車點"><span>🚗</span></div>
+      <div class="user-dot" title="你在這裡"></div>
+
+      <div class="find-car-bar" id="findCarBar">
+        <div class="find-car-copy">
+          <div class="car-icon" aria-hidden="true">🚗</div>
+          <div>
+            <div class="find-car-title">你的車在 <span class="nowrap">132 公尺</span>外</div>
+            <div class="find-car-meta" id="findCarMeta">10:24 由你停放</div>
+          </div>
+        </div>
+        <div class="find-car-actions">
+          <button class="nav-car-btn" id="navigateCarBtn" type="button">導航回車</button>
+          <button class="details-btn" id="detailsBtn" type="button" aria-label="查看停車點詳細資料">⌄</button>
+        </div>
+      </div>
+
+      <div class="map-toolbar">
+        <button class="map-tool" type="button">路線總覽</button>
+        <button class="map-tool" type="button" aria-label="回到目前位置">◎ 定位</button>
+      </div>
+    </section>
+  </main>
+
+  <div class="sheet-backdrop" id="parkingSheetBackdrop">
+    <section class="parking-sheet" role="dialog" aria-modal="true" aria-labelledby="parkingSheetTitle">
+      <header class="sheet-header">
+        <div>
+          <h2 class="sheet-title" id="parkingSheetTitle">記錄停車位置</h2>
+          <p class="sheet-subtitle" id="sheetSubtitle">確認定位後，可拖曳地圖微調停車點。</p>
+        </div>
+        <button class="close-btn" id="closeSheetBtn" type="button" aria-label="關閉停車點視窗">×</button>
+      </header>
+
+      <div class="sheet-body">
+        <div class="adjust-map" id="adjustMap" aria-label="拖曳地圖調整停車點">
+          <div class="map-art" id="sheetMapArt" aria-hidden="true"></div>
+          <span class="map-label label-stop">加路蘭遊憩區</span>
+          <div class="crosshair" aria-hidden="true"></div>
+          <div class="map-hint">拖曳地圖微調</div>
+        </div>
+
+        <div class="accuracy-row">
+          <span class="accuracy-badge" id="accuracyBadge">GPS 精度 ±8m</span>
+          <span class="coordinate" id="coordinateText">22.79551, 121.19642</span>
+        </div>
+
+        <label class="field-label" for="parkingNote">停車位置備註</label>
+        <input class="note-input" id="parkingNote" type="text" maxlength="40" placeholder="例：B2 紅區 12 號柱">
+        <div class="quick-notes" aria-label="快速填入停車備註">
+          <button class="note-chip" type="button" data-note="B1">B1</button>
+          <button class="note-chip" type="button" data-note="B2">B2</button>
+          <button class="note-chip" type="button" data-note="1F">1F</button>
+          <button class="note-chip" type="button" data-note="紅區">紅區</button>
+          <button class="note-chip" type="button" data-note="靠近出口">靠近出口</button>
+        </div>
+
+        <div class="sheet-actions">
+          <button class="confirm-btn" id="confirmParkingBtn" type="button">確認停在這裡</button>
+          <button class="release-btn" id="releaseParkingBtn" type="button">🚗 我已取車</button>
+        </div>
+      </div>
+    </section>
+  </div>
+
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+  <script>
+    (() => {
+      const body = document.body;
+      const backdrop = document.getElementById('parkingSheetBackdrop');
+      const noteInput = document.getElementById('parkingNote');
+      const accuracyBadge = document.getElementById('accuracyBadge');
+      const coordinateText = document.getElementById('coordinateText');
+      const sheetSubtitle = document.getElementById('sheetSubtitle');
+      const confirmBtn = document.getElementById('confirmParkingBtn');
+      const releaseBtn = document.getElementById('releaseParkingBtn');
+      const inlineText = document.getElementById('inlineParkingText');
+      const findCarMeta = document.getElementById('findCarMeta');
+      const adjustMap = document.getElementById('adjustMap');
+      const sheetMapArt = document.getElementById('sheetMapArt');
+      const toast = document.getElementById('toast');
+
+      const scenarios = {
+        good: {
+          badge: 'GPS 精度 ±8m',
+          badgeClass: '',
+          subtitle: '定位狀況良好，確認位置後即可記錄。',
+          coordinate: '22.79551, 121.19642'
+        },
+        weak: {
+          badge: 'GPS 精度 ±46m',
+          badgeClass: 'warning',
+          subtitle: '訊號較弱，建議拖曳地圖微調停車點。',
+          coordinate: '22.79576, 121.19608'
+        },
+        underground: {
+          badge: '未取得 GPS',
+          badgeClass: 'warning',
+          subtitle: '目前使用景點座標，請拖曳微調並填寫樓層或柱號。',
+          coordinate: '22.79604, 121.19591'
+        }
+      };
+
+      let currentScenario = 'good';
+      let parked = false;
+      let adjusted = false;
+      let dragState = null;
+      let mapOffset = { x: 0, y: 0 };
+      let toastTimer = null;
+
+      function applyScenario(name) {
+        currentScenario = scenarios[name] ? name : 'good';
+        adjusted = false;
+        mapOffset = { x: 0, y: 0 };
+        sheetMapArt.style.setProperty('--map-x', '0px');
+        sheetMapArt.style.setProperty('--map-y', '0px');
+        document.querySelectorAll('.scenario-btn').forEach((button) => {
+          button.classList.toggle('active', button.dataset.scenario === currentScenario);
+        });
+        renderAccuracy();
+      }
+
+      function renderAccuracy() {
+        const scenario = scenarios[currentScenario];
+        accuracyBadge.className = 'accuracy-badge';
+        if (adjusted) {
+          accuracyBadge.textContent = '已手動調整';
+          accuracyBadge.classList.add('manual');
+          coordinateText.textContent = `${(22.79551 - mapOffset.y / 20000).toFixed(5)}, ${(121.19642 + mapOffset.x / 20000).toFixed(5)}`;
+          sheetSubtitle.textContent = '已依照地圖中心調整停車位置。';
+          return;
+        }
+        accuracyBadge.textContent = scenario.badge;
+        if (scenario.badgeClass) accuracyBadge.classList.add(scenario.badgeClass);
+        coordinateText.textContent = scenario.coordinate;
+        sheetSubtitle.textContent = scenario.subtitle;
+      }
+
+      function openSheet() {
+        backdrop.classList.add('open');
+        releaseBtn.style.display = parked ? 'block' : 'none';
+        confirmBtn.textContent = parked ? '儲存停車位置' : '確認停在這裡';
+        requestAnimationFrame(() => document.getElementById('closeSheetBtn').focus());
+      }
+
+      function closeSheet() {
+        backdrop.classList.remove('open');
+      }
+
+      function timeText() {
+        return new Intl.DateTimeFormat('zh-TW', {
+          hour: '2-digit',
+          minute: '2-digit',
+          hour12: false
+        }).format(new Date());
+      }
+
+      function showToast(message) {
+        clearTimeout(toastTimer);
+        toast.textContent = message;
+        toast.classList.add('show');
+        toastTimer = setTimeout(() => toast.classList.remove('show'), 2200);
+      }
+
+      function saveParking() {
+        parked = true;
+        body.classList.add('has-parking');
+        const time = timeText();
+        const note = noteInput.value.trim();
+        inlineText.textContent = `🅿 ${time} 停車${note ? ` · ${note}` : ''}`;
+        findCarMeta.textContent = `${note ? `${note} · ` : ''}${time} 由你停放`;
+        closeSheet();
+        showToast('停車位置已記錄在這台裝置');
+      }
+
+      function releaseParking() {
+        parked = false;
+        body.classList.remove('has-parking');
+        noteInput.value = '';
+        closeSheet();
+        showToast('已標記取車，停車點不再顯示');
+      }
+
+      document.querySelectorAll('.scenario-btn').forEach((button) => {
+        button.addEventListener('click', () => applyScenario(button.dataset.scenario));
+      });
+
+      document.getElementById('recordParkingBtn').addEventListener('click', openSheet);
+      document.getElementById('inlineEditBtn').addEventListener('click', openSheet);
+      document.getElementById('detailsBtn').addEventListener('click', openSheet);
+      document.getElementById('closeSheetBtn').addEventListener('click', closeSheet);
+      document.getElementById('confirmParkingBtn').addEventListener('click', saveParking);
+      document.getElementById('releaseParkingBtn').addEventListener('click', releaseParking);
+      document.getElementById('navigateCarBtn').addEventListener('click', () => {
+        showToast('即將以 Google Maps 導航回停車點');
+      });
+
+      backdrop.addEventListener('click', (event) => {
+        if (event.target === backdrop) closeSheet();
+      });
+
+      document.addEventListener('keydown', (event) => {
+        if (event.key === 'Escape' && backdrop.classList.contains('open')) closeSheet();
+      });
+
+      document.querySelectorAll('.note-chip').forEach((chip) => {
+        chip.addEventListener('click', () => {
+          const current = noteInput.value.trim();
+          noteInput.value = current ? `${current} ${chip.dataset.note}` : chip.dataset.note;
+          noteInput.focus();
+        });
+      });
+
+      adjustMap.addEventListener('pointerdown', (event) => {
+        dragState = { x: event.clientX, y: event.clientY, originX: mapOffset.x, originY: mapOffset.y };
+        adjustMap.setPointerCapture(event.pointerId);
+      });
+
+      adjustMap.addEventListener('pointermove', (event) => {
+        if (!dragState) return;
+        mapOffset.x = dragState.originX + event.clientX - dragState.x;
+        mapOffset.y = dragState.originY + event.clientY - dragState.y;
+        sheetMapArt.style.setProperty('--map-x', `${mapOffset.x}px`);
+        sheetMapArt.style.setProperty('--map-y', `${mapOffset.y}px`);
+        adjusted = true;
+        renderAccuracy();
+      });
+
+      adjustMap.addEventListener('pointerup', () => { dragState = null; });
+      adjustMap.addEventListener('pointercancel', () => { dragState = null; });
+
+      applyScenario('good');
+    })();
+  </script>
+</body>
+</html>

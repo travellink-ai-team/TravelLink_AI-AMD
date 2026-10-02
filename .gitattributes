@@ -1,0 +1,6 @@
+# Windows 批次檔必須是 CRLF：cmd.exe 對 LF-only 的 .bat 解析不可靠
+# （行會被誤切，剩下的片段被當成指令執行）。搭配 .bat 內只寫 ASCII——
+# cmd 以位元組位移追蹤批次檔位置，多位元組字元會讓它跑掉、吞掉後面某行的開頭。
+*.bat text eol=crlf
+*.cmd text eol=crlf
+*.ps1 text eol=crlf

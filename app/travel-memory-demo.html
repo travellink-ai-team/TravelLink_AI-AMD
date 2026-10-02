@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>TravelLink AI｜旅遊回憶 Demo</title>
+  <link rel="stylesheet" href="travel-memory-demo.css">
+</head>
+<body>
+  <main class="demo-shell">
+    <header class="topbar">
+      <a class="brand" href="ai-travel-planner-v8.html" aria-label="返回 TravelLink AI">
+        <span class="brand-mark">↗</span>
+        <span>TravelLink AI</span>
+      </a>
+      <span class="demo-label">旅遊回憶工作室 · Demo</span>
+    </header>
+
+    <section class="workspace">
+      <div class="intro-copy">
+        <p class="eyebrow">CINEMATIC TRAVEL REEL</p>
+        <h1>把旅程剪成一段<br><em>值得重播的記憶。</em></h1>
+        <p class="intro-text">這是一個「電影旅行版」概念預覽。畫面會依照旅程段落移動，讓照片、地點與情緒連在一起，而不是逐張播放。</p>
+        <div class="trip-meta">
+          <span class="meta-dot"></span>
+          <span>台東 · 2025.04.18 — 04.20</span>
+        </div>
+      </div>
+
+      <section class="reel-column" aria-label="短影音預覽">
+        <div class="phone-frame">
+          <div class="reel-screen" id="reelScreen">
+            <div class="reel-image" id="reelImage"></div>
+            <div class="reel-vignette"></div>
+            <div class="reel-topline">
+              <span class="reel-counter" id="reelCounter">01 / 04</span>
+              <span class="reel-sound">♫ 原聲旅程</span>
+            </div>
+            <div class="reel-caption" id="reelCaption">
+              <span class="caption-kicker">台東 · DAY 01</span>
+              <strong>從海風開始的<br>三天小旅行</strong>
+            </div>
+            <div class="reel-location" id="reelLocation">都蘭海岸線</div>
+            <div class="reel-progress"><span id="reelProgress"></span></div>
+            <button class="play-button" id="playButton" type="button" aria-label="播放或暫停">
+              <span id="playIcon">▶</span>
+            </button>
+          </div>
+        </div>
+        <p class="preview-note"><span class="live-dot"></span> 動態預覽中 · 可點擊時間軸跳轉</p>
+      </section>
+
+      <aside class="controls-panel" aria-label="影片設定">
+        <div class="panel-heading">
+          <span class="section-kicker">EDITING MOOD</span>
+          <span class="duration-chip">00:27</span>
+        </div>
+
+        <div class="mood-grid" role="group" aria-label="選擇剪輯風格">
+          <button class="mood-card active" type="button" data-mood="cinematic">
+            <span class="mood-symbol">◒</span>
+            <span class="mood-name">電影旅行</span>
+            <span class="mood-detail">慢一點，留住風景</span>
+          </button>
+          <button class="mood-card" type="button" data-mood="rhythm">
+            <span class="mood-symbol">⌁</span>
+            <span class="mood-name">節奏剪輯</span>
+            <span class="mood-detail">跟著音樂走</span>
+          </button>
+          <button class="mood-card" type="button" data-mood="journal">
+            <span class="mood-symbol">✳</span>
+            <span class="mood-name">旅程紀錄</span>
+            <span class="mood-detail">沿著路線回看</span>
+          </button>
+        </div>
+
+        <div class="timeline-panel">
+          <div class="timeline-head">
+            <span>旅程段落</span>
+            <span id="sceneName">開場 · 海風</span>
+          </div>
+          <div class="scene-list" id="sceneList"></div>
+        </div>
+
+        <div class="settings-row">
+          <div>
+            <span class="setting-label">字幕</span>
+            <span class="setting-value" id="captionState">顯示地點與短句</span>
+          </div>
+          <button class="toggle active" id="captionToggle" type="button" aria-label="切換字幕顯示"><span></span></button>
+        </div>
+
+        <button class="export-button" type="button" id="exportButton"><span>↓</span> 匯出這支旅程短片</button>
+        <p class="export-hint" id="exportHint">Demo 預覽 · 實際版本會輸出 1080 × 1920 MP4</p>
+      </aside>
+    </section>
+  </main>
+  <script src="travel-memory-demo.js"></script>
+</body>
+</html>

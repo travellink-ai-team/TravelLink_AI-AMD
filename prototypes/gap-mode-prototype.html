@@ -1,0 +1,347 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>TravelLinkAI 空檔助手 Prototype</title>
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@300;400;500;700;900&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --bg:#f7f5f0; --surface:#fff; --surface-2:#f1eee8;
+    --ink:#22201d; --ink-2:#67625b; --ink-3:#8a847c;
+    --border:#ded9d0;
+    --accent:#2e7d6d; --accent-dark:#225f52; --accent-light:#e9f4f1;
+    --orange:#e86f35; --orange-light:#fff0e8;
+    --blue:#2d6fbb; --blue-light:#eaf2fb;
+    --warning:#a85912; --warning-light:#fff6df;
+    --red:#c0392b; --red-light:#fdecea;
+    --shadow:0 18px 48px rgba(45,42,37,.14);
+  }
+  *{box-sizing:border-box;}
+  html,body{margin:0;min-height:100%;}
+  body{
+    min-width:320px;background:var(--bg);color:var(--ink);
+    font-family:"Noto Sans TC","Microsoft JhengHei",system-ui,sans-serif;
+    font-size:15px;line-height:1.6;
+  }
+  button{font:inherit;cursor:pointer;white-space:nowrap;flex-shrink:0;}
+  .nowrap{white-space:nowrap;}
+
+  .prototype-bar{
+    background:var(--ink);color:#fff;padding:14px 24px;display:flex;
+    align-items:center;gap:14px;flex-wrap:wrap;
+  }
+  .prototype-bar b{font-size:16px;font-weight:700;}
+  .prototype-bar span{font-size:13px;color:rgba(255,255,255,.62);text-wrap:pretty;}
+  .pb-tag{background:var(--orange);color:#fff;font-size:11px;font-weight:700;
+    padding:2px 9px;border-radius:20px;letter-spacing:.5px;white-space:nowrap;}
+
+  .wrap{max-width:1240px;margin:0 auto;padding:36px 24px 64px;}
+  .lede{max-width:660px;margin-bottom:34px;}
+  .lede h1{font-size:27px;font-weight:900;margin:0 0 10px;letter-spacing:-.4px;}
+  .lede p{margin:0;color:var(--ink-2);font-size:15px;text-wrap:pretty;}
+
+  .screens{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:26px;}
+  .screen{display:flex;flex-direction:column;gap:12px;min-width:0;}
+  .screen-cap{display:flex;align-items:baseline;gap:8px;min-width:0;}
+  .screen-num{width:22px;height:22px;border-radius:50%;background:var(--accent);color:#fff;
+    font-size:12px;font-weight:700;display:grid;place-items:center;flex-shrink:0;}
+  .screen-name{font-weight:700;font-size:15px;}
+  .screen-note{font-size:12.5px;color:var(--ink-3);text-wrap:pretty;}
+
+  .phone{
+    background:var(--surface);border:1px solid var(--border);border-radius:26px;
+    box-shadow:var(--shadow);overflow:hidden;display:flex;flex-direction:column;
+    min-height:560px;position:relative;
+  }
+  .status-bar{background:var(--surface-2);padding:7px 16px;display:flex;justify-content:space-between;
+    font-size:11px;color:var(--ink-3);}
+  .app-head{padding:14px 16px 12px;border-bottom:1px solid var(--border);display:flex;
+    align-items:center;justify-content:space-between;gap:10px;}
+  .app-title{font-weight:700;font-size:15px;display:flex;align-items:center;gap:7px;min-width:0;}
+  .app-sub{font-size:11.5px;color:var(--ink-3);}
+  .body{padding:16px;display:flex;flex-direction:column;gap:15px;flex:1;}
+
+  .field-label{font-size:12px;font-weight:700;color:var(--ink-2);letter-spacing:.4px;margin-bottom:7px;}
+  .loc-row{display:flex;align-items:center;gap:9px;background:var(--accent-light);
+    border:1px solid #cfe6e0;border-radius:12px;padding:12px 13px;}
+  .loc-name{font-weight:700;flex:1;min-width:0;}
+  .loc-btn{background:var(--accent);color:#fff;border:none;border-radius:9px;
+    padding:8px 12px;font-size:12.5px;font-weight:700;}
+
+  .chips{display:flex;flex-wrap:wrap;gap:7px;}
+  .chip{background:var(--surface);border:1.5px solid var(--border);border-radius:20px;
+    padding:9px 15px;font-size:13.5px;color:var(--ink-2);min-height:40px;}
+  .chip.on{background:var(--accent);border-color:var(--accent);color:#fff;font-weight:700;}
+  .chip.big{font-size:15px;font-weight:700;padding:11px 18px;min-height:44px;}
+
+  .toggle-row{display:flex;align-items:center;justify-content:space-between;gap:10px;
+    border:1px solid var(--border);border-radius:12px;padding:12px 13px;}
+  .toggle-txt{min-width:0;}
+  .toggle-txt b{display:block;font-size:14px;}
+  .toggle-txt span{font-size:12px;color:var(--ink-3);text-wrap:pretty;}
+  .switch{width:44px;height:26px;border-radius:20px;background:var(--accent);position:relative;flex-shrink:0;}
+  .switch::after{content:"";position:absolute;top:3px;right:3px;width:20px;height:20px;
+    border-radius:50%;background:#fff;}
+
+  .cta{margin-top:auto;background:var(--accent);color:#fff;border:none;border-radius:14px;
+    padding:16px;font-size:16px;font-weight:700;width:100%;}
+
+  /* 倒數膠囊 */
+  /* 置於 header 下方：top 需大於 status-bar + app-head 的總高，否則會蓋住標題 */
+  .timer{position:absolute;left:50%;transform:translateX(-50%);top:82px;z-index:5;
+    background:var(--accent);color:#fff;border-radius:100px;padding:9px 20px;
+    box-shadow:0 8px 22px rgba(34,95,82,.34);text-align:center;white-space:nowrap;}
+  .timer.warn{background:var(--orange);box-shadow:0 8px 22px rgba(232,111,53,.36);}
+  .timer.crit{background:var(--red);box-shadow:0 8px 22px rgba(192,57,43,.4);}
+  .timer-num{font-size:20px;font-weight:900;letter-spacing:.6px;line-height:1.15;}
+  .timer-cap{font-size:11px;opacity:.85;}
+
+  .stop{display:flex;gap:11px;align-items:flex-start;border:1px solid var(--border);
+    border-radius:13px;padding:12px;background:var(--surface);}
+  .stop.done{opacity:.55;}
+  .stop.now{border-color:var(--accent);border-width:2px;background:var(--accent-light);}
+  .dot{width:9px;height:9px;border-radius:50%;background:var(--border);margin-top:7px;flex-shrink:0;}
+  .stop.done .dot{background:var(--accent);}
+  .stop.now .dot{background:var(--orange);}
+  .stop-main{flex:1;min-width:0;}
+  .stop-name{font-weight:700;font-size:14px;}
+  .stop-meta{font-size:12px;color:var(--ink-3);}
+  .stop-tag{font-size:11px;font-weight:700;padding:2px 8px;border-radius:10px;white-space:nowrap;
+    background:var(--accent-light);color:var(--accent);flex-shrink:0;}
+  .stop-tag.now{background:var(--orange-light);color:var(--orange);}
+
+  .locker{border:1px solid #cfe0f3;background:var(--blue-light);border-radius:13px;padding:12px 13px;}
+  .locker-t{font-weight:700;font-size:13.5px;color:var(--blue);display:flex;align-items:center;gap:6px;}
+  .locker-d{font-size:12.5px;color:var(--ink-2);margin-top:3px;text-wrap:pretty;}
+
+  .alert{border-radius:13px;padding:13px;font-size:13px;text-wrap:pretty;}
+  .alert.warn{background:var(--warning-light);border:1px solid #f0d9a4;color:var(--warning);}
+  .alert.crit{background:var(--red-light);border:1px solid #f3c4be;color:var(--red);}
+  .alert b{display:block;margin-bottom:3px;font-size:13.5px;}
+
+  .back-btn{background:var(--surface);border:2px solid var(--red);color:var(--red);
+    border-radius:14px;padding:15px;font-size:15px;font-weight:700;width:100%;}
+  .back-btn.filled{background:var(--red);color:#fff;}
+
+  /* 規格說明 */
+  .spec{margin-top:52px;background:var(--surface);border:1px solid var(--border);
+    border-radius:18px;padding:30px;}
+  .spec h2{margin:0 0 6px;font-size:19px;font-weight:900;}
+  .spec > p{margin:0 0 22px;color:var(--ink-2);font-size:14px;text-wrap:pretty;}
+  .spec-grid{display:grid;grid-template-columns:1fr 1fr;gap:22px;}
+  .spec-col h3{margin:0 0 12px;font-size:14px;font-weight:700;display:flex;align-items:center;gap:7px;}
+  .spec-col ul{margin:0;padding-left:0;list-style:none;display:flex;flex-direction:column;gap:10px;}
+  .spec-col li{font-size:13.5px;color:var(--ink-2);line-height:1.65;display:flex;gap:8px;
+    align-items:flex-start;text-wrap:pretty;}
+  .spec-col li::before{flex-shrink:0;font-weight:700;}
+  .have li::before{content:"✓";color:var(--accent);}
+  .need li::before{content:"＋";color:var(--orange);}
+  .spec-col li b{color:var(--ink);}
+  .effort{font-size:11.5px;font-weight:700;padding:1px 7px;border-radius:9px;white-space:nowrap;
+    background:var(--surface-2);color:var(--ink-3);margin-left:2px;}
+
+  @media (max-width:1000px){
+    .screens{grid-template-columns:1fr;max-width:420px;margin:0 auto;}
+    .spec-grid{grid-template-columns:1fr;}
+  }
+</style>
+</head>
+<body>
+
+<div class="prototype-bar">
+  <b>空檔助手 · 設計原型</b>
+  <span class="pb-tag">尚未實作</span>
+  <span>把「等車的兩小時」變成一趟小旅行。此頁僅為視覺稿，按鈕無功能。</span>
+</div>
+
+<div class="wrap">
+  <div class="lede">
+    <h1>空檔模式：從「還有多久」開始，而不是從「想去哪」</h1>
+    <p>一般規劃是先選目的地再排時間；空檔模式反過來——先鎖定「我現在在這、只剩這麼久」，AI 只排回得來的範圍，全程用倒數計時盯著你準時回到原點。</p>
+  </div>
+
+  <div class="screens">
+
+    <!-- 1 -->
+    <div class="screen">
+      <div class="screen-cap">
+        <span class="screen-num">1</span>
+        <span class="screen-name">快速輸入</span>
+      </div>
+      <div class="screen-note">三個問題就能出發，全部都是大按鈕，站在月台上單手可操作。</div>
+      <div class="phone">
+        <div class="status-bar"><span>14:02</span><span>▮▮▮ 84%</span></div>
+        <div class="app-head">
+          <div class="app-title">⏳ 空檔模式</div>
+          <div class="app-sub">TravelLinkAI</div>
+        </div>
+        <div class="body">
+          <div>
+            <div class="field-label">我現在在</div>
+            <div class="loc-row">
+              <span>📍</span>
+              <span class="loc-name">台東車站</span>
+              <button class="loc-btn">重新定位</button>
+            </div>
+          </div>
+          <div>
+            <div class="field-label">還有多久</div>
+            <div class="chips">
+              <button class="chip big">30 分</button>
+              <button class="chip big">1 小時</button>
+              <button class="chip big on">2 小時</button>
+              <button class="chip big">自訂</button>
+            </div>
+          </div>
+          <div>
+            <div class="field-label">怎麼移動</div>
+            <div class="chips">
+              <button class="chip on">🚶 走路</button>
+              <button class="chip">🚲 單車</button>
+              <button class="chip">🚗 開車</button>
+            </div>
+          </div>
+          <div class="toggle-row">
+            <div class="toggle-txt">
+              <b>我拖著行李</b>
+              <span>先幫你找寄物櫃再開始</span>
+            </div>
+            <div class="switch"></div>
+          </div>
+          <button class="cta">立刻排一趟 →</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- 2 -->
+    <div class="screen">
+      <div class="screen-cap">
+        <span class="screen-num">2</span>
+        <span class="screen-name">進行中 · 倒數</span>
+      </div>
+      <div class="screen-note">倒數膠囊常駐畫面最上方，時間充裕時是綠的，讓人安心逛。</div>
+      <div class="phone">
+        <div class="status-bar"><span>14:05</span><span>▮▮▮ 83%</span></div>
+        <div class="app-head">
+          <div class="app-title">🚶 台東車站 2 小時</div>
+          <div class="app-sub">3 站</div>
+        </div>
+        <div class="timer">
+          <div class="timer-num">1:24:30</div>
+          <div class="timer-cap">距離回程還有</div>
+        </div>
+        <div class="body" style="padding-top:66px;">
+          <div class="locker">
+            <div class="locker-t">🧳 已幫你找到寄物櫃</div>
+            <div class="locker-d">台東車站 1F 置物櫃・中型 $50・步行 1 分鐘</div>
+          </div>
+          <div class="stop done">
+            <div class="dot"></div>
+            <div class="stop-main">
+              <div class="stop-name">台東車站</div>
+              <div class="stop-meta">14:05 出發</div>
+            </div>
+            <span class="stop-tag">起點</span>
+          </div>
+          <div class="stop now">
+            <div class="dot"></div>
+            <div class="stop-main">
+              <div class="stop-name">台東糖廠文創園區</div>
+              <div class="stop-meta">步行 12 分・停留 35 分・營業中</div>
+            </div>
+            <span class="stop-tag now">現在</span>
+          </div>
+          <div class="stop">
+            <div class="dot"></div>
+            <div class="stop-main">
+              <div class="stop-name">巷口咖啡</div>
+              <div class="stop-meta">步行 6 分・停留 25 分</div>
+            </div>
+            <span class="stop-tag">下一站</span>
+          </div>
+          <button class="back-btn">🏃 我要提早回車站</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- 3 -->
+    <div class="screen">
+      <div class="screen-cap">
+        <span class="screen-num">3</span>
+        <span class="screen-name">回程警示</span>
+      </div>
+      <div class="screen-note">回程時間一逼近，倒數轉紅並主動算給你看：現在走還來得及。</div>
+      <div class="phone">
+        <div class="status-bar"><span>15:33</span><span>▮▮ 71%</span></div>
+        <div class="app-head">
+          <div class="app-title">🚶 台東車站 2 小時</div>
+          <div class="app-sub">3 站</div>
+        </div>
+        <div class="timer crit">
+          <div class="timer-num">0:12:05</div>
+          <div class="timer-cap">該準備回程了</div>
+        </div>
+        <div class="body" style="padding-top:66px;">
+          <div class="alert crit">
+            <b>現在出發，回到車站要 9 分鐘</b>
+            剩餘 12 分鐘，還有 3 分鐘餘裕。若再逛下去可能趕不上 15:45 的車。
+          </div>
+          <div class="stop done">
+            <div class="dot"></div>
+            <div class="stop-main">
+              <div class="stop-name">台東糖廠文創園區</div>
+              <div class="stop-meta">已完成</div>
+            </div>
+            <span class="stop-tag">✓</span>
+          </div>
+          <div class="stop now">
+            <div class="dot"></div>
+            <div class="stop-main">
+              <div class="stop-name">巷口咖啡</div>
+              <div class="stop-meta">現在這裡・已停留 25 分</div>
+            </div>
+            <span class="stop-tag now">現在</span>
+          </div>
+          <div class="alert warn">
+            <b>🧳 別忘了拿行李</b>
+            回程路上會先經過置物櫃，已排進路線。
+          </div>
+          <button class="back-btn filled">🏃 開始導航回車站</button>
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+  <div class="spec">
+    <h2>要做出這個模式，需要補什麼</h2>
+    <p>左邊是現有功能可以直接沿用的部分，右邊是真正需要新開發的。整體規模不大，主要工在「倒數引擎」與「寄物點資料」。</p>
+    <div class="spec-grid">
+      <div class="spec-col have">
+        <h3>✓ 現有功能可直接沿用</h3>
+        <ul>
+          <li><b>0.5 小時起跳的行程生成</b>　建立行程精靈本來就支援最短 0.5 小時，空檔模式等於是它的快速入口。</li>
+          <li><b>GPS 定位</b>　打卡驗證與「你在這裡」藍點已在用，可直接拿來當起點。</li>
+          <li><b>營業時間比對</b>　景點資料已含營業時間，不會排到公休的地方。</li>
+          <li><b>步行／車程時間計算</b>　逐站時間軸與路段交通時間已經在算了。</li>
+          <li><b>逐站打卡與時間軸重算</b>　改停留時間後自動往後推的邏輯現成可用。</li>
+          <li><b>導航</b>　單站與整趟導航都已接 Google Maps。</li>
+        </ul>
+      </div>
+      <div class="spec-col need">
+        <h3>＋ 需要新開發</h3>
+        <ul>
+          <li><b>倒數計時引擎</b>　<span class="effort">中</span>　常駐膠囊、三段顏色警示（綠／橘／紅），並持續比對「現在回去要多久 vs 剩多少時間」。</li>
+          <li><b>回程時間反推</b>　<span class="effort">中</span>　生成時就要把回起點那段算進總時長，這是整個模式成立的關鍵。</li>
+          <li><b>空檔模式入口與精簡表單</b>　<span class="effort">小</span>　三題式大按鈕介面，跳過現有精靈的四步驟。</li>
+          <li><b>一鍵提早回程</b>　<span class="effort">小</span>　砍掉未完成站點、直接導航回起點。</li>
+          <li><b>寄物櫃資料</b>　<span class="effort">大</span>　目前沒有這類資料源。台鐵／台灣好行有部分開放資料，但涵蓋率低，可能要先限定幾個大站手動建檔。</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</div>
+
+</body>
+</html>
