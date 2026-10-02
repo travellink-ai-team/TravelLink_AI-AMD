@@ -1,0 +1,192 @@
+{
+  "recordedAt": "2026-10-02T11:18:05.728Z",
+  "note": "真實 gpt-oss-120b 執行錄下的 SSE 事件，前端 mock 用。ms 是事件發生的相對時間，重播時照這個間隔送出。",
+  "request": {
+    "trip": {
+      "title": "台東市區一日遊",
+      "region": "台東",
+      "startDate": "2026-10-03",
+      "endTime": "20:00",
+      "people": 2,
+      "stops": [
+        {
+          "id": "s1",
+          "day": 1,
+          "time": "09:00",
+          "stayMin": 120,
+          "name": "國立臺灣史前文化博物館"
+        },
+        {
+          "id": "s2",
+          "day": 1,
+          "time": "11:30",
+          "stayMin": 60,
+          "name": "榕樹下米苔目(中華路創始老店-別無分店)"
+        },
+        {
+          "id": "s3",
+          "day": 1,
+          "time": "13:30",
+          "stayMin": 90,
+          "name": "臺東森林公園"
+        },
+        {
+          "id": "s4",
+          "day": 1,
+          "time": "15:30",
+          "stayMin": 60,
+          "name": "加路蘭"
+        },
+        {
+          "id": "s5",
+          "day": 1,
+          "time": "17:30",
+          "stayMin": 90,
+          "name": "鐵花村音樂聚落"
+        }
+      ]
+    },
+    "trigger": {
+      "type": "user",
+      "message": "走了一早上好累，下午想輕鬆一點、早點回飯店"
+    }
+  },
+  "events": [
+    {
+      "type": "start",
+      "trigger": "user",
+      "simulated": false,
+      "stops": 5,
+      "ms": 0
+    },
+    {
+      "type": "tool_call",
+      "tool": "get_trip_state",
+      "label": "讀取目前行程",
+      "ms": 125
+    },
+    {
+      "type": "tool_result",
+      "tool": "get_trip_state",
+      "ok": true,
+      "detail": "1 天、5 站",
+      "ms": 125
+    },
+    {
+      "type": "tool_call",
+      "tool": "propose_patch",
+      "label": "組合修改草稿並驗證",
+      "ms": 499
+    },
+    {
+      "type": "tool_result",
+      "tool": "propose_patch",
+      "ok": true,
+      "detail": "✅ 驗證通過",
+      "ms": 500
+    },
+    {
+      "type": "tool_call",
+      "tool": "present_proposal",
+      "label": "提出方案",
+      "ms": 992
+    },
+    {
+      "type": "tool_result",
+      "tool": "present_proposal",
+      "ok": true,
+      "detail": "",
+      "ms": 992
+    },
+    {
+      "type": "proposal",
+      "summary": "縮短森林公園停留並移除加路蘭與鐵花村，讓行程在下午輕鬆提早回飯店",
+      "reasons": [
+        "使用者想下午輕鬆、早點回飯店，將原本的 90 分鐘森林公園縮減至 60 分鐘",
+        "移除加路蘭與鐵花村兩個戶外景點，減少行程負擔",
+        "行程最終於 14:30 結束，符合提前回飯店的需求"
+      ],
+      "fallback": false,
+      "simulated": false,
+      "changes": [
+        {
+          "type": "retime",
+          "day": 1,
+          "name": "臺東森林公園",
+          "from": "13:30",
+          "to": "13:30",
+          "stayFrom": 90,
+          "stayTo": 60
+        },
+        {
+          "type": "remove",
+          "day": 1,
+          "time": "15:30",
+          "from": "加路蘭"
+        },
+        {
+          "type": "remove",
+          "day": 1,
+          "time": "17:30",
+          "from": "鐵花村音樂聚落"
+        }
+      ],
+      "costDelta": {
+        "perPersonBefore": 101,
+        "perPersonAfter": 101,
+        "diff": 0,
+        "note": "門票加餐費估算，不含交通"
+      },
+      "warnings": [],
+      "draft": {
+        "title": "台東市區一日遊",
+        "region": "台東",
+        "startDate": "2026-10-03",
+        "endTime": "20:00",
+        "people": 2,
+        "budgetPerPerson": null,
+        "stops": [
+          {
+            "id": "s1",
+            "day": 1,
+            "time": "09:00",
+            "stayMin": 120,
+            "name": "國立臺灣史前文化博物館",
+            "lat": 22.76069,
+            "lng": 121.09136,
+            "kind": "scenic"
+          },
+          {
+            "id": "s2",
+            "day": 1,
+            "time": "11:30",
+            "stayMin": 60,
+            "name": "榕樹下米苔目(中華路創始老店-別無分店)",
+            "lat": 22.7547249,
+            "lng": 121.1533815,
+            "kind": "food"
+          },
+          {
+            "id": "s3",
+            "day": 1,
+            "time": "13:30",
+            "stayMin": 60,
+            "name": "臺東森林公園",
+            "lat": 22.768175799999998,
+            "lng": 121.15625899999999,
+            "kind": "scenic"
+          }
+        ],
+        "days": 1
+      },
+      "usage": {
+        "promptTokens": 5094,
+        "completionTokens": 381,
+        "llmCalls": 3
+      },
+      "steps": 3,
+      "model": "gpt-oss-120b",
+      "ms": 993
+    }
+  ]
+}
