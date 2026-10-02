@@ -3,3 +3,4 @@ serviceAccount.json
 .env
 # 爬蟲執行記錄（每次跑都會變動，不納管）
 *.log
+taitung-photos.7z
