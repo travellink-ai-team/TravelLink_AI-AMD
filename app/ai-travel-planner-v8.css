@@ -8616,27 +8616,28 @@ button.notif-item { cursor: pointer; }
    （用 Maps 官方的 controlOptions，不靠 CSS 硬推）。
    這裡原本那條 margin-bottom 只推得動自訂按鈕、推不動內建縮放鍵，已移除。 */
 
-/* ── 旅程應變 Agent：入口、動態面板、提案卡（中文換行規則見 skill: cjk-line-wrap）── */
-.agent-assist[hidden], .agent-assist [hidden] { display: none !important; }
-.agent-assist { margin: 0 0 18px; padding: 16px; background: var(--surface); border: 1px solid var(--border); border-radius: 16px; box-shadow: var(--shadow-sm); }
-.agent-entry-head { display: flex; align-items: center; gap: 8px; }
-.agent-entry-title { margin: 0; font-size: 16px; font-weight: 800; color: var(--ink); white-space: nowrap; }
-.agent-entry-sub { margin: 4px 0 12px; font-size: 13px; line-height: 1.6; color: var(--ink2); text-wrap: pretty; }
-.agent-entry-row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
-.agent-entry-row .replan-btn { white-space: nowrap; flex-shrink: 0; }
-.agent-entry-row .replan-btn:disabled { opacity: .5; cursor: not-allowed; transform: none; box-shadow: none; }
-.agent-ask { display: flex; gap: 8px; flex: 1 1 260px; min-width: 0; }
-.agent-ask-input { flex: 1; min-width: 0; padding: 10px 12px; border: 1px solid var(--border); border-radius: 12px; font: inherit; font-size: 14px; background: var(--bg); color: var(--ink); }
-.agent-ask-input:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
-.agent-entry-hint { margin-top: 8px; font-size: 12px; color: var(--ink3); }
+/* ── AI 隨行管家：行程調整（快捷按鈕、對話裡的動態面板與建議修改卡；中文換行規則見 skill: cjk-line-wrap）── */
+.ai-drawer [hidden] { display: none !important; }
+.ai-quick { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-bottom: 10px; }
+.ai-quick-btn { white-space: nowrap; flex-shrink: 0; border: 1px solid var(--border); background: var(--bg); color: var(--ink); font: inherit; font-size: 13px; font-weight: 600; border-radius: 999px; padding: 6px 12px; cursor: pointer; }
+.ai-quick-btn:hover:not(:disabled) { border-color: var(--accent); color: var(--accent-dark); }
+.ai-quick-btn.is-on { background: var(--accent); border-color: var(--accent); color: #fff; }
+.ai-quick-btn:disabled { opacity: .5; cursor: not-allowed; }
+.ai-quick-hint { margin: -4px 0 8px; font-size: 12px; color: var(--ink3); text-wrap: pretty; }
+.msg-agent { display: block; }
+.msg-agent .agent-run { margin-top: 0; padding: 12px; border: 1px solid var(--border); border-top: 1px solid var(--border); border-radius: 16px; background: var(--surface); box-shadow: var(--shadow-sm); }
+.msg-agent .agent-steps { max-height: none; }
+.agent-proposal-kicker { font-size: 11px; font-weight: 800; color: var(--accent-dark); letter-spacing: .04em; white-space: nowrap; }
+.agent-confirm-note { margin-top: 10px; font-size: 12px; color: var(--accent-dark); font-weight: 600; text-wrap: pretty; }
 
 .agent-badge { display: inline-block; font-size: 11px; font-weight: 700; line-height: 1.4; padding: 2px 8px; border-radius: 999px; white-space: nowrap; vertical-align: middle; }
 .agent-badge.mock { background: #ede9fe; color: #5b21b6; }
 .agent-badge.sim { background: var(--accent2-light); color: #b4531f; }
 .agent-badge.fallback { background: #fef3c7; color: #8a5a00; }
 
-.agent-demo { margin-top: 12px; padding: 10px 12px; border: 1px dashed #c4b5fd; border-radius: 12px; background: #faf8ff; font-size: 13px; }
-.agent-demo-title { font-weight: 700; margin-bottom: 6px; white-space: nowrap; }
+.agent-demo { margin-bottom: 10px; padding: 8px 12px; border: 1px dashed #c4b5fd; border-radius: 12px; background: #faf8ff; font-size: 13px; max-height: 40vh; overflow-y: auto; }
+.agent-demo-title { font-weight: 700; white-space: nowrap; cursor: pointer; }
+.agent-demo[open] .agent-demo-title { margin-bottom: 6px; }
 .agent-demo-toggle { display: inline-flex; align-items: center; gap: 6px; font-weight: 600; white-space: nowrap; cursor: pointer; }
 .agent-demo-fields { display: flex; flex-wrap: wrap; gap: 6px 12px; margin-top: 6px; }
 .agent-demo-fields label { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; color: var(--ink2); }
@@ -8644,7 +8645,7 @@ button.notif-item { cursor: pointer; }
 .agent-demo-fields input[type="number"] { width: 58px; }
 .agent-demo-note { margin-top: 6px; font-size: 12px; color: var(--ink3); text-wrap: pretty; }
 
-.agent-run { margin-top: 14px; border-top: 1px solid var(--border); padding-top: 12px; }
+.agent-run { margin-top: 14px; border-top: 1px solid var(--border); padding-top: 12px; min-width: 0; }
 .agent-run-head { display: flex; align-items: center; gap: 8px; }
 .agent-run-title-wrap { flex: 1; min-width: 0; display: flex; align-items: center; gap: 6px; flex-wrap: wrap; font-weight: 700; font-size: 14px; }
 .agent-run-title { min-width: 0; overflow-wrap: anywhere; }
@@ -8718,10 +8719,10 @@ button.notif-item { cursor: pointer; }
 .agent-actions .replan-btn { white-space: nowrap; flex-shrink: 0; }
 .agent-actions .replan-btn:disabled { opacity: .5; cursor: not-allowed; transform: none; box-shadow: none; }
 @media (max-width: 480px) {
-  .agent-assist { padding: 12px; }
-  .agent-weather-btn { flex: 1 1 100%; }
   .agent-compare-grid { grid-template-columns: 1fr; }
 }
+/* 抽屜只有 400px 寬：前後對照一律上下排 */
+.ai-drawer .agent-compare-grid { grid-template-columns: 1fr; }
 
 /* ── 旅程應變 Agent：T4 延誤（入口在「預計離開時間」的衝突提示）── */
 .leave-impact-action.leave-impact-ai { background: var(--accent); color: #fff; border-color: var(--accent); white-space: nowrap; }
