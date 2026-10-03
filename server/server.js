@@ -33,6 +33,7 @@ const { getFirestore, Timestamp } = require('firebase-admin/firestore');
 const pricing = require('./pricing');
 const genRuns = require('./generation-runs');
 const { createUsageTap, modelIdFromPath } = require('./usage-tap');
+const { guardVertexBody } = require('./scope-guard');
 // AI_PROVIDER=amd 時，文字生成改走 AMD／工研院的 gpt-oss-120b（Gemini 格式在這裡轉換）
 const amdLlm = require('./amd-llm');
 // 旅程應變 Agent（docs/amd-agent/agent-tools-and-replanning.md）
@@ -961,6 +962,9 @@ app.post('/api/vertex/*', vertexLimiter, requireFirebaseUser, async (req, res) =
     console.warn('[proxy] 收到無效的 X-Run-Id，本次不記帳（run 可能已收尾或過期）');
   }
   if (run) genRuns.retain(run);
+
+  // 範圍限制：只留前端會送的欄位、限制輸出長度、文字模型加「只做旅遊」的指令（見 scope-guard.js）
+  req.body = guardVertexBody(req.body, modelIdFromPath(upstreamPath));
 
   if (amdLlm.shouldRoute(modelIdFromPath(upstreamPath))) {
     return proxyToAmdLlm(req, res, upstreamPath, run);
