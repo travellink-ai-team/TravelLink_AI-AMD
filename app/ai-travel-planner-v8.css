@@ -3606,6 +3606,9 @@ body.prototype-mode .prototype-id-chip {
 @media (min-width: 701px) {
   .mobile-only-content, .mobile-only-title, .mobile-only-meta { display: none !important; }
   .desktop-only-content { display: flex !important; }
+  /* 說明分頁的功能卡：每張卡一樣高（以最高的那張為準）。原本 flex 直排，
+     卡片高度跟著字數走，平板（左欄 318–371px）會從 300px 到 359px 參差不齊 */
+  .features-shell.desktop-only-content { display: grid !important; grid-template-columns: minmax(0, 1fr); grid-auto-rows: 1fr; }
   .desktop-only-title { display: block !important; }
   .desktop-only-meta { display: flex !important; }
 }
@@ -4144,6 +4147,9 @@ body.prototype-mode .prototype-id-chip {
 .travellog-collage-btn, .photo-prompt-btn, .travellog-gps-badge { white-space: nowrap; }
 /* 通用工具：拆開會怪的片段（數字+單位、時間區間、專有名詞）包這個 */
 .nowrap { white-space: nowrap; }
+/* wrapCjkWords（planner js）包的詞：整個詞不斷行，斷點落在詞與詞之間 */
+.cjk-w { white-space: nowrap; }
+.features-shell h3, .features-shell p { text-wrap: pretty; }
 
 /* ── 天氣頁：每日卡展開詳情（C5 改版）── */
 .wc-detail { font-size: 13px; }

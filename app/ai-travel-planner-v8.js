@@ -21414,3 +21414,48 @@
   }
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', setupAgentAssist);
   else setupAgentAssist();
+
+  // 中文依「詞」換行（cjk-line-wrap）：瀏覽器預設任兩字都能斷，窄欄會出現「天｜氣」「替代景｜點」。
+  // 用內建的中文斷詞（Intl.Segmenter）把 2 字以上的詞包成不斷行的 span，斷點只會落在詞與詞之間。
+  // 不支援的瀏覽器直接跳過，退回一般換行；已經包了 .nowrap 的片段不再處理。
+  const CJK_SUFFIX = '署館站場區店園山路市縣鄉鎮村港灣湖島橋寺廟宮堂街';
+  function wrapCjkWords(root) {
+    if (!root || typeof Intl === 'undefined' || typeof Intl.Segmenter !== 'function') return;
+    const seg = new Intl.Segmenter('zh-Hant', { granularity: 'word' });
+    const han = /[\u3400-\u9fff]/;
+    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
+      acceptNode: (n) => (han.test(n.nodeValue) && !(n.parentElement && n.parentElement.closest('.nowrap, .cjk-w'))
+        ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_REJECT)
+    });
+    const nodes = [];
+    while (walker.nextNode()) nodes.push(walker.currentNode);
+    for (const node of nodes) {
+      const frag = document.createDocumentFragment();
+      // 斷詞會把「刪站」切成「刪｜站」、「氣象署」切成「氣象｜署」：
+      // 連續的單字併成一組；地名、機構的字尾（署、站、館…）黏回前一個詞
+      const parts = [];
+      for (const { segment, isWordLike } of seg.segment(node.nodeValue)) {
+        const isHan = isWordLike && han.test(segment);
+        const prev = parts[parts.length - 1];
+        if (isHan && segment.length === 1 && prev && prev.han && CJK_SUFFIX.includes(segment)) prev.text += segment;
+        else if (isHan && segment.length === 1 && prev && prev.han && prev.single) prev.text += segment;
+        else parts.push({ text: segment, han: isHan, single: isHan && segment.length === 1 });
+      }
+      for (const p of parts) {
+        if (p.han && p.text.length > 1) {
+          const span = document.createElement('span');
+          span.className = 'cjk-w';
+          span.textContent = p.text;
+          frag.appendChild(span);
+        } else {
+          frag.appendChild(document.createTextNode(p.text));
+        }
+      }
+      node.parentNode.replaceChild(frag, node);
+    }
+  }
+  function wrapHelpCardText() {
+    document.querySelectorAll('.features-shell h3, .features-shell p').forEach(wrapCjkWords);
+  }
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', wrapHelpCardText);
+  else wrapHelpCardText();
