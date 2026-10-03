@@ -114,6 +114,27 @@ const run = (trip, trig, scenario) => runAgent({ trip, trigger: trig, scenario, 
   const eRes = await run(early, trigger(10));
   ok('收工時間早於錨點站、小延誤 → 照樣只改時間，不會卡在 day_end', eRes.type === 'proposal' && eRes.retimeOnly, JSON.stringify(eRes).slice(0, 300));
 
+  // ── 車程：用戶端送的實際車程（Google 路線）優先，新路段用比例校正 ──
+  const withLegs = clone(TRIP);
+  withLegs.stops[0].transitToNextMin = 40;   // 加路蘭 → 美術館
+  withLegs.stops[1].transitToNextMin = 30;   // 美術館 → 米苔目
+  const nt = I.normalizeTrip(withLegs);
+  const [s0, s1, s2] = nt.stops;
+  ok('原本相鄰的兩站直接用實際車程', I.travel(nt, s0, s1) === 40 && I.travel(nt, s1, s2) === 30);
+  const plain = I.normalizeTrip(TRIP);
+  ok('有實際車程時算出校正比例', nt.travelFactor !== 1 && plain.travelFactor === 1, `factor=${nt.travelFactor}`);
+  const est02 = I.travel(plain, plain.stops[0], plain.stops[2]);
+  ok('刪站後才相鄰的新路段用校正後的估算', I.travel(nt, s0, s2) === Math.max(5, Math.round(est02 * nt.travelFactor)), `${I.travel(nt, s0, s2)} vs ${est02}×${nt.travelFactor}`);
+  ok('反方向（不是原本的下一站）不會誤用', I.travel(nt, s1, s0) !== 40);
+  const tLeg = trigger(30); tLeg.from.transitToNextMin = 35;
+  const legReq = DL.parseDelayRequest(tLeg, nt);
+  const legBase = DL.dayTrip(nt, legReq);
+  const shifted = DL.shift(legBase, legReq);
+  ok('延誤起點到下一站用送來的實際車程', shifted.stops[0].time === I.toClock(Math.ceil((legReq.leave.min + 35) / 5) * 5), `${shifted.stops[0].time}，出發 ${I.toClock(legReq.leave.min)}`);
+  const replaced = I.applyOps(nt, [{ type: 'replace', stopId: s1.id, name: '臺東森林公園' }]);
+  const newStop = replaced.draft.stops.find((s) => s.name.includes('森林公園'));
+  ok('換掉的站不會沿用舊的實際車程', newStop && newStop.id !== s1.id && I.travel(replaced.draft, s0, newStop) !== 40, newStop ? newStop.id : '沒換成');
+
   if (LIVE) {
     console.log('\n── live：延誤 90 分鐘，交給 gpt-oss（回程火車 19:40）──');
     const live = await runAgent({

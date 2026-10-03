@@ -11,9 +11,37 @@ const D = require('./data');
 const F = require('./ferry');
 
 /** 兩站間移動分鐘：船班用航程，島上↔本島沒經過港口回 Infinity，其餘用車程估算 */
+// 車程：用戶端（planner 用 Google 路線）送來的實際分鐘數優先——同一天原本就相鄰的兩站直接用；
+// 刪站後才相鄰的新路段沒有實際資料，用這趟行程「實際 ÷ 直線估算」的比例校正（山路、繞路多的行程會偏慢）。
+// 兩邊車程對不上時，套用後 planner 重算的時間會跟提案差十幾分鐘。
 function travel(trip, a, b) {
   const f = F.ferryMinutesBetween(a, b, trip.island);
-  return f === null ? D.travelMinutes(a, b) : f;
+  if (f !== null) return f;
+  if (a && b && a.legTo && a.legTo === b.id && Number.isFinite(a.legMin)) return a.legMin;
+  const est = D.travelMinutes(a, b);
+  const k = Number(trip && trip.travelFactor) || 1;
+  return k === 1 ? est : Math.max(5, Math.round(est * k));
+}
+
+const legMinOf = (v) => {
+  const n = Number(v);
+  return Number.isFinite(n) && n > 0 && n <= 600 ? Math.round(n) : null;
+};
+
+// 已知路段的「實際 ÷ 估算」取中位數，限制在 0.7–2.5 倍，避免一段塞車或資料錯誤把整趟帶偏
+function calibrateTravel(trip) {
+  const ratios = [];
+  for (let i = 0; i < trip.stops.length - 1; i += 1) {
+    const a = trip.stops[i];
+    const b = trip.stops[i + 1];
+    if (a.legTo !== b.id || !Number.isFinite(a.lat) || !Number.isFinite(b.lat)) continue;
+    if (F.ferryMinutesBetween(a, b, trip.island) !== null) continue;
+    ratios.push(a.legMin / D.travelMinutes(a, b));
+  }
+  if (!ratios.length) return 1;
+  ratios.sort((x, y) => x - y);
+  const mid = ratios.length % 2 ? ratios[(ratios.length - 1) / 2] : (ratios[ratios.length / 2 - 1] + ratios[ratios.length / 2]) / 2;
+  return Math.round(Math.min(2.5, Math.max(0.7, mid)) * 100) / 100;
 }
 
 const toMin = (hhmm) => {
@@ -78,13 +106,21 @@ function normalizeTrip(raw) {
       ...(anchor ? { anchor } : {}),
       // 用戶端送來的營業時間原文優先於本地資料（兩端判斷公休的依據一致，也避開同名抓錯）
       ...(s.businessHours ? { businessHours: String(s.businessHours).slice(0, 600) } : {}),
+      ...(legMinOf(s.transitToNextMin) ? { legMin: legMinOf(s.transitToNextMin) } : {}),   // 到「下一站」的實際車程，下面配對
       timeLocked: s.timeLocked === true || Boolean(anchor),   // 使用者手動改過的時間：不自動挪
       keepReason: s.keepReason ? String(s.keepReason).slice(0, 60) : ''
     });
   });
+  // transitToNextMin 是「依送來的順序」到下一站：排序前配對，記下下一站的 id（換掉、刪掉之後就不會誤用）
+  trip.stops.forEach((s, i) => {
+    const next = trip.stops[i + 1];
+    if (Number.isFinite(s.legMin) && next && next.day === s.day) s.legTo = next.id;
+    else delete s.legMin;
+  });
   trip.days = Math.max(1, ...trip.stops.map((s) => s.day));
   sortStops(trip.stops);
   trip.island = F.islandOfTrip(trip);   // 綠島／蘭嶼行程才有值
+  trip.travelFactor = calibrateTravel(trip);
   return trip;
 }
 
@@ -392,5 +428,5 @@ function diffTrips(before, after) {
 }
 
 module.exports = {
-  toMin, toClock, dateOfDay, todayIso, normalizeTrip, reflow, applyOps, validate, costPerPerson, dayEnds, diffTrips, isFixedStop, travel
+  toMin, toClock, dateOfDay, todayIso, normalizeTrip, legMinOf, reflow, applyOps, validate, costPerPerson, dayEnds, diffTrips, isFixedStop, travel
 };

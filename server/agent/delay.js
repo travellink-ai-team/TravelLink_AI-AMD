@@ -62,7 +62,8 @@ function parseDelayRequest(trigger, trip, scenario) {
       id: String(f.stopId).slice(0, 80),
       name: String(f.name).slice(0, 80),
       lat: Number.isFinite(Number(f.lat)) ? Number(f.lat) : null,
-      lng: Number.isFinite(Number(f.lng)) ? Number(f.lng) : null
+      lng: Number.isFinite(Number(f.lng)) ? Number(f.lng) : null,
+      legMin: I.legMinOf(f.transitToNextMin)   // 目前這站到下一站的實際車程（選填）
     },
     leave: { date: leave.date, min: leaveMin },
     delayMin,
@@ -93,10 +94,18 @@ function dayTrip(trip, req) {
 
 const fixedTime = (s) => s.anchor || s.keepReason || s.timeLocked;
 
+// 目前這站（延誤的起點）：帶上到原本下一站的實際車程，下一站被刪掉時自動改用校正後的估算
+function fromPoint(req, base) {
+  const p = { lat: req.from.lat, lng: req.from.lng, name: req.from.name };
+  const first = base && base.stops[0];
+  if (Number.isFinite(req.from.legMin) && first) { p.legMin = req.from.legMin; p.legTo = first.id; }
+  return p;
+}
+
 /** 從 leaveAt 開始依車程順延；固定時間的站不動（排不到就交給驗證報違規） */
 function shift(base, req) {
   const draft = { ...base, stops: base.stops.map((s) => ({ ...s })) };
-  let prev = { lat: req.from.lat, lng: req.from.lng, name: req.from.name };
+  let prev = fromPoint(req, base);
   let cursor = req.leave.min;
   for (const s of draft.stops) {
     const move = I.travel(draft, prev, s);
@@ -122,7 +131,7 @@ function check(draft, base, req) {
 
   const first = draft.stops[0];
   if (first) {
-    const move = I.travel(draft, { lat: req.from.lat, lng: req.from.lng, name: req.from.name }, first);
+    const move = I.travel(draft, fromPoint(req, base), first);
     const need = req.leave.min + (Number.isFinite(move) ? move : 15);
     if (I.toMin(first.time) < need) {
       violations.push({ code: 'late_start', stopId: first.id, day: first.day, stop: first.name, message: `從「${req.from.name}」${I.toClock(req.leave.min)} 出發，到「${first.name}」最快 ${I.toClock(need)}，趕不上 ${first.time}` });
@@ -137,7 +146,7 @@ function check(draft, base, req) {
     const prev = before[before.length - 1];
     const target = idx >= 0 ? draft.stops[idx] : null;
     if (!prev) {
-      const move = target ? I.travel(draft, { lat: req.from.lat, lng: req.from.lng, name: req.from.name }, target) : 20;
+      const move = target ? I.travel(draft, fromPoint(req, base), target) : 20;
       return { target, arrive: req.leave.min + (Number.isFinite(move) ? move : 20) };
     }
     const move = target ? I.travel(draft, prev, target) : 20;
@@ -207,4 +216,4 @@ function triggerText(req, issues, base) {
   ].join('\n');
 }
 
-module.exports = { parseIso, parseDelayRequest, dayTrip, shift, check, fallback, triggerText };
+module.exports = { parseIso, parseDelayRequest, dayTrip, shift, check, fallback, triggerText, fromPoint };

@@ -187,7 +187,7 @@ function delayTimingLine(ctx) {
   if (idx < 0) return `今天約 ${I.dayEnds(draft)[req.day]} 結束${train}${ferry}`;
   const anchor = stops[idx];
   const prev = stops[idx - 1];
-  const from = prev || { lat: req.from.lat, lng: req.from.lng, name: req.from.name };
+  const from = prev || DL.fromPoint(req, ctx.baseTrip);
   const leave = prev ? I.toMin(prev.time) + prev.stayMin : req.leave.min;
   const move = I.travel(draft, from, anchor);
   const arrive = leave + (Number.isFinite(move) ? move : 15);

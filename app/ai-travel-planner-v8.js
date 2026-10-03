@@ -20428,6 +20428,14 @@
     return JSON.stringify((replanStops || []).map((s) => [s.id, s.name, s.stayMin, s.manualStartMin, s.manualEndMin, s.dayIndex, s.expectedLeaveMin]));
   }
 
+  // 到下一站的實際車程（Google 路線＋停車步行，跟排程用的同一個數字）。只有真的抓過路線才送；
+  // 沒抓過時排程用的是預設值，送過去反而比後端的估算差。後端會用它對齊車程，套用後的時間才不會跟提案差十幾分鐘。
+  function agentLegMinutes(stop, row) {
+    if (!Number.isFinite(normalizeTransitMinutesValue(stop && stop.transitMin))) return null;
+    const v = Math.round(Number(row && row.transit));
+    return Number.isFinite(v) && v > 0 ? v : null;
+  }
+
   function buildAgentTripPayload() {
     const range = agentEditableRange();
     if (!range) return null;
@@ -20446,6 +20454,8 @@
       };
       if (pos) { item.lat = pos.lat; item.lng = pos.lng; }
       if (Number.isFinite(stop.manualStartMin)) item.timeLocked = true;
+      const leg = agentLegMinutes(stop, row);
+      if (leg) item.transitToNextMin = leg;
       sent.push(item);
     }
     const prefs = currentTripPreferences || {};
@@ -21282,6 +21292,8 @@
       if (anchor) item.anchor = anchor;
       if (s.businessHours && typeof s.businessHours === 'string') item.businessHours = s.businessHours;
       if (Number.isFinite(s.manualStartMin)) item.timeLocked = true;
+      const leg = agentLegMinutes(s, row);
+      if (leg) item.transitToNextMin = leg;
       sent.push(item);
     }
     const ends = getTripDayEndMinutes();
@@ -21293,6 +21305,8 @@
       delayMin: Math.round(leaveMin - origLeave)
     };
     if (here) { from.lat = here.lat; from.lng = here.lng; }
+    const fromLeg = agentLegMinutes(stop, planned[index]);
+    if (fromLeg) from.transitToNextMin = fromLeg;
     const people = getPeopleCount(prefs.people);
     return {
       sent,

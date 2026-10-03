@@ -239,7 +239,9 @@ const IMPL = {
     const from = originOf(ctx, args.fromStopId);
     const to = D.findPlace(args.toName);
     if (!from || !to) return { error: '找不到起點或目的地' };
-    return { minutes: D.travelMinutes(from, to), distanceKm: Math.round(D.haversineKm(from, to) * 1.35 * 10) / 10, method: '直線距離 × 1.35 估算' };
+    const trip = ctx.draft || ctx.trip;
+    const k = Number(trip && trip.travelFactor) || 1;
+    return { minutes: I.travel(trip, from, to), distanceKm: Math.round(D.haversineKm(from, to) * 1.35 * 10) / 10, method: k === 1 ? '直線距離 × 1.35 估算' : `直線距離估算，再依這趟行程的實際車程校正（× ${k}）` };
   },
 
   async propose_patch(ctx, args) {
