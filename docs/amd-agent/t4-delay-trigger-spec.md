@@ -31,7 +31,8 @@ Authorization: Bearer <Firebase ID token>
       "name": "臺東森林公園",
       "lat": 22.7698, "lng": 121.1608,     // 選填
       "leaveAt": "2026-11-07T15:20:00+08:00",  // 預計離開時間（帶日期與時區）
-      "delayMin": 50                       // ＝ leaveAt − 原定離開時間
+      "delayMin": 50,                      // ＝ leaveAt − 原定離開時間
+      "transitToNextMin": 31              // 選填：從這站到 stops[0] 的實際車程（分鐘），見第 2 節表格
     },
     "returnTrain": { "departAt": "2026-11-07T18:05:00+08:00", "station": "台東車站" },   // 選填，送「必須搭上的那班」，見 2.1
     "lastFerry":   { "departAt": "2026-11-07T16:30:00+08:00", "harbor": "南寮漁港" },   // 選填，當天從島上出發的末班船
@@ -63,6 +64,7 @@ Authorization: Bearer <Firebase ID token>
 | `businessHours` | 建議 | 營業時間**原文**。後端優先用這個，沒有才查本地資料，兩端判斷公休的依據才會一樣（也避開同名抓錯） |
 | `timeLocked` | 選填 | 使用者手動改過時間＝`true`。對應 Firestore 的 **`manualStartMin` 不是 null** |
 | `keepReason` | 選填 | 訂位、預約等固定時間的站，例如 `"已訂位 18:00"`。有這欄就不會被刪除或挪動。App 目前沒有訂位資料，不送 |
+| `transitToNextMin` | 選填 | 從這站到**陣列裡下一站**的實際車程（分鐘，整數 1–600），跟用戶端排程用的同一個數字（路線＋停車步行）。只有真的算過路線才送，用預設值估的不要送。後端對原本相鄰的兩站直接用它；刪站後才相鄰的新路段，用這趟行程「實際 ÷ 估算」的比例校正。不送就用直線估算，行為跟以前一樣。天氣、文字需求的請求也適用。2026-10-03 起 |
 
 > ⚠️ 欄位名稱：組員提議用 `kind: 'station'|'lodging'|'ferry'` 表示錨點，但目前 API 的 `kind` 已經用來區分 `food`／`scenic`，所以錨點改用 **`anchor`** 欄位，`stopType` 表示景點類型，兩者分開。
 
