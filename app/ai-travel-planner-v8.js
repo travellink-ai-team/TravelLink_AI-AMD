@@ -11108,7 +11108,7 @@
     if (index < 0 || index !== getStayingStopIndex()) return;
     const stop = replanStops[index];
     const row = buildReplanSchedule()[index];
-    const now = clockToScheduleMinutes(new Date(), row.dayIndex, row.start);
+    const now = clockToScheduleMinutes(new Date(getTripRuntimeNow()), row.dayIndex, row.start); // 展示模擬時用虛擬時鐘，否則「再待 N 分」會從真實時間算
     document.getElementById('stayModalTitle').textContent = '🕒 預計什麼時候離開？';
     document.getElementById('stayModalSub').textContent =
       `${stop.name || ''} · 原訂停留 ${formatStayMinutes(stop.stayMin)} · 目前預計 ${minutesToClock(row.end)} 離開`;
@@ -11214,6 +11214,15 @@
       });
     }
     action('調整順序或跳過景點', () => { closeStayModal(); enterReplanMode(); });
+    if (!collabReadOnly && index >= 0) {
+      // T4：一定要使用者按下才送出，不自動呼叫代理人
+      const aiBtn = document.createElement('button');
+      aiBtn.type = 'button';
+      aiBtn.className = 'stay-opt-btn leave-impact-action leave-impact-ai';
+      aiBtn.textContent = '🤖 讓 AI 調整後面的行程';
+      aiBtn.onclick = () => { closeStayModal(); startDelayAgentRun(stopId); };
+      grid.insertBefore(aiBtn, list.nextSibling);
+    }
     const cancel = document.querySelector('#stayModal .stay-modal-cancel');
     if (cancel) cancel.textContent = '先保持這樣';
     document.getElementById('stayModal').style.display = 'flex';
@@ -13281,6 +13290,7 @@
     const button = document.getElementById('aiChatSendBtn');
     if (input) input.disabled = disabled;
     if (button) button.disabled = disabled;
+    refreshAgentEntryUI();   // 管家忙的時候，行程調整的快捷按鈕也一起停用
   }
 
   function buildGeminiSystemPrompt() {
@@ -15071,6 +15081,12 @@
       return;
     }
 
+    // 要改行程 → 交給行程調整（/api/agent/replan，確認後才套用）；其餘照舊聊天
+    if (routeAiMessageToAgent(userMessage)) {
+      input.value = '';
+      return;
+    }
+
     appendAiMessage('user', userMessage);
     logTripEvent('chat_user_message', {
       message: userMessage
@@ -15169,6 +15185,7 @@
     document.body.classList.toggle('ai-open', willOpen);
     if (willOpen) {
       renderAiWelcomeMessage();
+      refreshAgentEntryUI();
       const input = document.getElementById('aiChatInput');
       if (input) input.focus();
     }
@@ -20146,7 +20163,10 @@
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', _flushPendingHeaderAction);
   else _flushPendingHeaderAction();
 
-  // ── 旅程應變 Agent（P3 前端）────────────────────────────────────────
+  // ── AI 隨行管家：行程調整（後端 /api/agent/replan）────────────────────
+  // 對使用者只有一個 AI：「AI 隨行管家」抽屜。聊天／問景點／推薦美食走原本的 requestGeminiTravelPlan；
+  // 要改行程（好累、下雨、刪站、提早回去、延誤）走 /api/agent/replan，結果以「建議修改」顯示，確認後才套用。
+  // 分流只用關鍵字或使用者點「幫我調整行程」，不多呼叫一次 LLM。
   // 後端：POST {API_PROXY_BASE}/agent/replan，回 SSE（見 docs/amd-agent/frontend-handoff.md）。
   // mock：網址帶 ?agentMock=1（依觸發自動挑）或 =rain／tired／no-issue／fallback／question／error，
   // 重播 app/agent-mock-fixtures.js 的錄製事件。mock 與真 SSE 都只把事件交給 handleAgentEvent，UI 不分來源。
@@ -20154,7 +20174,7 @@
   const AGENT_URL_PARAMS = (() => { try { return new URLSearchParams(window.location.search); } catch (_e) { return new URLSearchParams(''); } })();
   const AGENT_MOCK_MODE = String(AGENT_URL_PARAMS.get('agentMock') || '').trim();
   const AGENT_DEMO_MODE = AGENT_URL_PARAMS.get('demo') === '1';
-  const AGENT_MOCK_SCRIPT = './agent-mock-fixtures.js?v=20261002-agent1';
+  const AGENT_MOCK_SCRIPT = './agent-mock-fixtures.js?v=20261003-t4delay1';
   const AGENT_TOOL_ICONS = {
     get_trip_state: '📋', get_weather_forecast: '🌦️', check_business_hours: '🕘',
     search_local_poi: '🔍', search_restaurants: '🍜', estimate_travel: '🚗',
@@ -20162,7 +20182,7 @@
   };
   const agentState = {
     running: false, controller: null, runSeq: 0, startedAt: 0, tickTimer: null,
-    terminal: false, lastMs: 0, sent: null, signature: '', proposal: null, mock: false,
+    terminal: false, lastMs: 0, sent: null, range: null, kind: '', updatedAt: null, signature: '', proposal: null, mock: false,
     rain: { enabled: false, date: '', from: '13:00', to: '17:00', pop: 80 }
   };
 
@@ -20187,7 +20207,8 @@
   // 取連續區段，套用時整段替換，前後不動 → currentStopIndex 仍然有效。
   function agentEditableRange() {
     const stops = Array.isArray(replanStops) ? replanStops : [];
-    let from = currentTripStatus === 'ongoing' ? Math.max(0, currentStopIndex + 1) : 0;
+    // currentStopIndex＝下一個要去的站（getStayingStopIndex 是它減 1），它還沒開始，可以調整
+    let from = currentTripStatus === 'ongoing' ? Math.max(0, currentStopIndex) : 0;
     let to = stops.length - 1;
     while (from <= to && (!stops[from] || stops[from].type === 'start' || !stops[from].name)) from += 1;
     while (to >= from && (!stops[to] || stops[to].type === 'end' || !stops[to].name)) to -= 1;
@@ -20195,7 +20216,7 @@
   }
 
   function agentTripSignature() {
-    return JSON.stringify((replanStops || []).map((s) => [s.id, s.name, s.stayMin, s.manualStartMin, s.manualEndMin, s.dayIndex]));
+    return JSON.stringify((replanStops || []).map((s) => [s.id, s.name, s.stayMin, s.manualStartMin, s.manualEndMin, s.dayIndex, s.expectedLeaveMin]));
   }
 
   function buildAgentTripPayload() {
@@ -20208,7 +20229,7 @@
       const row = schedule[i] || {};
       const pos = readStopCoordinates(stop);
       const item = {
-        id: String(stop.id),
+        id: String(stop.collabStopId || getStableCollabStopId(stop, i)),   // 規格第 5 節：一律用存進 Firestore 的 collabStopId
         day: clampDayIndex(stop.dayIndex, 1),
         time: Number.isFinite(row.start) ? toClockFieldValue(row.start) : '09:00',
         stayMin: Math.max(5, Math.round(Number.isFinite(row.end) && Number.isFinite(row.start) ? row.end - row.start : (stop.stayMin || 30))),
@@ -20222,6 +20243,7 @@
     const people = getPeopleCount(prefs.people);
     return {
       sent,
+      range,
       trip: {
         title: currentTripTitle || '我的行程',
         region: currentTripRegion || prefs.dest || '',
@@ -20245,26 +20267,83 @@
   }
 
   function refreshAgentEntryUI() {
-    const box = document.getElementById('agentAssist');
-    if (!box) return;
+    const quick = document.getElementById('aiQuickActions');
+    if (!quick) return;
     const a = agentAvailability();
-    box.hidden = !a.show && !agentState.running && !agentState.proposal;
-    const hint = document.getElementById('agentEntryHint');
-    const disabled = !a.ok || agentState.running;
-    ['agentWeatherBtn', 'agentAskInput', 'agentAskSubmit'].forEach((id) => {
+    quick.hidden = !a.show;
+    const disabled = !a.ok || agentState.running || isAiResponding;
+    ['agentWeatherBtn', 'agentAdjustModeBtn', 'agentDelayDemoBtn'].forEach((id) => {
       const el = document.getElementById(id);
       if (el) el.disabled = disabled;
     });
+    if (disabled && agentAdjustMode) setAgentAdjustMode(false);
+    const hint = document.getElementById('aiQuickHint');
     if (hint) {
-      hint.textContent = a.ok === false ? a.reason : '';
+      hint.textContent = a.show && a.ok === false ? a.reason : '';
       hint.hidden = !hint.textContent;
     }
     const mockBadge = document.getElementById('agentMockBadge');
     if (mockBadge) mockBadge.hidden = !AGENT_MOCK_MODE;
     const demo = document.getElementById('agentDemoPanel');
-    if (demo) demo.hidden = !AGENT_DEMO_MODE;
+    if (demo) demo.hidden = !(AGENT_DEMO_MODE && a.show);
     const dateEl = document.getElementById('agentRainDate');
     if (dateEl && !dateEl.value) dateEl.value = agentIsoDate(currentTripDepartureDate || (currentTripPreferences || {}).departureDate);
+  }
+
+  // 「幫我調整行程」：下一則訊息一定交給行程調整（不靠關鍵字）
+  let agentAdjustMode = false;
+  function setAgentAdjustMode(on) {
+    agentAdjustMode = !!on;
+    const btn = document.getElementById('agentAdjustModeBtn');
+    if (btn) { btn.setAttribute('aria-pressed', agentAdjustMode ? 'true' : 'false'); btn.classList.toggle('is-on', agentAdjustMode); }
+    const input = document.getElementById('aiChatInput');
+    if (input) input.placeholder = agentAdjustMode ? '說說要怎麼調整，例如：好累，想早點回飯店' : '告訴我你想吃什麼、玩什麼...';
+  }
+  function toggleAgentAdjustMode() {
+    setAgentAdjustMode(!agentAdjustMode);
+    const input = document.getElementById('aiChatInput');
+    if (input && agentAdjustMode) input.focus();
+  }
+
+  // 要改行程的說法 → 行程調整；同時在問推薦／找地方的 → 照舊聊天。只是關鍵字，猜錯時使用者可以點「幫我調整行程」。
+  const AGENT_INTENT_RE = /好累|很累|太累|累了|走不動|想休息|休息一下|早點回|提早回|提前回|早點結束|提早結束|回飯店|回旅館|回民宿|下雨|雨變大|大雨|延誤|遲到|晚到|來不及|趕不上|刪掉|刪除|拿掉|不想去|不去了|取消|跳過|縮短|少去|調整行程|改行程|重排|順延|晚點出發|輕鬆一點|放慢/;
+  const AGENT_ASK_RE = /推薦|好吃|美食|吃什麼|餐廳|小吃|咖啡|哪裡|有什麼|有沒有|介紹|怎麼去|多遠|門票|營業/;
+  const AGENT_STRONG_RE = /刪掉|刪除|拿掉|不去了|跳過|取消|改行程|調整行程|早點回|提早回|提前回|回飯店|回旅館|回民宿/;
+  function isItineraryChangeIntent(text) {
+    const t = String(text || '');
+    if (!AGENT_INTENT_RE.test(t)) return false;
+    return !AGENT_ASK_RE.test(t) || AGENT_STRONG_RE.test(t);
+  }
+
+  // 管家抽屜的送出入口會先問這裡：要交給行程調整就回 true（訊息已處理），否則回 false 照舊聊天。
+  function routeAiMessageToAgent(message) {
+    const forced = agentAdjustMode;
+    if (!forced && !isItineraryChangeIntent(message)) return false;
+    const a = agentAvailability();
+    if (!a.show) {
+      if (!forced) return false;   // 沒有行程可調：當一般聊天處理
+      setAgentAdjustMode(false);
+      appendAiMessage('ai', '目前沒有載入行程，沒辦法調整。先開啟一份行程再試試。');
+      return true;
+    }
+    setAgentAdjustMode(false);
+    if (!a.ok) {
+      appendAiMessage('user', message);
+      appendAiMessage('ai', a.reason || '目前無法調整這份行程。');
+      return true;
+    }
+    startAgentRun({ type: 'user', message: message.slice(0, 300), userText: message });
+    return true;
+  }
+
+  // 結果文字：把後端訊息裡的「代理人」統一成「AI 隨行管家」，畫面上只有一個 AI 名字
+  function agentText(value) {
+    return String(value == null ? '' : value).replace(/AI\s*代理人|代理人/g, 'AI 隨行管家');
+  }
+
+  function openAiDrawer() {
+    const drawer = document.getElementById('aiDrawer');
+    if (drawer && !drawer.classList.contains('open')) toggleAI();
   }
 
   function readAgentRainScenario() {
@@ -20279,38 +20358,30 @@
   }
 
   function agentWeatherCheck() {
-    startAgentRun({ type: 'weather' });
+    startAgentRun({ type: 'weather', userText: '🌦️ 檢查天氣並調整' });
   }
 
-  function submitAgentAsk(event) {
-    if (event) event.preventDefault();
-    const input = document.getElementById('agentAskInput');
-    const message = String(input && input.value || '').trim();
-    if (!message) {
-      if (input) input.focus();
-      feedbackToast('先輸入你的需求，例如「好累，想早點回飯店」', 'orange');
-      return false;
-    }
-    startAgentRun({ type: 'user', message: message.slice(0, 300) });
-    return false;
-  }
-
-  async function startAgentRun(trigger) {
-    if (agentState.running) return;
+  // prepare：選填的 async 函式，回傳 { trip, sent, range, trigger?, scenario? }；沒給就用一般的天氣／需求請求。
+  // T4 延誤要先存檔、確認雲端 id 才能送，所以準備工作也放在面板裡跑，失敗時直接顯示原因。
+  async function startAgentRun(trigger, prepare) {
+    if (agentState.running || isAiResponding) { feedbackToast('AI 隨行管家還在處理上一個問題，請稍等', 'orange'); return; }
     const a = agentAvailability();
     if (!a.ok) { feedbackToast(a.reason || '目前無法調整這份行程', 'orange'); return; }
-    const scenario = readAgentRainScenario();
-    if (scenario && scenario.error) { feedbackToast(scenario.error, 'orange'); return; }
-    const payload = buildAgentTripPayload();
-    if (!payload) return;
+    const rain = readAgentRainScenario();
+    if (rain && rain.error) { feedbackToast(rain.error, 'orange'); return; }
+    openAiDrawer();
+    if (trigger.userText) appendAiMessage('user', trigger.userText);
+    // 記進對話歷史：否則行程一改，重開抽屜時歡迎訊息會把這段對話清掉
+    aiConversationHistory.push({ role: 'user', text: String(trigger.userText || trigger.title || trigger.type) });
+    isAiResponding = true;
+    setAiInputState(true);
 
-    const body = { trip: payload.trip, trigger };
-    if (scenario) body.scenario = scenario;
     const seq = ++agentState.runSeq;
     const controller = new AbortController();
     Object.assign(agentState, {
       running: true, controller, startedAt: performance.now(), terminal: false, lastMs: 0,
-      sent: payload.sent, signature: agentTripSignature(), proposal: null, mock: !!AGENT_MOCK_MODE
+      sent: null, range: null, kind: trigger.type, updatedAt: null, signature: '', proposal: null, mock: !!AGENT_MOCK_MODE,
+      lastTrigger: trigger, resultText: ''
     });
     resetAgentPanel(trigger);
     refreshAgentEntryUI();
@@ -20318,6 +20389,20 @@
 
     const onEvent = (evt) => { if (seq === agentState.runSeq) handleAgentEvent(evt); };
     try {
+      const prepared = prepare ? await prepare() : await prepareGeneralRun();
+      if (seq !== agentState.runSeq) return;
+      if (controller.signal.aborted) throw new DOMException('aborted', 'AbortError');
+      if (!prepared) throw new Error('找不到可以調整的站');
+      // userText／title 只是畫面用的，不送給後端
+      const { userText: _ut, title: _tt, ...plainTrigger } = trigger;
+      const body = { trip: prepared.trip, trigger: prepared.trigger || plainTrigger };
+      const scenario = { ...(rain || {}), ...(prepared.scenario || {}) };
+      if (Object.keys(scenario).length) body.scenario = scenario;
+      Object.assign(agentState, {
+        sent: prepared.sent, range: prepared.range,
+        updatedAt: Number.isFinite(prepared.trip.updatedAt) ? prepared.trip.updatedAt : null,
+        signature: agentTripSignature()
+      });
       if (agentState.mock) await playAgentMock(body, onEvent, controller.signal);
       else await streamAgentReplan(body, onEvent, controller.signal);
       if (seq === agentState.runSeq && !agentState.terminal) {
@@ -20326,9 +20411,10 @@
     } catch (err) {
       if (seq !== agentState.runSeq) return;
       if (err && err.name === 'AbortError') {
-        appendAgentRow({ icon: '⏹', text: '已取消，行程沒有變更', tone: 'muted' });
+        appendAgentRow({ icon: '⏹', text: '已停止，行程沒有變更', tone: 'muted' });
+        agentState.resultText = '已停止，行程沒有變更';
       } else {
-        handleAgentEvent({ type: 'error', message: (err && err.message) || '代理人執行失敗' });
+        handleAgentEvent({ type: 'error', message: (err && err.message) || '這次沒辦法調整行程' });
       }
     } finally {
       if (seq === agentState.runSeq) finishAgentRun();
@@ -20337,6 +20423,9 @@
 
   function finishAgentRun() {
     agentState.running = false;
+    isAiResponding = false;
+    setAiInputState(false);
+    if (agentState.resultText) aiConversationHistory.push({ role: 'ai', text: agentState.resultText });
     agentState.controller = null;
     clearInterval(agentState.tickTimer);
     agentState.tickTimer = null;
@@ -20352,30 +20441,21 @@
     if (agentState.controller) agentState.controller.abort();
   }
 
-  function closeAgentPanel() {
-    if (agentState.running) cancelAgentRun();
-    agentState.runSeq += 1; // 讓還在路上的事件失效
-    if (agentState.running) finishAgentRun();
-    agentState.proposal = null;
-    const panel = document.getElementById('agentRunPanel');
-    if (panel) panel.hidden = true;
-    refreshAgentEntryUI();
-  }
-
   // 真正的後端：讀 SSE（每個事件一行 data: {json}，空行分隔）。
   async function streamAgentReplan(body, onEvent, signal) {
     const base = ((window.TRAVEL_APP_CONFIG && window.TRAVEL_APP_CONFIG.API_PROXY_BASE) || '').replace(/\/$/, '');
-    if (!base) throw new Error('這個環境沒有設定後端代理（API_PROXY_BASE），無法呼叫代理人。開發時可在網址加 ?agentMock=1 重播錄製資料。');
+    if (!base) throw new Error('這個環境沒有設定後端代理（API_PROXY_BASE），沒辦法調整行程。開發時可在網址加 ?agentMock=1 重播錄製資料。');
     const headers = await vertexAuthHeaders();
-    if (!headers.Authorization) throw new Error('請先登入，才能使用旅程應變助理。');
+    if (!headers.Authorization) throw new Error('請先登入，AI 隨行管家才能幫你調整行程。');
     const res = await fetch(`${base}/agent/replan`, { method: 'POST', headers, body: JSON.stringify(body), signal });
     const type = String(res.headers.get('content-type') || '');
     if (!res.ok || !type.includes('text/event-stream')) {
       let msg = '';
-      try { const j = await res.json(); msg = (j && (j.error || j.message)) || ''; } catch (_e) {}
+      // 後端的 400 是 { error, message }：message 是給使用者看的中文（例如「有 1 站缺少 id…」）
+      try { const j = await res.json(); msg = (j && (j.message || j.error)) || ''; } catch (_e) {}
       if (res.status === 401) throw new Error('登入已過期，請重新登入後再試。');
       if (res.status === 429) throw new Error('使用太頻繁了，請過幾分鐘再試。');
-      throw new Error(msg || `代理人服務暫時無法使用（HTTP ${res.status}）`);
+      throw new Error(msg || `AI 隨行管家暫時無法調整行程（HTTP ${res.status}）`);
     }
     const reader = res.body.getReader();
     const decoder = new TextDecoder();
@@ -20412,7 +20492,12 @@
   function pickAgentMockFixture(all, body) {
     let key = AGENT_MOCK_MODE.toLowerCase();
     if (!all[key] && !['fallback', 'question', 'error'].includes(key)) {
-      if (body.trigger.type === 'user') key = 'tired';
+      if (body.trigger.type === 'delay') {
+        // 延誤超過半小時通常排不下 → 錄製的 AI 刪站版；否則是只改時間的版本
+        const demo = body.scenario && body.scenario.delay ? Number(body.scenario.delay.minutes) : NaN;
+        const mins = Number.isFinite(demo) ? demo : Number(body.trigger.from && body.trigger.from.delayMin);
+        key = mins > 30 ? 'delay-ai' : 'delay-retime';
+      } else if (body.trigger.type === 'user') key = 'tired';
       else key = body.scenario ? 'rain' : 'no-issue';
     }
     if (all[key]) return { key, fixture: all[key] };
@@ -20488,23 +20573,37 @@
     el.textContent = agentElapsedText(ms);
   }
 
+  // 每次執行在管家對話裡新增一則訊息；上一次的面板改成純紀錄（拿掉 id、停用按鈕）
   function resetAgentPanel(trigger) {
-    const panel = document.getElementById('agentRunPanel');
-    if (!panel) return;
-    panel.hidden = false;
-    panel.classList.add('is-running');
-    const title = document.getElementById('agentRunTitle');
-    if (title) title.textContent = trigger.type === 'weather' ? '檢查天氣與營業時間' : `「${trigger.message}」`;
-    const badges = document.getElementById('agentRunBadges');
-    if (badges) badges.innerHTML = agentState.mock ? '<span class="agent-badge mock">mock</span>' : '';
-    const list = document.getElementById('agentEventList');
-    if (list) list.innerHTML = '';
-    const result = document.getElementById('agentResult');
-    if (result) result.innerHTML = '';
-    const stopBtn = document.getElementById('agentStopBtn');
-    if (stopBtn) stopBtn.hidden = false;
+    const area = document.getElementById('aiChatArea');
+    if (!area) return;
+    const prev = document.getElementById('agentRunPanel');
+    if (prev) {
+      prev.classList.remove('is-running');
+      prev.querySelectorAll('button').forEach((b) => { b.disabled = true; });
+      prev.querySelectorAll('[id]').forEach((el) => el.removeAttribute('id'));
+      prev.removeAttribute('id');
+    }
+    const title = trigger.title || (trigger.type === 'weather' ? '檢查天氣與營業時間' : '幫你調整行程');
+    const wrap = document.createElement('div');
+    wrap.className = 'chat-msg msg-ai msg-agent';
+    wrap.innerHTML = `<div class="agent-run is-running" id="agentRunPanel">
+        <div class="agent-run-head">
+          <div class="agent-run-title-wrap"><span class="agent-run-spinner" aria-hidden="true"></span><span class="agent-run-title" id="agentRunTitle">${escapeHtml(title)}</span><span id="agentRunBadges">${agentState.mock ? '<span class="agent-badge mock">mock</span>' : ''}</span></div>
+          <span class="agent-run-elapsed" id="agentElapsed" aria-label="經過時間">0.0 秒</span>
+          <button type="button" class="agent-run-stop" id="agentStopBtn" onclick="cancelAgentRun()">停止</button>
+        </div>
+        <ol class="agent-steps" id="agentEventList" aria-live="polite"></ol>
+        <div class="agent-result" id="agentResult" aria-live="polite"></div>
+      </div>`;
+    area.appendChild(wrap);
     updateAgentElapsed();
-    if (typeof panel.scrollIntoView === 'function') panel.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    area.scrollTop = area.scrollHeight;
+  }
+
+  function scrollAiChatToEnd() {
+    const area = document.getElementById('aiChatArea');
+    if (area) area.scrollTop = area.scrollHeight;
   }
 
   function appendAgentRow({ icon, text, detail, tone, ms, pendingTool, issues }) {
@@ -20514,12 +20613,13 @@
     li.className = `agent-step${tone ? ` is-${tone}` : ''}${pendingTool ? ' is-pending' : ''}`;
     if (pendingTool) li.dataset.tool = pendingTool;
     const issuesHtml = Array.isArray(issues) && issues.length
-      ? `<ul class="agent-step-issues">${issues.map((x) => `<li>${escapeHtml(x)}</li>`).join('')}</ul>` : '';
+      ? `<ul class="agent-step-issues">${issues.map((x) => `<li>${escapeHtml(agentText(x))}</li>`).join('')}</ul>` : '';
     li.innerHTML = `<span class="agent-step-icon" aria-hidden="true">${escapeHtml(icon || '•')}</span>
-      <div class="agent-step-body"><div class="agent-step-text">${escapeHtml(text || '')}</div>
-      <div class="agent-step-detail"${detail ? '' : ' hidden'}>${escapeHtml(detail || '')}</div>${issuesHtml}</div>
+      <div class="agent-step-body"><div class="agent-step-text">${escapeHtml(agentText(text))}</div>
+      <div class="agent-step-detail"${detail ? '' : ' hidden'}>${escapeHtml(agentText(detail))}</div>${issuesHtml}</div>
       <span class="agent-step-ms">${Number.isFinite(ms) ? `+${(ms / 1000).toFixed(1)}s` : ''}</span>`;
     list.appendChild(li);
+    scrollAiChatToEnd();
     return li;
   }
 
@@ -20531,7 +20631,7 @@
     switch (evt.type) {
       case 'start':
         if (evt.simulated && badges && !badges.querySelector('.sim')) badges.insertAdjacentHTML('beforeend', '<span class="agent-badge sim">模擬情境</span>');
-        appendAgentRow({ icon: '🤖', text: `代理人啟動，讀入 ${Number(evt.stops) || 0} 站`, ms });
+        appendAgentRow({ icon: '🤖', text: `開始檢查行程，共 ${Number(evt.stops) || 0} 站`, ms });
         break;
       case 'check':
         appendAgentRow({ icon: '🧮', text: evt.label || '程式檢查', ms, pendingTool: '__check' });
@@ -20553,7 +20653,7 @@
           row.classList.remove('is-pending');
           if (evt.ok === false) row.classList.add('is-warn');
           const d = row.querySelector('.agent-step-detail');
-          if (d && evt.detail) { d.textContent = evt.detail; d.hidden = false; }
+          if (d && evt.detail) { d.textContent = agentText(evt.detail); d.hidden = false; }
         } else if (evt.detail) {
           appendAgentRow({ icon: evt.ok === false ? '⚠️' : '↳', text: evt.detail, tone: evt.ok === false ? 'warn' : '', ms });
         }
@@ -20566,28 +20666,33 @@
         agentState.terminal = true;
         clearAgentPending();
         agentState.proposal = evt;
+        agentState.resultText = `建議修改：${agentText(evt.summary || '')}（等你確認）`;
         renderAgentProposal(evt);
         break;
       case 'question':
         agentState.terminal = true;
         clearAgentPending();
+        agentState.resultText = agentText(evt.question || '');
         renderAgentQuestion(evt);
         break;
       case 'no_change':
         agentState.terminal = true;
         clearAgentPending();
-        renderAgentNotice('✅', evt.llmSkipped ? '程式檢查沒發現問題，沒有呼叫 AI' : '不需要調整', evt.reason || '', 'ok');
+        agentState.resultText = `不需要調整：${agentText(evt.reason || '')}`;
+        renderAgentNotice('✅', evt.llmSkipped ? '檢查過了，行程不需要調整（沒有呼叫 AI）' : '行程不需要調整', evt.reason || '', 'ok');
         break;
       case 'error':
         agentState.terminal = true;
         clearAgentPending();
-        renderAgentNotice('⚠️', '代理人沒有完成', evt.message || '發生未知錯誤', 'error');
+        agentState.resultText = `這次沒辦法調整行程：${agentText(evt.message || '')}`;
+        renderAgentNotice('⚠️', '這次沒辦法調整行程', evt.message || '發生未知錯誤', 'error');
         break;
       default:
         break;
     }
     const list = document.getElementById('agentEventList');
     if (list) list.scrollTop = list.scrollHeight;
+    scrollAiChatToEnd();
   }
 
   function clearAgentPending() {
@@ -20598,23 +20703,26 @@
     const box = document.getElementById('agentResult');
     if (!box) return;
     box.innerHTML = `<div class="agent-notice is-${tone}"><span aria-hidden="true">${icon}</span>
-      <div><div class="agent-notice-title">${escapeHtml(title)}</div>${text ? `<div class="agent-notice-text">${escapeHtml(text)}</div>` : ''}</div></div>`;
+      <div><div class="agent-notice-title">${escapeHtml(agentText(title))}</div>${text ? `<div class="agent-notice-text">${escapeHtml(agentText(text))}</div>` : ''}</div></div>`;
+    scrollAiChatToEnd();
   }
 
+  // 回答問題：後端不保存對話，所以把原本的問題一起帶上，再送一次（同一份行程、同一個情境）
   function renderAgentQuestion(evt) {
     const box = document.getElementById('agentResult');
     if (!box) return;
+    const question = agentText(evt.question || '想先確認你的偏好');
     const opts = Array.isArray(evt.options) ? evt.options : [];
     box.innerHTML = `<div class="agent-notice is-ask"><span aria-hidden="true">💬</span><div>
-      <div class="agent-notice-title">${escapeHtml(evt.question || '代理人想先確認你的偏好')}</div>
+      <div class="agent-notice-title">${escapeHtml(question)}</div>
       ${opts.length ? `<div class="agent-options">${opts.map((o) => `<button type="button" class="agent-option" data-answer="${escapeHtml(o)}">${escapeHtml(o)}</button>`).join('')}</div>` : ''}
-      <div class="agent-notice-text">點選項會填進上方的輸入框，再按「送出」告訴代理人。</div></div></div>`;
+      <div class="agent-notice-text">${opts.length ? '點一個選項，我會照你的選擇再調整一次；也可以直接在下面打字回覆。' : '直接在下面打字回覆就可以。'}</div></div></div>`;
     box.querySelectorAll('.agent-option').forEach((b) => b.addEventListener('click', () => {
-      const input = document.getElementById('agentAskInput');
-      if (!input) return;
-      input.value = b.dataset.answer || '';
-      input.focus();
+      const answer = b.dataset.answer || '';
+      box.querySelectorAll('.agent-option').forEach((x) => { x.disabled = true; });
+      startAgentRun({ type: 'user', message: `${question}。我的選擇：${answer}`.slice(0, 300), userText: answer });
     }));
+    scrollAiChatToEnd();
   }
 
   function agentMoney(n) {
@@ -20624,7 +20732,7 @@
   function agentChangeHtml(c, multiDay) {
     const when = [multiDay && c.day ? `第 ${c.day} 天` : '', c.type === 'retime' ? '' : (c.time || '')].filter(Boolean).join(' ');
     const whenHtml = when ? `<span class="agent-chg-when nowrap">${escapeHtml(when)}</span>` : '';
-    const tag = { replace: '替換', remove: '刪除', insert: '新增', retime: '調整' }[c.type] || '修改';
+    const tag = { replace: '替換', remove: '刪除', insert: '新增', retime: '調整', move: '移動' }[c.type] || '修改';
     let body = '';
     if (c.type === 'replace') body = `<del>${escapeHtml(c.from)}</del><span class="agent-chg-arrow" aria-label="改成">→</span><ins>${escapeHtml(c.to)}</ins>`;
     else if (c.type === 'remove') body = `<del>${escapeHtml(c.from)}</del>`;
@@ -20636,6 +20744,10 @@
         parts.push(`<span class="nowrap">停留 ${escapeHtml(formatStayMinutes(c.stayFrom))} → ${escapeHtml(formatStayMinutes(c.stayTo))}</span>`);
       }
       body = `<span class="agent-chg-name">${escapeHtml(c.name || '')}</span> ${parts.join('、')}`;
+    } else if (c.type === 'move') {
+      const dayText = Number.isFinite(c.fromDay) && Number.isFinite(c.day) && c.fromDay !== c.day ? `第 ${c.fromDay} 天 → 第 ${c.day} 天` : '';
+      const timeText = c.from && c.to && c.from !== c.to ? `${c.from} → ${c.to}` : '';
+      body = `<span class="agent-chg-name">${escapeHtml(c.name || '')}</span> ${[dayText, timeText].filter(Boolean).map((t) => `<span class="nowrap">${escapeHtml(t)}</span>`).join('、')}`;
     } else body = escapeHtml(c.to || c.from || '');
     return `<li class="agent-chg is-${escapeHtml(c.type || 'other')}"><span class="agent-chg-tag">${tag}</span>${whenHtml}<span class="agent-chg-body">${body}</span></li>`;
   }
@@ -20646,6 +20758,7 @@
     const draftStops = (p.draft && Array.isArray(p.draft.stops)) ? p.draft.stops : [];
     const multiDay = (p.draft && Number(p.draft.days) > 1) || draftStops.some((s) => Number(s.day) > 1);
     const badges = [];
+    if (p.retimeOnly) badges.push('<span class="agent-badge retime">程式順延即可，不需 AI</span>');
     if (p.fallback) badges.push('<span class="agent-badge fallback">快速替代方案（未經 AI 推理）</span>');
     if (p.simulated) badges.push('<span class="agent-badge sim">模擬情境</span>');
     const cost = p.costDelta || null;
@@ -20659,39 +20772,49 @@
         ${cost.note ? `<span class="agent-cost-note">${escapeHtml(cost.note)}</span>` : ''}</div>`;
     }
     const warnings = Array.isArray(p.warnings) && p.warnings.length
-      ? `<ul class="agent-warnings">${p.warnings.map((w) => `<li>⚠️ ${escapeHtml(typeof w === 'string' ? w : (w && w.message) || '')}</li>`).join('')}</ul>` : '';
+      ? `<ul class="agent-warnings">${p.warnings.map((w) => `<li>⚠️ ${escapeHtml(agentText(typeof w === 'string' ? w : (w && w.message) || ''))}</li>`).join('')}</ul>` : '';
     const usage = p.usage || {};
-    const meta = [p.model, usage.llmCalls ? `${usage.llmCalls} 次 AI 呼叫` : (p.fallback ? '規則式' : ''), agentElapsedText(p.ms)].filter(Boolean).join(' · ');
+    const model = (Array.isArray(p.upstreamModels) && p.upstreamModels[0]) || p.model;
+    const meta = (p.llmSkipped || p.retimeOnly) && !usage.llmCalls
+      ? ['程式計算，沒有呼叫 AI', agentElapsedText(p.ms)].join(' · ')
+      : [model, usage.llmCalls ? `${usage.llmCalls} 次 AI 呼叫` : (p.fallback ? '規則式' : ''), agentElapsedText(p.ms)].filter(Boolean).join(' · ');
     const removedIds = new Set((agentState.sent || []).map((s) => s.id));
     draftStops.forEach((s) => { removedIds.delete(String(s.id)); if (s.replaces) removedIds.add(String(s.replaces)); });
     const dayPrefix = (d) => (multiDay ? `D${d} ` : '');
-    const beforeList = (agentState.sent || []).map((s) => `<li class="${removedIds.has(s.id) ? 'is-removed' : ''}"><span class="nowrap">${dayPrefix(s.day)}${escapeHtml(s.time)}</span> ${escapeHtml(s.name)}</li>`).join('');
-    const afterList = draftStops.map((s) => `<li class="${s.agentAdded ? 'is-added' : ''}"><span class="nowrap">${dayPrefix(s.day || 1)}${escapeHtml(s.time || '')}</span> ${escapeHtml(s.name)}</li>`).join('');
+    const anchorMark = (s) => (s.anchor ? ' <span class="agent-anchor-mark">固定</span>' : '');
+    const beforeList = (agentState.sent || []).map((s) => `<li class="${removedIds.has(s.id) ? 'is-removed' : ''}"><span class="nowrap">${dayPrefix(s.day)}${escapeHtml(s.time)}</span> ${escapeHtml(s.name)}${anchorMark(s)}</li>`).join('');
+    const afterList = draftStops.map((s) => `<li class="${s.agentAdded ? 'is-added' : ''}"><span class="nowrap">${dayPrefix(s.day || 1)}${escapeHtml(s.time || '')}</span> ${escapeHtml(s.name)}${anchorMark(s)}</li>`).join('');
     const blocked = p.__mockMismatch
-      ? '<div class="agent-blocked">這份錄製的提案是針對「台東市區一日遊」那份行程，和目前行程對不起來，只能預覽、不能套用。</div>' : '';
-    box.innerHTML = `<article class="agent-proposal" aria-label="代理人提案">
-      <div class="agent-proposal-head">${badges.join('')}<h3 class="agent-proposal-title">${escapeHtml(p.summary || '調整提案')}</h3></div>
+      ? '<div class="agent-blocked">這份錄製的提案是針對另一份示範行程，和目前行程對不起來，只能預覽、不能套用。</div>' : '';
+    const delayNote = agentState.kind === 'delay'
+      ? '<div class="agent-delay-note">套用會刪站、調整停留時間；各站時間由行程依你的預計離開時間重新計算，不會被鎖住。</div>' : '';
+    box.innerHTML = `<article class="agent-proposal" aria-label="建議修改">
+      <div class="agent-proposal-head"><span class="agent-proposal-kicker">建議修改</span>${badges.join('')}<h3 class="agent-proposal-title">${escapeHtml(agentText(p.summary || '調整行程'))}</h3></div>
       ${Array.isArray(p.changes) && p.changes.length ? `<ul class="agent-changes">${p.changes.map((c) => agentChangeHtml(c, multiDay)).join('')}</ul>` : ''}
-      ${Array.isArray(p.reasons) && p.reasons.length ? `<ul class="agent-reasons">${p.reasons.map((r) => `<li>${escapeHtml(r)}</li>`).join('')}</ul>` : ''}
+      ${Array.isArray(p.reasons) && p.reasons.length ? `<ul class="agent-reasons">${p.reasons.map((r) => `<li>${escapeHtml(agentText(r))}</li>`).join('')}</ul>` : ''}
+      <div class="agent-confirm-note">還沒改到你的行程，按「套用」才會修改。</div>
       ${costHtml}${warnings}
       <details class="agent-compare"><summary>查看完整的前後行程</summary>
         <div class="agent-compare-grid"><div><div class="agent-compare-label">原本</div><ol>${beforeList}</ol></div>
         <div><div class="agent-compare-label">調整後</div><ol>${afterList}</ol></div></div></details>
       ${meta ? `<div class="agent-meta">${escapeHtml(meta)}</div>` : ''}
-      ${blocked}
+      ${delayNote}${blocked}
       <div class="agent-actions">
         <button type="button" class="replan-btn primary" id="agentApplyBtn" onclick="applyAgentProposal()"${p.__mockMismatch || !draftStops.length ? ' disabled' : ''}>套用</button>
         <button type="button" class="replan-btn secondary" onclick="discardAgentProposal()">放棄</button>
       </div></article>`;
+    scrollAiChatToEnd();
   }
 
   function discardAgentProposal() {
     agentState.proposal = null;
-    renderAgentNotice('↩', '已放棄提案', '行程維持原樣。', 'muted');
+    renderAgentNotice('↩', '已放棄這個建議', '行程維持原樣。', 'muted');
+    aiConversationHistory.push({ role: 'ai', text: '使用者放棄了這個建議，行程維持原樣。' });
     refreshAgentEntryUI();
   }
 
-  // 套用：把 draft.stops 寫回目前行程（只換掉送出去的那一段），再走既有的 applyReplan 重繪＋存檔。
+  // 套用：把 draft.stops 寫回目前行程（只換掉送出的那一段），再走既有的 applyReplan 重繪＋存檔。
+  // 順序照 T4 規格第 6 節：取共編鎖 → 比對雲端 updatedAt → 只改提案涉及的站 → 存檔 → 解鎖。
   async function applyAgentProposal() {
     const p = agentState.proposal;
     if (!p || !p.draft || !Array.isArray(p.draft.stops) || p.__mockMismatch) return;
@@ -20721,13 +20844,30 @@
       }
     }
     try {
-      replanStops = buildStopsFromAgentDraft(p.draft.stops, p.changes);
+      if (agentState.updatedAt != null) {
+        const remote = await agentReadRemoteTrip();
+        if (remote && remote.updatedAt !== agentState.updatedAt) {
+          window.alert('送出後雲端上的行程被改過（可能是旅伴或另一台裝置），這份提案可能不適用了。請重新檢查一次。');
+          if (btn) btn.disabled = false;
+          return;
+        }
+      }
+      const isDelay = agentState.kind === 'delay';
+      replanStops = buildStopsFromAgentDraft(p.draft.stops, p.changes, { range: agentState.range, lockTimes: !isDelay });
       ensureStopDayIndexes(replanStops, currentTripPreferences || {});
       ensureIndoorOutdoorMetadata(replanStops, currentTripRegion);
       agentState.proposal = null;
       applyReplan();
       schedulePersistTrip();
-      renderAgentNotice('✅', '已套用', p.summary || '', 'ok');
+      aiConversationHistory.push({ role: 'ai', text: `已套用建議修改：${agentText(p.summary || '')}` });
+      if (isDelay) {
+        const drift = agentScheduleDrift(p.draft.stops);
+        renderAgentNotice('✅', '已套用', drift > 10
+          ? `${p.summary || ''}。依目前的預計離開時間重算後，和提案的時間最多差 ${drift} 分鐘（車程估算方式不同），以行程上的時間為準。`
+          : `${p.summary || ''}。各站時間已依預計離開時間重新計算。`, 'ok');
+      } else {
+        renderAgentNotice('✅', '已套用', p.summary || '', 'ok');
+      }
     } catch (e) {
       console.error('[agent] 套用失敗', e);
       window.alert(`套用失敗：${e.message || e}`);
@@ -20740,34 +20880,64 @@
     }
   }
 
+  // 套用後重算的時刻和提案時刻差多少（分鐘，取最大）；只比對仍在行程裡的站。
+  function agentScheduleDrift(draftStops) {
+    const schedule = buildReplanSchedule();
+    let max = 0;
+    draftStops.forEach((d) => {
+      const i = replanStops.findIndex((s) => String(s.collabStopId || s.id) === String(d.id) || String(s.id) === String(d.id));
+      const want = clockToMinutes(d.time);
+      if (i < 0 || !schedule[i] || want === null || replanStops[i].type === 'end') return;
+      const got = clockToMinutes(toClockFieldValue(schedule[i].start));
+      if (got !== null) max = Math.max(max, Math.abs(got - want));
+    });
+    return max;
+  }
+
   // 純粹組新的站點陣列（不改 replanStops 本身，失敗時原行程不受影響）。
-  function buildStopsFromAgentDraft(draftStops, changes) {
-    const retimed = new Set((Array.isArray(changes) ? changes : [])
+  // opts.range：送出時記下的站點區段；opts.lockTimes：天氣／需求提案的 retime 要把時刻固定下來，
+  // T4 延誤不要——順延的站若都變成手動時間，之後就改不動了，時間交給排程從 expectedLeaveMin 重算。
+  function buildStopsFromAgentDraft(draftStops, changes, opts) {
+    const o = opts || {};
+    const range = o.range || agentEditableRange();
+    if (!range) throw new Error('找不到可調整的區段');
+    const list = Array.isArray(changes) ? changes : [];
+    const retimed = new Set(list
       .filter((c) => c && c.type === 'retime' && c.from && c.to && c.from !== c.to)
       .map((c) => agentNameKey(c.name)));
-    const range = agentEditableRange();
-    if (!range) throw new Error('找不到可調整的區段');
+    // 停留時間只照 changes 裡明確的 stayFrom → stayTo 改，避免後端正規化（例如最少 10 分）誤改錨點站
+    const stayTo = new Map(list
+      .filter((c) => c && c.type === 'retime' && Number.isFinite(c.stayTo) && c.stayTo !== c.stayFrom)
+      .map((c) => [agentNameKey(c.name), Math.max(5, Math.round(c.stayTo))]));
     const segment = replanStops.slice(range.from, range.to + 1);
-    const byId = new Map(segment.map((s) => [String(s.id), s]));
+    const keyOf = (s, i) => String(s.collabStopId || s.id || getStableCollabStopId(s, range.from + i));
+    const byId = new Map();
+    segment.forEach((s, i) => { byId.set(keyOf(s, i), s); byId.set(String(s.id), s); });
     const sentById = new Map((agentState.sent || []).map((s) => [s.id, s]));
+    const draftIds = new Set(draftStops.map((d) => String(d.id)));
+    const missingAnchor = (agentState.sent || []).find((s) => s.anchor && !draftIds.has(s.id));
+    if (missingAnchor) throw new Error(`提案少了固定站「${missingAnchor.name}」，這份提案不能套用`);
     const middle = draftStops.map((d) => {
       const day = clampDayIndex(d.day, 1);
-      const stayMin = Math.max(5, Math.round(Number(d.stayMin) || 30));
       const existing = !d.agentAdded ? byId.get(String(d.id)) : null;
       if (existing) {
         const sent = sentById.get(String(d.id)) || {};
         const stop = { ...existing, dayIndex: day };
-        const startDelta = (clockToMinutes(d.time) ?? 0) - (clockToMinutes(sent.time) ?? 0);
-        if (d.time && sent.time && startDelta !== 0) {
-          // 時刻只在兩種情況寫死：原本就是手動時間（順著平移），或提案明確要求改這站的時間（retime）。
-          // 其他站讓排程照車程自然重算，不要因為套用一次就整份行程都變成手動鎖定。
-          if (Number.isFinite(stop.manualStartMin)) stop.manualStartMin += startDelta;
-          else if (retimed.has(agentNameKey(stop.name))) stop.manualStartMin = (day - 1) * 1440 + clockToMinutes(d.time);
+        if (sent.anchor) return stop;   // 錨點站一律原樣保留
+        if (o.lockTimes) {
+          const startDelta = (clockToMinutes(d.time) ?? 0) - (clockToMinutes(sent.time) ?? 0);
+          if (d.time && sent.time && startDelta !== 0) {
+            // 時刻只在兩種情況寫死：原本就是手動時間（順著平移），或提案明確要求改這站的時間（retime）。
+            // 其他站讓排程照車程自然重算，不要因為套用一次就整份行程都變成手動鎖定。
+            if (Number.isFinite(stop.manualStartMin)) stop.manualStartMin += startDelta;
+            else if (retimed.has(agentNameKey(stop.name))) stop.manualStartMin = (day - 1) * 1440 + clockToMinutes(d.time);
+          }
         }
-        if (stayMin !== sent.stayMin) {
-          stop.stayMin = stayMin;
+        const nextStay = stayTo.get(agentNameKey(stop.name));
+        if (Number.isFinite(nextStay) && nextStay !== stop.stayMin) {
+          stop.stayMin = nextStay;
           stop.durationLocked = false;
-          stop.manualEndMin = Number.isFinite(stop.manualEndMin) && Number.isFinite(stop.manualStartMin) ? stop.manualStartMin + stayMin : null;
+          stop.manualEndMin = Number.isFinite(stop.manualEndMin) && Number.isFinite(stop.manualStartMin) ? stop.manualStartMin + nextStay : null;
         }
         return stop;
       }
@@ -20775,15 +20945,16 @@
       const replaced = d.replaces ? byId.get(String(d.replaces)) : null;
       const hasPos = Number.isFinite(Number(d.lat)) && Number.isFinite(Number(d.lng));
       const created = createStopFromTemplate({
-        name: d.name, emoji: d.kind === 'food' ? '🍽️' : '📍', desc: '',
-        stayMin, dayIndex: day, baseId: 'agent',
+        name: d.name, emoji: d.emoji || (d.kind === 'food' || d.stopType === 'food' ? '🍽️' : '📍'), desc: d.desc || '',
+        stayMin: Math.max(5, Math.round(Number(d.stayMin) || 30)), dayIndex: day, baseId: 'agent',
+        businessHours: d.businessHours || null,
         scenicCoordinates: hasPos ? { lat: Number(d.lat), lng: Number(d.lng) } : null,
         transitMode: replaced ? replaced.transitMode : getPreferredVehicleMode(),
         transitModeManual: replaced ? replaced.transitModeManual === true : false,
         transitMin: null
       });
       created.agentAdded = true;
-      if (replaced && Number.isFinite(replaced.manualStartMin)) created.manualStartMin = (day - 1) * 1440 + (clockToMinutes(d.time) ?? 0);
+      if (o.lockTimes && replaced && Number.isFinite(replaced.manualStartMin)) created.manualStartMin = (day - 1) * 1440 + (clockToMinutes(d.time) ?? 0);
       return created;
     });
     const oldNext = new Map();
@@ -20802,7 +20973,209 @@
     return [...before, ...middle, ...replanStops.slice(range.to + 1)];
   }
 
+  // ── T4 延誤（docs/amd-agent/t4-delay-trigger-spec.md）──
+  // 入口在行程進行中的「預計離開時間」：showLeaveImpact 有衝突時才出現按鈕，使用者按下才送出。
+  const AGENT_LODGING_RE = /飯店|酒店|旅店|旅館|民宿|會館|住宿|青年旅舍|hotel|hostel|resort|villa/i;
+  const AGENT_STATION_RE = /火車站|車站|高鐵|轉運站|機場|station|airport/i;
+
+  // 錨點：港口（ferry-config 的港名）、住宿、車站，加上行程的終點站。後端一律不會動錨點站。
+  function agentAnchorOf(stop) {
+    const name = String(stop && stop.name || '');
+    if (!name) return '';
+    const cfgs = ISLAND_FERRY_CONFIG && typeof ISLAND_FERRY_CONFIG === 'object' ? Object.values(ISLAND_FERRY_CONFIG) : [];
+    if (cfgs.some((c) => c && c.islandHarbor && (isIslandHarborStop(name, c) || isMainlandHarborStop(name, c)))) return 'ferry';
+    if (AGENT_LODGING_RE.test(name)) return 'lodging';
+    if (stop.type === 'end' || stop.type === 'start' || AGENT_STATION_RE.test(name)) return 'station';
+    return '';
+  }
+
+  function agentStopTypeOf(stop, anchor) {
+    if (anchor || stop.type === 'start' || stop.type === 'end') return 'transit';
+    return isFoodStop(stop) ? 'food' : 'scenic';
+  }
+
+  // 台灣時間的 ISO 字串（後端規定一律帶 +08:00）
+  function agentTaipeiIso(ms) {
+    return new Date(ms + 8 * 3600 * 1000).toISOString().slice(0, 19) + '+08:00';
+  }
+
+  function agentDayZeroMs(isoDate) {
+    return Date.parse(`${isoDate}T00:00:00+08:00`);
+  }
+
+  // 「原定」排程：把目前這站的預計離開時間拿掉再算一次（後端要原定時間，順延由後端統一算）
+  function agentPlannedSchedule(index) {
+    const stop = replanStops[index];
+    const saved = stop.expectedLeaveMin;
+    stop.expectedLeaveMin = null;
+    try { return buildReplanSchedule(); } finally { stop.expectedLeaveMin = saved; }
+  }
+
+  function agentWait(ms) { return new Promise((r) => setTimeout(r, ms)); }
+
+  // 把排隊中的存檔立刻送出並等它寫完，確保 collabStopId 真的已經在 Firestore。
+  async function agentFlushPersist() {
+    clearTimeout(persistTripDebounceTimer); persistTripDebounceTimer = null;
+    clearTimeout(persistTripMaxWaitTimer); persistTripMaxWaitTimer = null;
+    for (let i = 0; i < 100 && persistTripWriteActive; i += 1) await agentWait(100);
+    await persistCurrentTripStops();
+    for (let i = 0; i < 100 && persistTripWriteActive; i += 1) await agentWait(100);
+  }
+
+  // 讀雲端最新的行程：updatedAt（毫秒）與已存的站 id。沒登入／沒 Firebase 時回 null（mock 開發用）。
+  async function agentReadRemoteTrip() {
+    const user = typeof firebaseAuth !== 'undefined' && firebaseAuth && firebaseAuth.currentUser;
+    if (!(firebaseEnabled && firebaseDb && user) || !currentItineraryId || currentItineraryId === 'TRIP-EMPTY') return null;
+    const snap = await firebaseDb.collection('micro_trips').doc(currentItineraryId).get({ source: 'server' });
+    if (!snap.exists) return { exists: false, updatedAt: null, ids: new Set() };
+    const data = snap.data() || {};
+    const u = data.updatedAt;
+    const updatedAt = u && typeof u.toMillis === 'function' ? u.toMillis() : (Number.isFinite(Number(u)) ? Number(u) : null);
+    return { exists: true, updatedAt, ids: new Set((data.stops || []).map((x) => x && x.collabStopId).filter(Boolean).map(String)) };
+  }
+
+  // 依 spec 第 2 節組請求。只送目前這站之後、同一天的站（含當天的終點錨點站），時間用原定計畫。
+  // 不送 returnTrain／lastFerry（規格 2.1）：網頁沒有使用者實際要搭哪班車的資料，
+  // 推算的班次會讓期限檢查失效；不送時後端用終點錨點車站的表定時間檢查。
+  function buildDelayPayload(stopId) {
+    const index = replanStops.findIndex((s) => s.id === stopId);
+    if (index < 0 || index !== getStayingStopIndex()) return { error: '這一站已經不是目前所在的站，請重新設定預計離開時間。' };
+    const stop = replanStops[index];
+    const day = clampDayIndex(stop.dayIndex, 1);
+    let to = index;
+    for (let i = index + 1; i < replanStops.length; i += 1) {
+      if (clampDayIndex(replanStops[i].dayIndex, 1) !== day || !replanStops[i].name) break;
+      to = i;
+    }
+    if (to === index) return { error: '今天後面沒有其他站了，不需要調整。' };
+    const planned = agentPlannedSchedule(index);
+    const actual = buildReplanSchedule();
+    const origLeave = planned[index].end;
+    const leaveMin = Number.isFinite(stop.expectedLeaveMin) ? stop.expectedLeaveMin : actual[index].end;
+    const prefs = currentTripPreferences || {};
+    const startDate = agentIsoDate(currentTripDepartureDate || prefs.departureDate || prefs.startDate);
+    const dayZero = agentDayZeroMs(startDate);
+    const idOf = (s, i) => String(s.collabStopId || getStableCollabStopId(s, i));
+    const sent = [];
+    for (let i = index + 1; i <= to; i += 1) {
+      const s = replanStops[i];
+      const row = planned[i] || {};
+      const anchor = agentAnchorOf(s);
+      const pos = readStopCoordinates(s);
+      const item = {
+        id: idOf(s, i), day,
+        time: Number.isFinite(row.start) ? toClockFieldValue(row.start) : '09:00',
+        stayMin: Math.max(5, Math.round(Number.isFinite(row.end) && Number.isFinite(row.start) ? row.end - row.start : (s.stayMin || 30))),
+        name: String(s.name),
+        stopType: agentStopTypeOf(s, anchor)
+      };
+      if (pos) { item.lat = pos.lat; item.lng = pos.lng; }
+      if (anchor) item.anchor = anchor;
+      if (s.businessHours && typeof s.businessHours === 'string') item.businessHours = s.businessHours;
+      if (Number.isFinite(s.manualStartMin)) item.timeLocked = true;
+      sent.push(item);
+    }
+    const ends = getTripDayEndMinutes();
+    const endMin = Array.isArray(ends) && ends.length ? ends[Math.min(day, ends.length) - 1] : NaN;
+    const here = readStopCoordinates(stop);
+    const from = {
+      stopId: idOf(stop, index), name: String(stop.name),
+      leaveAt: agentTaipeiIso(dayZero + leaveMin * 60000),
+      delayMin: Math.round(leaveMin - origLeave)
+    };
+    if (here) { from.lat = here.lat; from.lng = here.lng; }
+    const people = getPeopleCount(prefs.people);
+    return {
+      sent,
+      range: { from: index + 1, to },
+      delayMin: from.delayMin,
+      trigger: { type: 'delay', source: 'web', day, now: agentTaipeiIso(getTripRuntimeNow()), from },
+      trip: {
+        title: currentTripTitle || '我的行程',
+        region: currentTripRegion || prefs.dest || '',
+        startDate,
+        endTime: Number.isFinite(endMin) ? toClockFieldValue(endMin) : agentTripEndClock(),
+        people: Number.isFinite(people) && people > 0 ? people : 1,
+        stops: sent
+      }
+    };
+  }
+
+  // 送出任何 Agent 請求前（延誤、天氣、文字需求都一樣）：補上缺的 collabStopId、立刻存檔，
+  // 再讀雲端確認這些 id 真的都在 Firestore（存檔失敗不會丟錯，只能事後確認）。回傳雲端 updatedAt（毫秒）。
+  async function agentPersistIds() {
+    appendAgentRow({ icon: '☁️', text: '先存檔，確認每一站的 id 都已經在雲端', tone: 'muted' });
+    // 剛加進來的站還沒有 collabStopId；先補上（與存檔時算的是同一個值），存檔就會把它寫進 Firestore
+    replanStops.forEach((s, i) => { if (s && !s.collabStopId) s.collabStopId = getStableCollabStopId(s, i); });
+    await agentFlushPersist();
+  }
+
+  async function agentVerifyRemoteIds(ids) {
+    const remote = await agentReadRemoteTrip();
+    if (!remote) return null;   // 沒登入／沒 Firebase（mock 開發）：無從比對，後端會自己擋未登入
+    const missing = remote.exists ? ids.filter((id) => !remote.ids.has(id)) : ids;
+    if (missing.length) {
+      throw new Error(tripSimulation.enabled
+        ? `有 ${missing.length} 站還沒存到雲端，展示模擬中不會存檔。請先關閉展示模擬，在行程中改任何一處讓它存檔，再試一次。`
+        : `有 ${missing.length} 站還沒存到雲端（可能是網路問題），請稍後再試一次。`);
+    }
+    return Number.isFinite(remote.updatedAt) ? remote.updatedAt : null;
+  }
+
+  async function prepareGeneralRun() {
+    await agentPersistIds();
+    const built = buildAgentTripPayload();
+    if (!built) return null;
+    const updatedAt = await agentVerifyRemoteIds(built.sent.map((s) => s.id));
+    if (updatedAt != null) built.trip.updatedAt = updatedAt;
+    return built;
+  }
+
+  async function prepareDelayRun(stopId, demoMinutes) {
+    await agentPersistIds();
+    const built = buildDelayPayload(stopId);
+    if (built.error) throw new Error(built.error);
+    const updatedAt = await agentVerifyRemoteIds([built.trigger.from.stopId, ...built.sent.map((s) => s.id)]);
+    if (updatedAt != null) built.trip.updatedAt = updatedAt;
+    const delayText = Number.isFinite(demoMinutes) ? `${demoMinutes} 分鐘（模擬）` : `${Math.max(0, built.delayMin)} 分鐘`;
+    appendAgentRow({ icon: '🕒', text: `從「${built.trigger.from.name}」晚 ${delayText}離開，送出今天後面 ${built.sent.length} 站` });
+    if (Number.isFinite(demoMinutes)) built.scenario = { delay: { minutes: demoMinutes } };
+    return built;
+  }
+
+  function startDelayAgentRun(stopId, demoMinutes) {
+    const stop = replanStops.find((s) => s.id === stopId);
+    if (!stop) return;
+    const title = Number.isFinite(demoMinutes)
+      ? `模擬：在「${stop.name}」延誤 ${demoMinutes} 分鐘`
+      : `「${stop.name}」晚離開，調整後面的行程`;
+    const userText = Number.isFinite(demoMinutes)
+      ? `⏱ 模擬：我在「${stop.name}」延誤 ${demoMinutes} 分鐘，幫我調整後面的行程`
+      : `我在「${stop.name}」會晚一點離開，幫我調整後面的行程`;
+    startAgentRun({ type: 'delay', title, userText }, () => prepareDelayRun(stopId, demoMinutes));
+  }
+
+  function agentDelayDemo() {
+    const index = getStayingStopIndex();
+    if (index < 0) {
+      feedbackToast('要在行程進行中、停在某一站時才能模擬延誤（可以先開「展示模擬」）', 'orange');
+      return;
+    }
+    const input = document.getElementById('agentDelayMinutes');
+    const minutes = Math.max(5, Math.min(300, Math.round(Number(input && input.value) || 50)));
+    startDelayAgentRun(replanStops[index].id, minutes);
+  }
+
+  function syncAgentDelayDemoLabel() {
+    const input = document.getElementById('agentDelayMinutes');
+    const label = document.getElementById('agentDelayDemoMin');
+    if (input && label) label.textContent = String(Math.max(5, Math.min(300, Math.round(Number(input.value) || 50))));
+  }
+
   function setupAgentAssist() {
+    const delayInput = document.getElementById('agentDelayMinutes');
+    if (delayInput) delayInput.addEventListener('input', syncAgentDelayDemoLabel);
+    syncAgentDelayDemoLabel();
     refreshAgentEntryUI();
   }
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', setupAgentAssist);
