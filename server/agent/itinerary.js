@@ -297,7 +297,8 @@ function validate(trip, forecast, seaByDate) {
     if (seen.has(key) && !harbor) add(violations, 'duplicate', s, `「${s.name}」重複出現`);
     seen.set(key, true);
 
-    if (place && !harbor) {
+    // 錨點站（車站、住宿、港口）與交通站是「到那裡」，不是去參觀：不查營業時間，否則永遠跳「營業時間未知」
+    if (place && !harbor && !s.anchor && s.stopType !== 'transit') {
       if (D.accessOf(place).avoid) add(violations, 'suspended', s, `「${s.name}」目前暫停開放`);
       const h = D.hoursOn(place, date);
       if (h.status === 'closed') add(violations, 'closed', s, `「${s.name}」${date} 公休`);

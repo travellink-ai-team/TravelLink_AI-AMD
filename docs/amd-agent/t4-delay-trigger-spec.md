@@ -81,7 +81,9 @@ Authorization: Bearer <Firebase ID token>
 
 1. **程式先檢查（不呼叫 AI）**：從 `from.leaveAt` 加上到下一站的車程開始，把當天剩下的站順延，再跑既有的驗證：營業時間、車程、每天結束時間，以及新增的 **`returnTrain.departAt`、`lastFerry.departAt` 期限**（趕到車站或港口的時間必須早於期限）。
 2. **全部排得下** → 回傳只改時間的提案（`llmSkipped: true`）。
-3. **有站來不及** → 交給 gpt-oss-120b 處理，可用的方法限定為：**刪站、縮短停留**（不調換順序、不新增景點）。錨點站、`keepReason` 站、`timeLocked` 站都不能動。AI 失敗時改用規則：從固定站之前、最後面的可刪站開始刪，直到排得下（提案標 `fallback: true`）。
+3. **有站來不及** → 交給 gpt-oss-120b 處理，可用的方法限定為：**刪站、縮短停留**（不調換順序、不新增景點）。錨點站、`keepReason` 站、`timeLocked` 站都不能動。AI 失敗時改用規則：從固定站之前、最後面的可刪站開始刪，直到排得下（提案標 `fallback: true`）。**延誤不會回 `question` 事件**（2026-10-03 起後端不給 AI 詢問工具），所以用戶端不需要處理延誤的追問回覆；結果只會是 `proposal`、`no_change` 或 `error`。
+   - 用戶端送的 `endTime` 比當天錨點站結束還早時，後端會自動放寬到錨點站結束（例如收工 14:00、回程車站排 14:07 停 5 分 → 當天結束算 14:12）。
+   - 提案的第一條 `reasons` 是程式算的到站時間（「最後一站 X 幾點結束，約幾點到車站（原訂幾點）」），`summary` 也由程式依實際變更產生。
 4. 新增的站：提案裡要附上 `businessHours`、`stopType`、`lat`、`lng`、`desc`、`emoji`，用戶端套用後可以直接顯示與導航，不用再查一次 Google。
 5. 用戶端送來的 `appConflicts` 與後端重算的結果都寫進紀錄，規則有落差時比較容易發現。
 

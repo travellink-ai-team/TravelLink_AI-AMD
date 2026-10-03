@@ -80,7 +80,15 @@ function dayTrip(trip, req) {
   const d = new Date(req.leave.date + 'T00:00:00Z');
   d.setUTCDate(d.getUTCDate() - (req.day - 1));
   const stops = trip.stops.filter((s) => s.day === req.day).map((s) => ({ ...s }));
-  return { ...trip, startDate: d.toISOString().slice(0, 10), stops, days: req.day };
+  // 用戶端的收工時間可能比原本排好的錨點站還早（App 實測：endTime 14:00、回程車站排 14:07）。
+  // 錨點站時間固定、刪再多站也不會變，不放寬的話 day_end 永遠過不了，AI 只能一直問使用者。
+  let endTime = trip.endTime;
+  for (const s of stops) {
+    if (!s.anchor) continue;
+    const end = I.toMin(s.time) + (Number(s.stayMin) || 0);
+    if (!endTime || end > I.toMin(endTime)) endTime = I.toClock(end);
+  }
+  return { ...trip, startDate: d.toISOString().slice(0, 10), stops, days: req.day, ...(endTime ? { endTime } : {}) };
 }
 
 const fixedTime = (s) => s.anchor || s.keepReason || s.timeLocked;
@@ -193,8 +201,9 @@ function triggerText(req, issues, base) {
     ...issues.map((m) => '・' + m),
     '請只用 remove（刪站）或 retime 帶 stayMin（縮短停留）解決，不要新增景點。',
     '錨點站（anchor：車站、住宿、港口）與有 keepReason 的站不能刪也不能改。',
-    '先呼叫 get_trip_state 看順延後的時間，再用 propose_patch；全部解決後呼叫 present_proposal，summary 寫明刪了哪些站、哪裡縮短。',
-    'summary 與 reasons 裡的時間只能引用草稿（propose_patch 回傳的 draft、dayEnds）與上面列出的固定時間，不要把火車或船的開航時間寫成抵達時間。'
+    '先呼叫 get_trip_state 看順延後的時間，再用 propose_patch；全部解決後呼叫 present_proposal。',
+    '這個情境不能詢問使用者，也不能延後結束時間或改到隔天：一定要用刪站、縮短停留自己排出來。',
+    'summary 與 reasons 不要寫任何時刻（程式會補上幾點到車站／港口），reasons 只說明為什麼刪這站、留那站。'
   ].join('\n');
 }
 

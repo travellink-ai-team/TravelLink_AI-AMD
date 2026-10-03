@@ -101,6 +101,19 @@ const run = (trip, trig, scenario) => runAgent({ trip, trigger: trig, scenario, 
   const td = await run(twoDays, trigger(10));
   ok('第 2 天的站不在提案裡（不動到）', td.type === 'proposal' && !td.draft.stops.some((s) => s.id === 'cstop-x9'));
 
+  // ── 錨點車站不查營業時間（原本會跳「台東車站 營業時間未知」）──
+  ok('提案警告裡沒有錨點車站的營業時間', big.type === 'proposal' && !(big.warnings || []).some((w) => /台東車站/.test(w)), JSON.stringify(big.warnings));
+
+  // ── 程式算的時間結論（不讓模型自己寫「16:33 結束，符合 16:28」）──
+  ok('降級提案第一條理由是程式算的到站時間', big.type === 'proposal' && /約 \d{2}:\d{2} 到「台東車站」（原訂 19:20）/.test(big.reasons[0]), JSON.stringify(big.reasons));
+
+  // ── App 實測：收工時間比錨點車站還早（endTime 14:00、車站 14:07）──
+  const early = clone(TRIP); early.endTime = '19:00';   // 車站 19:20 開始、停 20 分 → 19:40 才結束
+  const eReq = DL.parseDelayRequest(trigger(10), I.normalizeTrip(early));
+  ok('收工時間早於錨點站 → 當天結束時間放寬到錨點站結束', DL.dayTrip(I.normalizeTrip(early), eReq).endTime === '19:40');
+  const eRes = await run(early, trigger(10));
+  ok('收工時間早於錨點站、小延誤 → 照樣只改時間，不會卡在 day_end', eRes.type === 'proposal' && eRes.retimeOnly, JSON.stringify(eRes).slice(0, 300));
+
   if (LIVE) {
     console.log('\n── live：延誤 90 分鐘，交給 gpt-oss（回程火車 19:40）──');
     const live = await runAgent({
@@ -125,6 +138,17 @@ const run = (trip, trig, scenario) => runAgent({ trip, trigger: trig, scenario, 
     ok('live：提案通過延誤驗證（營業時間、期限、固定站）', live.type === 'proposal' && DL.check(I.normalizeTrip(live.draft), base, req).ok,
       live.type === 'proposal' ? JSON.stringify(DL.check(I.normalizeTrip(live.draft), base, req).violations) : '');
     ok('live：錨點車站沒被動到', live.type === 'proposal' && live.draft.stops.find((s) => s.anchor === 'station').time === '19:20');
+    ok('live：時間結論是程式算的，摘要不含模型自己寫的時刻', live.type === 'proposal' && /到「台東車站」（原訂 19:20）/.test(live.reasons[0]) && !/\d{1,2}:\d{2}/.test(live.summary),
+      live.type === 'proposal' ? live.summary + ' | ' + live.reasons[0] : '');
+
+    // App 組員實測的情境：收工時間比回程車站還早、延誤大到要刪站 → 不可以問使用者
+    console.log('\n── live：收工 19:00 早於車站 19:20、延誤 90 分鐘（App 實測情境）──');
+    const tight = clone(TRIP); tight.endTime = '19:00';
+    const runs = [];
+    for (let i = 0; i < 3; i++) runs.push(await runAgent({ trip: tight, trigger: trigger(90), onEvent: () => {} }));
+    runs.forEach((r, i) => console.log(`   第 ${i + 1} 次：${r.type}${r.fallback ? '（規則式降級）' : ''}｜${r.summary || r.question || r.message || ''}`));
+    ok('live：延誤情境 3 次都不會問使用者', runs.every((r) => r.type !== 'question'), JSON.stringify(runs.map((r) => r.type)));
+    ok('live：3 次都產出提案', runs.every((r) => r.type === 'proposal'));
   }
 
   console.log(`\n${pass} passed, ${fail} failed`);

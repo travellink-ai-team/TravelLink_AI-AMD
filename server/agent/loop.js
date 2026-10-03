@@ -43,13 +43,13 @@ const SYSTEM_PROMPT = [
  * （例如 "unexpected tokens remaining in message header"）。這是暫時性的，
  * 同樣的對話再送一次通常就好，所以 5xx 重試最多 2 次；4xx 是請求本身的問題，不重試。
  */
-async function chatWithRetry(messages, t0) {
+async function chatWithRetry(messages, t0, tools = T.DEFINITIONS) {
   let lastErr;
   for (let attempt = 0; attempt < 3; attempt++) {
     const budget = TIMEOUT_MS - (Date.now() - t0);   // 重試也算在整次執行的總時限內
     if (budget <= 0) break;
     try {
-      return await amd.chat({ messages, tools: T.DEFINITIONS, temperature: 0.2, maxTokens: 2048, signal: AbortSignal.timeout(budget) });
+      return await amd.chat({ messages, tools, temperature: 0.2, maxTokens: 2048, signal: AbortSignal.timeout(budget) });
     } catch (err) {
       lastErr = err;
       if (!(err.status >= 500)) throw err;
@@ -170,6 +170,45 @@ function buildProposal(ctx, p) {
   };
 }
 
+// 延誤只能刪站、縮短停留：不給 ask_user（問了也只能問出違反規格的選項，例如「接受延後結束」），
+// 也不給找景點的工具。排不下就由驗證失敗走 delayFallback。
+const DELAY_TOOLS = new Set(['get_trip_state', 'check_business_hours', 'estimate_travel', 'propose_patch', 'present_proposal']);
+const DELAY_TOOL_DEFS = T.DEFINITIONS.filter((d) => DELAY_TOOLS.has(d.function && d.function.name));
+
+// 延誤提案的時間結論由程式算：模型會把「錨點站排定時間＋停留」當成結束時間，
+// 寫出「16:33 結束，符合 16:28 的車站時間」這種自相矛盾的句子。
+function delayTimingLine(ctx) {
+  const draft = ctx.draft;
+  const req = ctx.delay;
+  const stops = draft.stops;
+  const idx = stops.map((s) => Boolean(s.anchor)).lastIndexOf(true);
+  const train = req.returnTrain ? `，趕得上 ${I.toClock(req.returnTrain.min)} 的回程火車` : '';
+  const ferry = req.lastFerry ? `，趕得上 ${I.toClock(req.lastFerry.min)} 的末班船` : '';
+  if (idx < 0) return `今天約 ${I.dayEnds(draft)[req.day]} 結束${train}${ferry}`;
+  const anchor = stops[idx];
+  const prev = stops[idx - 1];
+  const from = prev || { lat: req.from.lat, lng: req.from.lng, name: req.from.name };
+  const leave = prev ? I.toMin(prev.time) + prev.stayMin : req.leave.min;
+  const move = I.travel(draft, from, anchor);
+  const arrive = leave + (Number.isFinite(move) ? move : 15);
+  const head = prev ? `最後一站「${prev.name}」${I.toClock(leave)} 結束` : `從「${req.from.name}」${I.toClock(leave)} 出發`;
+  return `${head}，約 ${I.toClock(arrive)} 到「${anchor.name}」（原訂 ${anchor.time}）${train}${ferry}`;
+}
+
+function delayWording(ctx, p) {
+  const changes = I.diffTrips(ctx.baseTrip, ctx.draft);
+  const removed = changes.filter((c) => c.type === 'remove').map((c) => `「${c.from}」`);
+  const shortened = changes.filter((c) => c.type === 'retime' && Number.isFinite(c.stayTo) && c.stayTo < c.stayFrom)
+    .map((c) => `「${c.name}」停留縮短為 ${c.stayTo} 分`);
+  const parts = [removed.length ? `刪掉${removed.join('')}` : '', ...shortened].filter(Boolean);
+  const reasons = (Array.isArray(p.reasons) ? p.reasons : []).filter((r) => !/\d{1,2}:\d{2}/.test(String(r)));
+  return {
+    ...p,
+    summary: parts.length ? parts.join('，') + '，其餘依車程順延' : p.summary,
+    reasons: [delayTimingLine(ctx), ...reasons]
+  };
+}
+
 // 延誤情境的規則式降級：從後面刪不固定的站再順延，直到排得下
 function delayFallback(ctx, why) {
   const r = DL.fallback(ctx.baseTrip, ctx.delay);
@@ -178,7 +217,7 @@ function delayFallback(ctx, why) {
   ctx.draftCheck = r.check;
   return {
     summary: r.removed.length ? `快速調整：刪掉${r.removed.map((n) => `「${n}」`).join('')}，其餘依車程順延` : '快速調整：依車程順延',
-    reasons: [why, '依時間順序自動刪站，未經 AI 推理'],
+    reasons: [delayTimingLine(ctx), why, '依時間順序自動刪站，未經 AI 推理'],
     fallback: true
   };
 }
@@ -306,7 +345,7 @@ async function runAgent({ trip: rawTrip, trigger, scenario, onEvent, onUsage }) 
     for (let call = 0; call < MAX_LLM_CALLS; call++) {
       const remaining = TIMEOUT_MS - (Date.now() - t0);
       if (remaining <= 0) throw Object.assign(new Error('timeout'), { code: 'timeout' });
-      const res = await chatWithRetry(messages, t0);
+      const res = await chatWithRetry(messages, t0, ctx.delay ? DELAY_TOOL_DEFS : T.DEFINITIONS);
       usage.llmCalls += 1;
       if (res.model) upstreamModels.add(res.model);
       if (res.usage) {
@@ -331,12 +370,14 @@ async function runAgent({ trip: rawTrip, trigger, scenario, onEvent, onUsage }) 
         toolCalls += 1;
         if (toolCalls > MAX_TOOL_CALLS) throw Object.assign(new Error('too many tool calls'), { code: 'max_steps' });
         emit({ type: 'tool_call', tool: name, label: T.labelOf(name, args) });
-        const result = await T.runTool(ctx, name, args);
+        const result = ctx.delay && !DELAY_TOOLS.has(name)
+          ? { error: `延誤調整只能刪站或縮短停留，不能用 ${name}` }
+          : await T.runTool(ctx, name, args);
         emit({ type: 'tool_result', tool: name, ok: !result.error, detail: summarizeResult(name, result) });
         messages.push({ role: 'tool', tool_call_id: c.id, content: JSON.stringify(result) });
 
         if (T.TERMINAL.has(name) && !result.error) {
-          if (name === 'present_proposal') return finish(buildProposal(ctx, result));
+          if (name === 'present_proposal') return finish(buildProposal(ctx, ctx.delay ? delayWording(ctx, result) : result));
           if (name === 'ask_user') return finish({ type: 'question', question: result.question, options: result.options });
           return finish({ type: 'no_change', reason: result.reason });
         }
