@@ -1,0 +1,798 @@
+{
+ "tripId": "my_1791040275403",
+ "title": "[DEMO] 台東市區一日遊",
+ "wizardData": {
+  "departureDate": "2026-10-08",
+  "startTime": "09:00",
+  "days": "8小時"
+ },
+ "stops": [
+  {
+   "parkWalkMin": null,
+   "transitModeManual": false,
+   "time": "09:00",
+   "placeVerified": false,
+   "order": 1,
+   "coordinateSource": null,
+   "address": "950 台東縣台東市岩灣路101巷598號",
+   "collabStopId": "cstop-1r6o797",
+   "name": "台東車站",
+   "emoji": "🚩",
+   "type": "start",
+   "stayMin": 0,
+   "duration": 0,
+   "durationLocked": false,
+   "expectedLeaveMin": null,
+   "transitMin": 13,
+   "transitMode": "car",
+   "lat": 22.79374,
+   "lng": 121.1231,
+   "scenicCoordinates": {
+    "lat": 22.79374,
+    "lng": 121.1231
+   },
+   "_lockedCoordinates": null,
+   "nearbyToiletLocations": [],
+   "mapPinId": "pin-cstop-1r6o797",
+   "manualStartMin": null,
+   "manualEndMin": null,
+   "placeId": null,
+   "businessHours": null,
+   "coordVerified": false,
+   "desc": "旅程起始點，從這裡出發。",
+   "plannerNote": "",
+   "isMergedAttraction": false,
+   "mergedSubSpots": null,
+   "mergedRadiusMeters": null,
+   "mergedMemberCoords": null,
+   "checkedInAt": null,
+   "isOutdoor": false,
+   "altNearby": null,
+   "dayIndex": 1,
+   "dayIndexLocked": false
+  },
+  {
+   "time": "",
+   "placeVerified": true,
+   "order": 2,
+   "transitModeManual": false,
+   "address": "臺東縣950臺東市華泰路300號",
+   "coordinateSource": "local_verified",
+   "parkWalkMin": null,
+   "collabStopId": "cstop-1s43q6s",
+   "name": "臺東森林公園",
+   "emoji": "🌳",
+   "type": null,
+   "stayMin": 60,
+   "duration": 60,
+   "durationLocked": true,
+   "expectedLeaveMin": null,
+   "transitMin": 17,
+   "transitMode": "car",
+   "lat": 22.768175799999998,
+   "lng": 121.15625899999999,
+   "scenicCoordinates": {
+    "lat": 22.768175799999998,
+    "lng": 121.15625899999999
+   },
+   "_lockedCoordinates": null,
+   "nearbyToiletLocations": [],
+   "mapPinId": "pin-cstop-1s43q6s",
+   "manualStartMin": null,
+   "manualEndMin": null,
+   "placeId": null,
+   "businessHours": "星期一: 07:00 – 18:00\n星期二: 07:00 – 18:00\n星期三: 07:00 – 18:00\n星期四: 07:00 – 18:00\n星期五: 07:00 – 18:00\n星期六: 07:00 – 18:00\n星期日: 07:00 – 18:00",
+   "coordVerified": true,
+   "desc": "緊鄰臺東市區的臺東森林公園，位於城市與大海的交會處，面積廣達280公頃，遼闊的園區擁有河口海濱溼地、廣大的草地與茂盛的森林等多樣景觀，眼界所及盡是讓人心情愉悅的翠綠，並有由湖水清澈見底的「琵琶湖」、賞鳥勝地「鷺鷥湖」、能舉辦各式水域運動賽事的「活水湖」等三大湖泊錯落於臺東森林公園內，每片水域都帶來不同的五感體驗，最適合騎著單車前來遊，享受與大自然共舞的時光。",
+   "plannerNote": "",
+   "isMergedAttraction": true,
+   "mergedSubSpots": [
+    "台東森林公園自行車租借站",
+    "臺東森林公園購票入口暨停車場",
+    "層山",
+    "希望之花",
+    "大客車第二停車場",
+    "眺"
+   ],
+   "mergedRadiusMeters": 774,
+   "mergedMemberCoords": [
+    {
+     "lat": 22.768175799999998,
+     "lng": 121.15625899999999
+    },
+    {
+     "lat": 22.7633241,
+     "lng": 121.1588493
+    },
+    {
+     "lat": 22.7629772,
+     "lng": 121.1583571
+    },
+    {
+     "lat": 22.7635815,
+     "lng": 121.1605118
+    },
+    {
+     "lat": 22.764438,
+     "lng": 121.1509341
+    },
+    {
+     "lat": 22.7623422,
+     "lng": 121.1585499
+    },
+    {
+     "lat": 22.7641508,
+     "lng": 121.1510853
+    }
+   ],
+   "checkedInAt": null,
+   "isOutdoor": true,
+   "altNearby": [
+    {
+     "isOutdoor": true,
+     "lng": 121.15625899999999,
+     "lat": 22.768175799999998,
+     "desc": "在台東森林公園內的琵琶湖，湖水清澈見底，周圍綠意盎然。您可以租借自行車環湖，或沿著湖畔步道悠閒漫步，享受大自然的寧靜與芬芳。這裡絕對是放鬆身心、捕捉美麗風景的絕佳地點，讓您沉浸在台東的自然故事中。",
+     "distM": 0,
+     "rating": 4.4,
+     "name": "臺東森林公園 (琵琶湖)"
+    },
+    {
+     "lng": 121.1647656,
+     "lat": 22.7652114,
+     "rating": 4.5,
+     "name": "活水湖",
+     "distM": 932,
+     "isOutdoor": true,
+     "desc": "活水湖位於森林公園旁，湖面平靜，是觀賞水上活動或獨自散步的好地方。在這裡，您可以沿著湖畔小徑放鬆身心，享受獨有的寧靜與美景。"
+    },
+    {
+     "rating": 4.2,
+     "name": "榕樹下米苔目",
+     "lng": 121.14914309999999,
+     "isOutdoor": true,
+     "desc": "品嚐台東最經典的早餐，體驗在地人早晨的熱情與活力。米苔目Q彈，搭配獨特肉燥與柴魚湯頭，開啟美好的一天。",
+     "lat": 22.7627763,
+     "distM": 945
+    },
+    {
+     "lng": 121.1517852,
+     "lat": 22.758724599999997,
+     "desc": "鄰近寶町的日式建築群，保留了完整的歷史紋理。獨自穿梭在建築間，能深度體會台東城市轉型的文化印記。",
+     "isOutdoor": true,
+     "rating": 4.4,
+     "distM": 1147,
+     "name": "臺東北町建築群"
+    },
+    {
+     "lng": 121.15182,
+     "rating": null,
+     "desc": "民權里日式建築宿舍群約建於1940年日治時期(昭和15年)左右，2007年公告登錄成為歷史建築。2017年獲得文化部再造歷史現場補助計畫，修復10棟13戶，並於2020年完工，成為台灣目前保留完整的日本官員宿舍之一。",
+     "lat": 22.75869,
+     "distM": 1149,
+     "name": "臺東市北町日式建築宿舍群",
+     "isOutdoor": true
+    },
+    {
+     "isOutdoor": false,
+     "desc": "日式老宿舍群改建的藝文空間，木造建築充滿懷舊氛圍，是拍照家捕捉光影與歷史感的秘密基地。",
+     "lng": 121.15322110000001,
+     "distM": 1159,
+     "name": "寶町藝文中心 Boting Art Center",
+     "rating": 4,
+     "lat": 22.7581386
+    }
+   ],
+   "dayIndex": 1,
+   "dayIndexLocked": false
+  },
+  {
+   "order": 3,
+   "placeVerified": true,
+   "parkWalkMin": null,
+   "transitModeManual": false,
+   "coordinateSource": "local_verified",
+   "time": "",
+   "address": "臺東縣950臺東市文化公園路200號",
+   "collabStopId": "cstop-v3cdjd",
+   "name": "卑南遺址公園",
+   "emoji": "🏺",
+   "type": null,
+   "stayMin": 55,
+   "duration": 55,
+   "durationLocked": true,
+   "expectedLeaveMin": null,
+   "transitMin": 13,
+   "transitMode": "car",
+   "lat": 22.7918745,
+   "lng": 121.115824,
+   "scenicCoordinates": {
+    "lat": 22.7918745,
+    "lng": 121.115824
+   },
+   "_lockedCoordinates": null,
+   "nearbyToiletLocations": [],
+   "mapPinId": "pin-cstop-v3cdjd",
+   "manualStartMin": null,
+   "manualEndMin": null,
+   "placeId": null,
+   "businessHours": "星期一: 休息\n星期二: 09:00 – 17:00\n星期三: 09:00 – 17:00\n星期四: 09:00 – 17:00\n星期五: 09:00 – 17:00\n星期六: 09:00 – 17:00\n星期日: 09:00 – 17:00",
+   "coordVerified": true,
+   "desc": "卑南遺址公園是座同時有著史前文化、原住民文化、自然景觀的公園。開放式的環境及博物館，並繼續於此進行考古工作，同時也進行展示及保存，為卑南遺址公園的最大特色。遊客可在展示廳瞭解卑南遺址與文化；可至考古現場以及月形石柱觀看千年前的遺址及遺跡；也可至公園兩側的瞭望台遠眺公園環境，若幸運的話甚至還可以看見考古的發掘作業。戶外環境則重現了1:1比例的史前家屋，以及卑南族的少年會所和家屋建築。遺址公園亦為開放式綠地，是遊客遊憩、民眾休閒的好去處。卑南遺址為臺灣具有最完整史前聚落型態與資料之遺址，也是環太平洋及東南亞地區規模最大的石板棺墓葬群遺址。公園內的草坪寬闊，亦設有展示廳及表演廣場，另外也有天然植物林、考古現場參觀等路線可以安排遊覽。踏上瞭望台，卑南大溪、利吉惡地、臺東市區景觀盡收眼底，再漫步於開闊...",
+   "plannerNote": "",
+   "isMergedAttraction": true,
+   "mergedSubSpots": [
+    "石柱地景藝術",
+    "西側瞭望臺",
+    "卑南遺址(考古現場)",
+    "月形石柱(國定卑南考古遺址)",
+    "卑南遺址公園東側瞭望台"
+   ],
+   "mergedRadiusMeters": 639,
+   "mergedMemberCoords": [
+    {
+     "lat": 22.7918745,
+     "lng": 121.115824
+    },
+    {
+     "lat": 22.7934878,
+     "lng": 121.1171933
+    },
+    {
+     "lat": 22.794195,
+     "lng": 121.1154082
+    },
+    {
+     "lat": 22.7915013,
+     "lng": 121.1199955
+    },
+    {
+     "lat": 22.7922296,
+     "lng": 121.1210663
+    },
+    {
+     "lat": 22.7939895,
+     "lng": 121.1207706
+    }
+   ],
+   "checkedInAt": null,
+   "isOutdoor": true,
+   "altNearby": [
+    {
+     "lat": 22.7915013,
+     "name": "卑南遺址",
+     "lng": 121.11999549999999,
+     "rating": 4.4,
+     "desc": "近距離觀察巨大的月形石柱與木構建築，這裡是極佳的攝影題材，也能透過史前文化遺跡感受台東深厚的歷史底蘊。",
+     "isOutdoor": true,
+     "distM": 430
+    },
+    {
+     "name": "南王部落",
+     "isOutdoor": true,
+     "distM": 543,
+     "lng": 121.11094,
+     "desc": "",
+     "rating": null,
+     "lat": 22.78999
+    },
+    {
+     "lng": 121.10852,
+     "lat": 22.811,
+     "distM": 2255,
+     "name": "頂岩灣四格山步道",
+     "isOutdoor": true,
+     "rating": 4.5,
+     "desc": "四格山是台東平原的制高點，靠近太平洋，在海風吹拂下少有霾害及雲霧。輕鬆好走的步道以及遼闊的獨特美景吸引許多人來此登山健行。"
+    },
+    {
+     "isOutdoor": true,
+     "rating": null,
+     "name": "下賓朗部落",
+     "lng": 121.09499,
+     "desc": "",
+     "distM": 2355,
+     "lat": 22.8008
+    },
+    {
+     "lat": 22.801240900000003,
+     "isOutdoor": false,
+     "desc": "位在下賓朗部落附近的卑南遊客中心，以全新亮眼的姿態，重新再為旅人服務，明亮寬敞的內部環境，擺設幾處舒適的休息區，讓人可以悠閒閱讀書籍、旅遊摺頁，規劃縱谷精彩又有趣的旅程，如果在縱谷旅行時有遇到問題，不妨詢問服務人員，請他為你講述在地人才知道",
+     "lng": 121.0947647,
+     "distM": 2397,
+     "rating": 5,
+     "name": "卑南遊客中心"
+    },
+    {
+     "desc": "卑南圳堪稱臺東最大的水利工程，與鄰近的利吉惡地、小黃山位在相同的地帶。卑南大圳引進卑南溪，將之灌溉整個臺東平原，全長9公里餘，呈現「排梳型」的分布結構，是一條水利兼具防洪功能的灌溉溝渠。",
+     "distM": 2409,
+     "isOutdoor": true,
+     "rating": 4,
+     "name": "卑南大圳水利公園",
+     "lat": 22.806865,
+     "lng": 121.132786
+    }
+   ],
+   "dayIndex": 1,
+   "dayIndexLocked": false
+  },
+  {
+   "placeVerified": true,
+   "costNote": "$200 內",
+   "costPerPerson": 101,
+   "parkWalkMin": null,
+   "address": "950台灣臺東縣臺東市中正里中華路一段362號",
+   "time": "",
+   "coordinateSource": "local_verified",
+   "order": 4,
+   "transitModeManual": false,
+   "collabStopId": "cstop-mnqw84",
+   "name": "榕樹下米苔目(中華路創始老店-別無分店)",
+   "emoji": "🍜",
+   "type": null,
+   "stayMin": 55,
+   "duration": 55,
+   "durationLocked": true,
+   "expectedLeaveMin": null,
+   "transitMin": 13,
+   "transitMode": "car",
+   "lat": 22.7547249,
+   "lng": 121.1533815,
+   "scenicCoordinates": {
+    "lat": 22.7547249,
+    "lng": 121.1533815
+   },
+   "_lockedCoordinates": null,
+   "nearbyToiletLocations": [],
+   "mapPinId": "pin-cstop-mnqw84",
+   "manualStartMin": null,
+   "manualEndMin": null,
+   "placeId": null,
+   "businessHours": "星期一: 10:00 – 14:30, 15:30 – 20:30\n星期二: 10:00 – 14:30, 15:30 – 20:30\n星期三: 10:00 – 14:30, 15:30 – 20:30\n星期四: 10:00 – 14:30, 15:30 – 20:30\n星期五: 10:00 – 14:30, 15:30 – 20:30\n星期六: 10:00 – 14:30, 15:30 – 20:30\n星期日: 10:00 – 14:30, 15:30 – 20:30",
+   "coordVerified": true,
+   "desc": "",
+   "plannerNote": "",
+   "isMergedAttraction": false,
+   "mergedSubSpots": null,
+   "mergedRadiusMeters": null,
+   "mergedMemberCoords": null,
+   "checkedInAt": null,
+   "isOutdoor": true,
+   "altNearby": [
+    {
+     "rating": 4.1,
+     "lat": 22.7528907,
+     "desc": "品嚐並選購台東代表性的伴手禮。酥脆香甜的地瓜酥，是台東人傳承的古早味，感受在地職人的用心與故事。",
+     "isOutdoor": true,
+     "lng": 121.1534879,
+     "distM": 204,
+     "name": "楊記家傳地瓜酥-大同店"
+    },
+    {
+     "distM": 246,
+     "lat": 22.7552485,
+     "desc": "國立臺東生活美學館，地點在臺東縣政府對街，曾是日治時期的臺東武德殿，現已成為台東提倡美學教育，深耕藝術環境的藝文據點。漫步在光線明亮的場館裡，展間內展示在地藝術家的個人作品，或主題聯展。從繪畫到雕塑，從多媒體創作到複合媒材的作品，透過作品，",
+     "isOutdoor": false,
+     "lng": 121.1510514,
+     "name": "國立臺東生活美學館",
+     "rating": 4.3
+    },
+    {
+     "lat": 22.7553,
+     "isOutdoor": true,
+     "name": "鐵花村音樂聚落",
+     "rating": 4.5,
+     "lng": 121.1504,
+     "distM": 312,
+     "desc": "鐵花村音樂聚落介紹"
+    },
+    {
+     "name": "台東天后宮",
+     "distM": 320,
+     "isOutdoor": false,
+     "lng": 121.15548,
+     "desc": "台東天后宮建廟始末，可追溯到光緒15年(1889年)，時任清朝提督的張兆連，因感謝在大庄事件中，天上聖母賜湧泉為官軍解圍，捐出月俸提議建廟，並獲得光緒皇帝所賜「佑誠昭靈」匾額一幅，至今仍懸掛於天后宮中，是清代東台灣唯一的媽祖官廟。台東天后宮",
+     "rating": null,
+     "lat": 22.75685
+    },
+    {
+     "isOutdoor": false,
+     "name": "臺東天后宮",
+     "rating": null,
+     "desc": "台東具代表性的官廟，承載了移民信仰歷史。在此觀察精緻的建築工藝，感受喧囂市區中的平靜氛圍。",
+     "lng": 121.1554844,
+     "distM": 320,
+     "lat": 22.7568476
+    },
+    {
+     "distM": 380,
+     "desc": "日式老宿舍群改建的藝文空間，木造建築充滿懷舊氛圍，是拍照家捕捉光影與歷史感的秘密基地。",
+     "isOutdoor": false,
+     "lng": 121.15322110000001,
+     "name": "寶町藝文中心 Boting Art Center",
+     "lat": 22.7581386,
+     "rating": 4
+    }
+   ],
+   "dayIndex": 1,
+   "dayIndexLocked": false
+  },
+  {
+   "placeVerified": true,
+   "address": "臺東縣950臺東市加路蘭遊憩區",
+   "order": 5,
+   "time": "",
+   "coordinateSource": "local_verified",
+   "transitModeManual": false,
+   "parkWalkMin": null,
+   "collabStopId": "cstop-dvi98q",
+   "name": "加路蘭",
+   "emoji": "🌊",
+   "type": null,
+   "stayMin": 45,
+   "duration": 45,
+   "durationLocked": true,
+   "expectedLeaveMin": null,
+   "transitMin": 15,
+   "transitMode": "car",
+   "lat": 22.812171,
+   "lng": 121.187132,
+   "scenicCoordinates": {
+    "lat": 22.812171,
+    "lng": 121.187132
+   },
+   "_lockedCoordinates": null,
+   "nearbyToiletLocations": [],
+   "mapPinId": "pin-cstop-dvi98q",
+   "manualStartMin": null,
+   "manualEndMin": null,
+   "placeId": null,
+   "businessHours": "全天候開放",
+   "coordVerified": true,
+   "desc": "加路蘭鄰近富岡地質公園(小野柳)，有寬廣的草坪、涼亭、解說站以及觀景台，是東海岸旅行的最佳休息站，區內延續著風化、海蝕景觀，海岸線條紋路特殊，草地上也有不少漂流木裝置藝術作品，是東海岸之旅必遊之地。",
+   "plannerNote": "",
+   "isMergedAttraction": false,
+   "mergedSubSpots": null,
+   "mergedRadiusMeters": null,
+   "mergedMemberCoords": null,
+   "checkedInAt": null,
+   "isOutdoor": true,
+   "altNearby": [
+    {
+     "distM": 1152,
+     "desc": "",
+     "name": "海賊灣沙灘",
+     "isOutdoor": true,
+     "lat": 22.82194,
+     "lng": 121.19086,
+     "rating": null
+    },
+    {
+     "name": "加路蘭遊憩區",
+     "isOutdoor": true,
+     "rating": 4.5,
+     "lng": 121.19699739999999,
+     "desc": "結合漂流木藝術與無敵海景的景點。沿著海岸步道快走運動，感受強勁的海風與太平洋的波瀾，是台東最具代表性的明信片等級美景。",
+     "distM": 1200,
+     "lat": 22.8063665
+    },
+    {
+     "distM": 2060,
+     "lat": 22.7956565,
+     "isOutdoor": false,
+     "desc": "遊客中心內有大量豐富的地質資料，包含小野柳特殊的地質景觀，及海岸山脈形成與演進的過程，遊客可以先透過小型的小野柳模型，初步對岩石區域有概念，再到小野柳參訪會更加了解。",
+     "lng": 121.19624580000001,
+     "rating": 4.3,
+     "name": "小野柳遊客中心"
+    },
+    {
+     "lng": 121.18611,
+     "distM": 2072,
+     "lat": 22.83078,
+     "desc": "杉原灣是台東縣唯一的沙灘。除了面積廣大之外，還具有完整的珊瑚礁，甚至是罕見的貝氏耳紋珊瑚，民眾可盡情在此享受夏日風情。",
+     "isOutdoor": true,
+     "rating": 4.7,
+     "name": "杉原灣"
+    },
+    {
+     "desc": "",
+     "distM": 2216,
+     "rating": null,
+     "lng": 121.18521,
+     "name": "巴沙哇力部落",
+     "isOutdoor": true,
+     "lat": 22.79232
+    },
+    {
+     "isOutdoor": true,
+     "lat": 22.7947736,
+     "rating": 4.4,
+     "desc": "位於富岡漁港北方海域，是東部海岸最南端的風景據點，因為地形和岩石在種類上，與北海岸的野柳外貌相似，因此被稱為「小野柳」。天氣晴朗時，從富岡地質公園 (小野柳)可以清楚地看見約33公里外的綠島，以及富岡漁港出航蘭嶼的交通船！",
+     "lng": 121.1981802,
+     "distM": 2242,
+     "name": "富岡地質公園 (小野柳)"
+    }
+   ],
+   "dayIndex": 1,
+   "dayIndexLocked": false
+  },
+  {
+   "placeVerified": true,
+   "parkWalkMin": null,
+   "coordinateSource": "local_verified",
+   "transitModeManual": false,
+   "address": "臺東縣950臺東市浙江路350號",
+   "order": 6,
+   "time": "",
+   "collabStopId": "cstop-f7qqjn",
+   "name": "臺東美術館",
+   "emoji": "🎨",
+   "type": null,
+   "stayMin": 60,
+   "duration": 60,
+   "durationLocked": true,
+   "expectedLeaveMin": null,
+   "transitMin": 5,
+   "transitMode": "car",
+   "lat": 22.764304,
+   "lng": 121.1499119,
+   "scenicCoordinates": {
+    "lat": 22.764304,
+    "lng": 121.1499119
+   },
+   "_lockedCoordinates": null,
+   "nearbyToiletLocations": [],
+   "mapPinId": "pin-cstop-f7qqjn",
+   "manualStartMin": null,
+   "manualEndMin": null,
+   "placeId": null,
+   "businessHours": "星期一: 休息\n星期二: 09:00 – 12:00, 13:30 – 17:00\n星期三: 09:00 – 12:00, 13:30 – 17:00\n星期四: 09:00 – 12:00, 13:30 – 17:00\n星期五: 09:00 – 12:00, 13:30 – 17:00\n星期六: 09:00 – 12:00, 13:30 – 17:00\n星期日: 09:00 – 12:00, 13:30 – 17:00",
+   "coordVerified": true,
+   "desc": "2007年啟用的臺東美術館，是全國唯一的縣級美術館，這是一座小而美，結合藝術、產業、觀光的展覽空間，兩期館區的完善規劃，動靜活動皆宜，創造一處貼近市民又能感受藝術薰陶的知性空間。",
+   "plannerNote": "",
+   "isMergedAttraction": false,
+   "mergedSubSpots": null,
+   "mergedRadiusMeters": null,
+   "mergedMemberCoords": null,
+   "checkedInAt": null,
+   "isOutdoor": false,
+   "altNearby": [
+    {
+     "desc": "品嚐台東最經典的早餐，體驗在地人早晨的熱情與活力。米苔目Q彈，搭配獨特肉燥與柴魚湯頭，開啟美好的一天。",
+     "rating": 4.2,
+     "name": "榕樹下米苔目",
+     "distM": 187,
+     "lat": 22.7627763,
+     "isOutdoor": true,
+     "lng": 121.14914309999999
+    },
+    {
+     "desc": "鄰近寶町的日式建築群，保留了完整的歷史紋理。獨自穿梭在建築間，能深度體會台東城市轉型的文化印記。",
+     "distM": 649,
+     "lng": 121.1517852,
+     "rating": 4.4,
+     "name": "臺東北町建築群",
+     "isOutdoor": true,
+     "lat": 22.758724599999997
+    },
+    {
+     "distM": 654,
+     "lat": 22.75869,
+     "desc": "民權里日式建築宿舍群約建於1940年日治時期(昭和15年)左右，2007年公告登錄成為歷史建築。2017年獲得文化部再造歷史現場補助計畫，修復10棟13戶，並於2020年完工，成為台灣目前保留完整的日本官員宿舍之一。",
+     "rating": null,
+     "lng": 121.15182,
+     "isOutdoor": true,
+     "name": "臺東市北町日式建築宿舍群"
+    },
+    {
+     "lat": 22.7581386,
+     "name": "寶町藝文中心 Boting Art Center",
+     "rating": 4,
+     "lng": 121.15322110000001,
+     "distM": 765,
+     "isOutdoor": false,
+     "desc": "日式老宿舍群改建的藝文空間，木造建築充滿懷舊氛圍，是拍照家捕捉光影與歷史感的秘密基地。"
+    },
+    {
+     "desc": "老建築總是帶給人溫潤的歷史感，寶町藝文中心是日式建築活化的絕佳例子，前身是舊市長官舍建築群的寶町藝文中心。整建完成後，風華再現，為臺東市又增添一處值得細細品味的藝文空間。",
+     "rating": 4,
+     "distM": 765,
+     "name": "寶町藝文中心",
+     "lat": 22.75814,
+     "isOutdoor": false,
+     "lng": 121.15322
+    },
+    {
+     "rating": 4.4,
+     "lat": 22.768175799999998,
+     "desc": "在台東森林公園內的琵琶湖，湖水清澈見底，周圍綠意盎然。您可以租借自行車環湖，或沿著湖畔步道悠閒漫步，享受大自然的寧靜與芬芳。這裡絕對是放鬆身心、捕捉美麗風景的絕佳地點，讓您沉浸在台東的自然故事中。",
+     "isOutdoor": true,
+     "lng": 121.15625899999999,
+     "distM": 780,
+     "name": "臺東森林公園 (琵琶湖)"
+    }
+   ],
+   "dayIndex": 1,
+   "dayIndexLocked": false
+  },
+  {
+   "placeVerified": true,
+   "coordinateSource": "local_verified",
+   "address": "",
+   "parkWalkMin": null,
+   "transitModeManual": false,
+   "time": "",
+   "order": 7,
+   "collabStopId": "cstop-15tf899",
+   "name": "鯉魚山",
+   "emoji": "⛰️",
+   "type": null,
+   "stayMin": 40,
+   "duration": 40,
+   "durationLocked": true,
+   "expectedLeaveMin": null,
+   "transitMin": 13,
+   "transitMode": "car",
+   "lat": 22.7554151,
+   "lng": 121.1418512,
+   "scenicCoordinates": {
+    "lat": 22.7554151,
+    "lng": 121.1418512
+   },
+   "_lockedCoordinates": null,
+   "nearbyToiletLocations": [],
+   "mapPinId": "pin-cstop-15tf899",
+   "manualStartMin": null,
+   "manualEndMin": null,
+   "placeId": null,
+   "businessHours": "星期一: 11:00 – 21:00\n星期二: 11:00 – 21:00\n星期三: 11:00 – 21:00\n星期四: 11:00 – 21:00\n星期五: 11:00 – 21:00\n星期六: 11:00 – 21:00\n星期日: 11:00 – 21:00",
+   "coordVerified": true,
+   "desc": "午餐安排在此，餐廳提供多樣化的義大利麵與燉飯。針對您的需求，建議選擇雞肉或牛肉系列，避開海鮮品項。環境舒適且消費平實。市中心正氣路車位較少，建議預留尋找付費停車場的時間。",
+   "plannerNote": "",
+   "isMergedAttraction": true,
+   "mergedSubSpots": [
+    "鯉魚山公園",
+    "鯉首觀景台",
+    "鯉魚山-嶺背第二觀景台",
+    "臺東龍鳳佛堂",
+    "台東鐵馬道",
+    "背嶺觀景平台"
+   ],
+   "mergedRadiusMeters": 296,
+   "mergedMemberCoords": [
+    {
+     "lat": 22.7554151,
+     "lng": 121.1418512
+    },
+    {
+     "lat": 22.755565,
+     "lng": 121.142427
+    },
+    {
+     "lat": 22.7563613,
+     "lng": 121.1411238
+    },
+    {
+     "lat": 22.7538615,
+     "lng": 121.1423081
+    },
+    {
+     "lat": 22.7541735,
+     "lng": 121.1432664
+    },
+    {
+     "lat": 22.7560388,
+     "lng": 121.1437649
+    },
+    {
+     "lat": 22.75347529999999,
+     "lng": 121.1420271
+    }
+   ],
+   "checkedInAt": null,
+   "isOutdoor": true,
+   "altNearby": [
+    {
+     "rating": 4.1,
+     "name": "鯉魚山公園",
+     "isOutdoor": true,
+     "lng": 121.142427,
+     "desc": "鯉魚山是一座位於臺東市中心的丘陵，標高約75公尺，擁有優越的天然環境與開闊視野，晴天時能遠眺綠島甚至是蘭嶼。這裡是在地居民的休閒綠地，無論是清晨或黃昏，站在山頂都能享受大自然的壯麗景觀，成為放鬆心情的好場所。 鯉魚山公園內設有長約1.7公里",
+     "distM": 61,
+     "lat": 22.755565
+    },
+    {
+     "distM": 200,
+     "desc": "鯉魚山公園旁，獨自感受寺廟的莊嚴與寧靜，欣賞傳統建築之美，是沉澱心靈的好去處，也能拍下獨特的建築風格。",
+     "isOutdoor": false,
+     "rating": 4.5,
+     "lng": 121.1432664,
+     "name": "臺東龍鳳佛堂",
+     "lat": 22.7541735
+    },
+    {
+     "lat": 22.75604,
+     "distM": 210,
+     "isOutdoor": true,
+     "desc": "臺東環市自行車道，又稱為山海鐵馬道，路線總長達21公里，沿線風光包含了臺東舊火車站、鯉魚山、舊鐵道路廊，接著由卑南大圳轉至水利公園，再沿著卑南溪抵達臺東森林公園、臺東海濱公園至太平溪…等。是來臺東不可錯過的休閒樂活行程。",
+     "lng": 121.14378,
+     "rating": 4,
+     "name": "臺東環市自行車道(山海鐵馬道)"
+    },
+    {
+     "lng": 121.14461179999999,
+     "lat": 22.7565427,
+     "desc": "探索臺東的藝術展覽，沉浸在當地的文化氛圍中，為獨旅增添藝術氣息。這裡常有不同的展覽，提供豐富的視覺與心靈饗宴。",
+     "isOutdoor": false,
+     "distM": 310,
+     "rating": 4.5,
+     "name": "臺東藝文中心"
+    },
+    {
+     "name": "臺東縣立圖書館",
+     "isOutdoor": false,
+     "rating": 4.3,
+     "desc": "在書香中尋求片刻的寧靜，瀏覽在地文化書籍，或只是享受一個安靜的閱讀空間。圖書館是獨旅者感受當地文化、沉澱思緒的理想場所。",
+     "lng": 121.1450756,
+     "distM": 343,
+     "lat": 22.756240899999998
+    },
+    {
+     "desc": "深入了解台東的歷史變遷與人文故事，透過展覽與老建築，獨自沉浸在時光迴廊中，感受這座城市的深度與溫度。",
+     "distM": 384,
+     "rating": null,
+     "name": "臺東故事館",
+     "lat": 22.75406,
+     "isOutdoor": false,
+     "lng": 121.14529879999999
+    }
+   ],
+   "dayIndex": 1,
+   "dayIndexLocked": false
+  },
+  {
+   "time": "",
+   "transitModeManual": false,
+   "parkWalkMin": null,
+   "placeVerified": false,
+   "address": "950 台東縣台東市岩灣路101巷598號",
+   "coordinateSource": null,
+   "order": 8,
+   "collabStopId": "cstop-1pa48cl",
+   "name": "台東車站",
+   "emoji": "🏁",
+   "type": "end",
+   "stayMin": 0,
+   "duration": 0,
+   "durationLocked": false,
+   "expectedLeaveMin": null,
+   "transitMin": null,
+   "transitMode": "car",
+   "lat": 22.79374,
+   "lng": 121.1231,
+   "scenicCoordinates": {
+    "lat": 22.79374,
+    "lng": 121.1231
+   },
+   "_lockedCoordinates": null,
+   "nearbyToiletLocations": [],
+   "mapPinId": "pin-cstop-1pa48cl",
+   "manualStartMin": null,
+   "manualEndMin": null,
+   "placeId": null,
+   "businessHours": null,
+   "coordVerified": false,
+   "desc": "旅程結束點，回到這裡。",
+   "plannerNote": "",
+   "isMergedAttraction": false,
+   "mergedSubSpots": null,
+   "mergedRadiusMeters": null,
+   "mergedMemberCoords": null,
+   "checkedInAt": null,
+   "isOutdoor": false,
+   "altNearby": null,
+   "dayIndex": 1,
+   "dayIndexLocked": false
+  }
+ ]
+}
