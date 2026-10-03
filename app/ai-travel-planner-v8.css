@@ -8644,6 +8644,8 @@ button.notif-item { cursor: pointer; }
 .agent-demo-fields input { font: inherit; font-size: 13px; padding: 3px 6px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); }
 .agent-demo-fields input[type="number"] { width: 58px; }
 .agent-demo-note { margin-top: 6px; font-size: 12px; color: var(--ink3); text-wrap: pretty; }
+/* 手機抽屜只有 72vh，展示面板展開時壓到 26vh、說明文字收掉，對話區至少留一半 */
+@media (max-width: 480px) { .agent-demo { max-height: 26vh; } .agent-demo-note { display: none; } }
 
 .agent-run { margin-top: 14px; border-top: 1px solid var(--border); padding-top: 12px; min-width: 0; }
 .agent-run-head { display: flex; align-items: center; gap: 8px; }
