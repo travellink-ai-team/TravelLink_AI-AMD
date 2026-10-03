@@ -8742,3 +8742,7 @@ button.notif-item { cursor: pointer; }
 .agent-demo-delay input { width: 64px; font: inherit; font-size: 13px; padding: 3px 6px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); }
 .agent-demo-btn { white-space: nowrap; flex-shrink: 0; border: 1px solid #c4b5fd; background: #fff; color: #5b21b6; font-weight: 700; font-size: 13px; border-radius: 10px; padding: 5px 12px; cursor: pointer; }
 .agent-demo-btn:disabled { opacity: .5; cursor: not-allowed; }
+
+/* ── AI 隨行管家：聊天建議的確認卡（套用前不改行程）── */
+.chat-action-confirm .agent-notice { margin-top: 10px; }
+.chat-action-confirm .agent-chg-tag { background: #e0ecff; color: #1d4ed8; }
