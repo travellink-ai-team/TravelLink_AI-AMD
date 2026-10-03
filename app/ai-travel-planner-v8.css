@@ -3591,6 +3591,12 @@ body.prototype-mode .prototype-id-chip {
     right: 16px;
     transform: translateY(0);
   }
+
+  /* 底部切換列（z 260/258）比抽屜（z 200）高，會蓋住輸入框；抽屜開著時先收起 */
+  body.ai-open .mobile-view-switch,
+  body.ai-open .mobile-role-switch {
+    display: none;
+  }
 }
 
 /* 「說明」分頁有桌機版與手機版兩套內容。平板走縮小版桌機版面，

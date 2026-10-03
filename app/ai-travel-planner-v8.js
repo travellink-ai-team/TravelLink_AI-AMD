@@ -11108,7 +11108,7 @@
     if (index < 0 || index !== getStayingStopIndex()) return;
     const stop = replanStops[index];
     const row = buildReplanSchedule()[index];
-    const now = clockToScheduleMinutes(new Date(), row.dayIndex, row.start);
+    const now = clockToScheduleMinutes(new Date(getTripRuntimeNow()), row.dayIndex, row.start); // 展示模擬時用虛擬時鐘，否則「再待 N 分」會從真實時間算
     document.getElementById('stayModalTitle').textContent = '🕒 預計什麼時候離開？';
     document.getElementById('stayModalSub').textContent =
       `${stop.name || ''} · 原訂停留 ${formatStayMinutes(stop.stayMin)} · 目前預計 ${minutesToClock(row.end)} 離開`;
