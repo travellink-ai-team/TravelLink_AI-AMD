@@ -14,6 +14,7 @@ const line = (k, v) => console.log(('  ' + k).padEnd(26) + v);
 (async () => {
   console.log(`時間：${new Date().toLocaleString('zh-TW', { timeZone: 'Asia/Taipei' })}`);
   console.log(`AI_PROVIDER=${process.env.AI_PROVIDER || '(未設定)'}　端點：${masked}`);
+  console.log(`備援代理：${amd.hasFallback() ? '已設定（直連連不上會自動切換）' : '未設定'}`);
   try {
     const ip = await fetch('https://api.ipify.org', { signal: AbortSignal.timeout(5000) }).then((r) => r.text());
     console.log(`本機對外 IP：${ip}`);

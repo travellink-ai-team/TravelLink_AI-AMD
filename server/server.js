@@ -1050,18 +1050,13 @@ async function proxyToAmdLlm(req, res, upstreamPath, run) {
     return res.status(err.status || 400).json({ error: err.message || 'invalid request' });
   }
 
-  // 只限制「等到回應標頭」的時間：IP 不在白名單時連線會一直掛著。
+  // 只限制「等到回應標頭」的時間（含直連失敗後改走備援代理的那一次）。
   // 開始收流後就不設限，長行程串流本來就可能跑很久。
   const controller = new AbortController();
   const connectTimer = setTimeout(() => controller.abort(), 90 * 1000);
   let upstream;
   try {
-    upstream = await fetch(amdLlm.chatCompletionsUrl(), {
-      method: 'POST',
-      headers: amdLlm.upstreamHeaders(),
-      body: JSON.stringify(body),
-      signal: controller.signal
-    });
+    ({ response: upstream } = await amdLlm.postChatCompletions(JSON.stringify(body), { signal: controller.signal }));
   } catch (err) {
     console.error('[proxy] amd llm upstream fetch 失敗：', err && (err.name === 'AbortError' ? '連線逾時' : err.message));
     if (run) genRuns.markUpstreamError(run);
@@ -1435,7 +1430,8 @@ app.listen(PORT, '127.0.0.1', () => {
   console.log(`[proxy] 代理已啟動 http://127.0.0.1:${PORT}（僅本機；對外請經 nginx /api/）`);
   console.log('[proxy] /api/vertex：需登入 + 20req/10min/IP；/api/tdx：60req/10min/IP；/api/cwa：60req/10min/IP＋10min 快取');
   if (amdLlm.isEnabled()) {
-    console.log('[proxy] AI_PROVIDER=amd：文字生成改走 AMD gpt-oss-120b；圖片生成仍走 Vertex');
+    console.log('[proxy] AI_PROVIDER=amd：文字生成改走 AMD gpt-oss-120b；圖片生成仍走 Vertex'
+      + (amdLlm.hasFallback() ? '；直連連不上時自動改走備援代理' : '；未設定備援代理'));
   } else if (String(process.env.AI_PROVIDER || '').trim().toLowerCase() === 'amd') {
     console.warn('[proxy] AI_PROVIDER=amd 但缺少 AMD_LLM_BASE_URL，文字生成仍走 Vertex');
   }

@@ -519,4 +519,5 @@ netstat -an | findstr ":3001"
   Register-ScheduledTask -TaskName "TravelLinkAI-AMD Proxy Autostart" -Action $action -Trigger $trigger -Force
   ```
 - **控制台**：`TravelLink_AI-AMD\server\proxy-control.bat` 管 3011；舊網站的代理用 `UIUX\server` 那一份。
+- **AMD 端點備援**：`server/.env` 設了 `AMD_LLM_FALLBACK_BASE_URL`／`AMD_LLM_FALLBACK_API_KEY`（組員 VM 的反向代理，網址與金鑰不進 repo）時，直連工研院連不上或回 401/403 會**自動**改走備援，5 分鐘後再試直連，切換與恢復都會寫進 `server/logs/proxy.out.log`／`proxy.err.log`。改 `.env` 後要重啟 3011 代理。測試：`node server/test/amd-failover.test.js`（本機假伺服器，不打真端點）。
 - **外部設定（Console）**：Firebase Auth 授權網域、Google Maps 瀏覽器金鑰的 HTTP referrer 都要加上 `travel-link-amd.duckdns.org`。工研院端點看的是 IP，不用改。

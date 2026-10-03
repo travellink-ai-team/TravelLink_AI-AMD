@@ -179,6 +179,82 @@ function upstreamHeaders() {
   return { 'Content-Type': 'application/json', Authorization: 'Bearer ' + AMD_LLM_API_KEY };
 }
 
+/* ── 自動切換到備援代理 ──────────────────────────────────
+   工研院的申請只登記了組員 GCP VM 的 IP；目前沒擋，但哪天開始擋，直連就會連不上。
+   組員在 VM 上架了反向代理（網址與金鑰見組員私訊，只放 .env）。
+   設了 AMD_LLM_FALLBACK_BASE_URL 之後：
+   - 直連「連不上或被擋」才切：連線錯誤（逾時、拒絕、重設、無法到達），或 401／403
+     （vLLM 本身不驗金鑰，回 401／403 代表中間有防火牆或代理在擋）
+   - 5xx 不切：那是模型偶發錯誤，Agent 本來就會重試
+   - 切過去後 5 分鐘內直接走備援（不用每次都等直連逾時），之後再試直連，恢復就切回來
+   沒設備援時行為跟以前完全一樣。 */
+const FALLBACK_BASE_URL = String(process.env.AMD_LLM_FALLBACK_BASE_URL || '').trim().replace(/\/+$/, '');
+const FALLBACK_API_KEY = String(process.env.AMD_LLM_FALLBACK_API_KEY || '').trim();
+const PRIMARY_COOLDOWN_MS = Number(process.env.AMD_LLM_FALLBACK_COOLDOWN_MS) || 5 * 60 * 1000;
+const NETWORK_ERROR_CODES = new Set([
+  'UND_ERR_CONNECT_TIMEOUT', 'UND_ERR_SOCKET', 'ECONNREFUSED', 'ECONNRESET',
+  'ETIMEDOUT', 'EHOSTUNREACH', 'ENETUNREACH', 'EAI_AGAIN', 'ENOTFOUND'
+]);
+let primaryDownUntil = 0;
+
+function hasFallback() {
+  return Boolean(FALLBACK_BASE_URL);
+}
+
+function isUnreachable(err) {
+  if (!err || err.name === 'AbortError' || err.name === 'TimeoutError') return false;   // 呼叫端自己取消／逾時，不是被擋
+  const code = (err.cause && err.cause.code) || err.code;
+  return NETWORK_ERROR_CODES.has(code) || (err.name === 'TypeError' && /fetch failed/i.test(err.message));
+}
+
+function upstreamFor(which) {
+  return which === 'fallback'
+    ? { url: FALLBACK_BASE_URL + '/chat/completions', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + FALLBACK_API_KEY } }
+    : { url: chatCompletionsUrl(), headers: upstreamHeaders() };
+}
+
+/**
+ * POST /chat/completions，必要時自動改走備援代理。
+ * @returns {Promise<{ response: Response, upstream: 'primary'|'fallback' }>}
+ */
+async function postChatCompletions(bodyText, { signal } = {}) {
+  const send = (which) => {
+    const u = upstreamFor(which);
+    return fetch(u.url, { method: 'POST', headers: u.headers, body: bodyText, signal });
+  };
+  if (!hasFallback()) return { response: await send('primary'), upstream: 'primary' };
+
+  // 冷卻期內直連已知有問題：直接走備援；備援也連不上才回頭試直連
+  if (Date.now() < primaryDownUntil) {
+    try {
+      return { response: await send('fallback'), upstream: 'fallback' };
+    } catch (err) {
+      if (!isUnreachable(err) || (signal && signal.aborted)) throw err;
+      console.warn('[amd-llm] 備援代理也連不上，改回試直連：' + ((err.cause && err.cause.code) || err.message));
+    }
+  }
+
+  let reason = '';
+  try {
+    const response = await send('primary');
+    if (response.status !== 401 && response.status !== 403) {
+      if (primaryDownUntil) {
+        primaryDownUntil = 0;
+        console.log('[amd-llm] 直連恢復，切回工研院端點');
+      }
+      return { response, upstream: 'primary' };
+    }
+    reason = 'HTTP ' + response.status;
+    response.body && response.body.cancel().catch(() => {});
+  } catch (err) {
+    if (!isUnreachable(err) || (signal && signal.aborted)) throw err;
+    reason = (err.cause && err.cause.code) || err.message;
+  }
+  primaryDownUntil = Date.now() + PRIMARY_COOLDOWN_MS;
+  console.warn(`[amd-llm] 直連失敗（${reason}），改走備援代理，${Math.round(PRIMARY_COOLDOWN_MS / 60000)} 分鐘後再試直連`);
+  return { response: await send('fallback'), upstream: 'fallback' };
+}
+
 /**
  * Agent 用的 tool calling 呼叫（OpenAI 格式直進直出，不轉 Gemini）。
  * 回傳 { message, finishReason, usage }；message 只留 role/content/tool_calls，
@@ -196,9 +272,7 @@ async function chat({ messages, tools, temperature = 0.3, maxTokens = 2048, sign
     body.tools = tools;
     body.tool_choice = 'auto';
   }
-  const r = await fetch(chatCompletionsUrl(), {
-    method: 'POST', headers: upstreamHeaders(), body: JSON.stringify(body), signal
-  });
+  const { response: r, upstream } = await postChatCompletions(JSON.stringify(body), { signal });
   if (!r.ok) {
     const detail = await r.text().catch(() => '');
     const err = new Error('AMD LLM ' + r.status + '：' + detail.slice(0, 200));
@@ -210,11 +284,13 @@ async function chat({ messages, tools, temperature = 0.3, maxTokens = 2048, sign
   const m = choice.message || {};
   const message = { role: 'assistant', content: m.content || '' };
   if (Array.isArray(m.tool_calls) && m.tool_calls.length) message.tool_calls = m.tool_calls;
-  return { message, finishReason: choice.finish_reason || '', usage: data.usage || null, model: data.model || '' };
+  return { message, finishReason: choice.finish_reason || '', usage: data.usage || null, model: data.model || '', upstream };
 }
 
 module.exports = {
   chat,
+  postChatCompletions,
+  hasFallback,
   USAGE_MODEL_ID,
   isEnabled,
   shouldRoute,
