@@ -58,6 +58,7 @@ const run = (trip, trig, scenario) => runAgent({ trip, trigger: trig, scenario, 
   const big = await run(TRIP, trigger(90));
   ok('延誤 90 分鐘 → 有提案（AI 關閉時用規則）', big.type === 'proposal', JSON.stringify(big).slice(0, 300));
   ok('刪掉來不及的美術館', big.type === 'proposal' && !big.draft.stops.some((s) => s.name === '臺東美術館'), JSON.stringify(big.changes));
+  ok('刪站後後面的站往前補（跟 planner 重算一致，不卡在原定 18:00）', big.type === 'proposal' && (big.draft.stops.find((x) => x.id === 'web_3_榕樹下米苔目') || {}).time < '18:00', JSON.stringify(big.draft.stops.map((x) => x.name.slice(0, 4) + ' ' + x.time)));
   ok('錨點站還在、時間不變', big.type === 'proposal' && big.draft.stops.find((s) => s.anchor === 'station').time === '19:20');
   const bigBase = DL.dayTrip(I.normalizeTrip(TRIP), DL.parseDelayRequest(trigger(90), TRIP));
   ok('提案通過延誤驗證', big.type === 'proposal' && DL.check(I.normalizeTrip({ ...big.draft, stops: big.draft.stops }), bigBase, DL.parseDelayRequest(trigger(90), TRIP)).ok);

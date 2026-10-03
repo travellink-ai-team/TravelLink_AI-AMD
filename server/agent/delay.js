@@ -81,6 +81,8 @@ function dayTrip(trip, req) {
   const d = new Date(req.leave.date + 'T00:00:00Z');
   d.setUTCDate(d.getUTCDate() - (req.day - 1));
   const stops = trip.stops.filter((s) => s.day === req.day).map((s) => ({ ...s }));
+  // 延誤起點的實際車程（from.transitToNextMin）是到「原本的第一站」；刪站後第一站變了就不能用
+  req.firstStopId = stops[0] ? stops[0].id : null;
   // 用戶端的收工時間可能比原本排好的錨點站還早（App 實測：endTime 14:00、回程車站排 14:07）。
   // 錨點站時間固定、刪再多站也不會變，不放寬的話 day_end 永遠過不了，AI 只能一直問使用者。
   let endTime = trip.endTime;
@@ -97,13 +99,17 @@ const fixedTime = (s) => s.anchor || s.keepReason || s.timeLocked;
 // 目前這站（延誤的起點）：帶上到原本下一站的實際車程，下一站被刪掉時自動改用校正後的估算
 function fromPoint(req, base) {
   const p = { lat: req.from.lat, lng: req.from.lng, name: req.from.name };
-  const first = base && base.stops[0];
-  if (Number.isFinite(req.from.legMin) && first) { p.legMin = req.from.legMin; p.legTo = first.id; }
+  const firstId = req.firstStopId || (base && base.stops[0] && base.stops[0].id);
+  if (Number.isFinite(req.from.legMin) && firstId) { p.legMin = req.from.legMin; p.legTo = firstId; }
   return p;
 }
 
-/** 從 leaveAt 開始依車程順延；固定時間的站不動（排不到就交給驗證報違規） */
-function shift(base, req) {
+/**
+ * 從 leaveAt 開始依車程順延；固定時間的站不動（排不到就交給驗證報違規）。
+ * compact：刪站或縮短停留之後用——不再以原定時間當下限，後面的站往前補，
+ * 跟 planner 套用後重算的方式一致（不然提案的時間會比 planner 晚好幾十分鐘）。
+ */
+function shift(base, req, opts = {}) {
   const draft = { ...base, stops: base.stops.map((s) => ({ ...s })) };
   let prev = fromPoint(req, base);
   let cursor = req.leave.min;
@@ -112,7 +118,8 @@ function shift(base, req) {
     const arrive = cursor + (Number.isFinite(move) ? move : 15);
     if (!fixedTime(s)) {
       const planned = I.toMin(s.time);
-      s.time = I.toClock(Math.min(23 * 60 + 55, Math.max(planned, Math.ceil(arrive / 5) * 5)));
+      const earliest = Math.ceil(arrive / 5) * 5;
+      s.time = I.toClock(Math.min(23 * 60 + 55, opts.compact ? earliest : Math.max(planned, earliest)));
     }
     cursor = I.toMin(s.time) + s.stayMin;
     prev = s;
@@ -177,7 +184,7 @@ function fallback(base, req) {
   let remaining = base.stops.map((s) => ({ ...s }));
   const removed = [];
   for (let round = 0; round <= Math.ceil(base.stops.length / 2); round++) {
-    const draft = shift({ ...base, stops: remaining }, req);
+    const draft = shift({ ...base, stops: remaining }, req, { compact: true });
     const c = check(draft, base, req);
     if (c.ok) return { draft, check: c, removed };
     const removable = draft.stops.filter((s) => !I.isFixedStop(s) && !s.timeLocked);

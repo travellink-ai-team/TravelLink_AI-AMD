@@ -247,10 +247,14 @@ const IMPL = {
   },
 
   async propose_patch(ctx, args) {
+    const DL = require('./delay');   // 延遲載入：delay.js 不依賴 tools，但放在頂層讀起來像循環相依
     if (!SEA.enabled() && Array.isArray(args.ops) && args.ops.some((o) => o && o.type === 'move_ferry')) {
       return { error: '船班不在這次的調整範圍：港口站與船班時間不能改，請只調整其他站' };
     }
-    const { draft, results } = I.applyOps(ctx.trip, args.ops);
+    const applied = I.applyOps(ctx.trip, args.ops);
+    const results = applied.results;
+    // T4 延誤：刪站、縮短停留之後從預計離開時間重新排，後面的站往前補（跟 planner 套用後一致）
+    const draft = ctx.delay ? DL.shift(applied.draft, ctx.delay, { compact: true }) : applied.draft;
     const check = await ctx.check(draft);
     ctx.draft = draft;
     ctx.draftCheck = check;

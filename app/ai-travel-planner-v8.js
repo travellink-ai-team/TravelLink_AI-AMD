@@ -4110,7 +4110,8 @@
         setMergedSubSpots(stop, subs);
       }
       // 合併大景點：依子景點數加長建議停留（固定基準、冪等；只加長不縮短，含重開既有行程的補正）
-      if (stop.isMergedAttraction && Array.isArray(stop.mergedSubSpots) && stop.mergedSubSpots.length) {
+      // 使用者手動設定過的停留（durationLocked）不加長：原本重開行程會把手動的 60 分撐成 120 分
+      if (stop.durationLocked !== true && stop.isMergedAttraction && Array.isArray(stop.mergedSubSpots) && stop.mergedSubSpots.length) {
         const cur = Number(stop.duration) || Number(stop.stayMin) || 30;
         const target = Math.min(120, 30 + 20 * stop.mergedSubSpots.length);
         const bumped = Math.max(cur, target);
