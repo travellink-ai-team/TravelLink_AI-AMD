@@ -37,6 +37,7 @@ const { createUsageTap, modelIdFromPath } = require('./usage-tap');
 const amdLlm = require('./amd-llm');
 // 旅程應變 Agent（docs/amd-agent/agent-tools-and-replanning.md）
 const { runAgent } = require('./agent/loop');
+const { parseDelayRequest } = require('./agent/delay');
 // 回顧短片後端渲染 job（M8）：獨立模組，掛在既有代理上
 const { mountRecapJobs } = require('./recap-jobs');
 
@@ -1147,9 +1148,14 @@ const agentLimiter = rateLimit({
 app.post('/api/agent/replan', agentLimiter, requireFirebaseUser, async (req, res) => {
   const body = req.body || {};
   const trigger = body.trigger && typeof body.trigger === 'object' ? body.trigger : {};
-  if (!['weather', 'user'].includes(trigger.type)) return res.status(400).json({ error: 'invalid trigger' });
+  if (!['weather', 'user', 'delay'].includes(trigger.type)) return res.status(400).json({ error: 'invalid trigger' });
   if (trigger.type === 'user' && !String(trigger.message || '').trim()) return res.status(400).json({ error: 'message required' });
   if (!body.trip || !Array.isArray(body.trip.stops)) return res.status(400).json({ error: 'invalid trip' });
+  // T4 延誤：格式不對（缺 id、時間沒帶時區…）在開 SSE 之前就回 400，用戶端可以直接顯示原因
+  if (trigger.type === 'delay') {
+    const checked = parseDelayRequest(trigger, body.trip, body.scenario);
+    if (checked.error) return res.status(400).json({ error: 'invalid delay request', message: checked.error });
+  }
 
   // demo 情境注入：只改工具回傳的天氣，Agent 流程照常真實執行；提案會標 simulated
   const rain = body.scenario && body.scenario.rain;
@@ -1167,6 +1173,9 @@ app.post('/api/agent/replan', agentLimiter, requireFirebaseUser, async (req, res
       ...(Number(x.gustMax) ? { gustMax: Math.min(17, Number(x.gustMax)) } : {})
     }));
   if (seaDays.length) scenario.sea = Array.isArray(sea) ? seaDays : seaDays[0];
+  // demo：固定延誤 N 分鐘，任何時候 demo 結果都一樣（畫面標「模擬情境」）
+  const delayDemo = body.scenario && body.scenario.delay && Number(body.scenario.delay.minutes);
+  if (Number.isFinite(delayDemo)) scenario.delay = { minutes: Math.min(600, Math.max(0, Math.round(delayDemo))) };
 
   const run = genRuns.getOwnedRun(req.headers['x-run-id'], req.user.uid);
   if (run) genRuns.retain(run);
@@ -1183,7 +1192,10 @@ app.post('/api/agent/replan', agentLimiter, requireFirebaseUser, async (req, res
   try {
     await runAgent({
       trip: body.trip,
-      trigger: { type: trigger.type, message: String(trigger.message || '').slice(0, 300) },
+      // delay 的欄位在 agent/delay.js 逐一驗證與裁切，這裡原樣轉交；其他觸發只取 type／message
+      trigger: trigger.type === 'delay'
+        ? trigger
+        : { type: trigger.type, message: String(trigger.message || '').slice(0, 300) },
       scenario: Object.keys(scenario).length ? scenario : null,
       onEvent: send,
       onUsage: (u) => {

@@ -16,6 +16,7 @@ const I = require('./itinerary');
 const T = require('./tools');
 const F = require('./ferry');
 const SEA = require('./sea');
+const DL = require('./delay');
 
 const MAX_TOOL_CALLS = 14;   // 離島情境要多查海況與船班
 const MAX_FAILED_ROUNDS = 3;
@@ -127,8 +128,31 @@ async function fallbackProposal(ctx, reason) {
 
 const legBrief = (l) => ({ direction: l.direction === 'return' ? '回程' : '去程', day: l.day, depart: I.toClock(l.departMin) });
 
+// 提案裡的站：原樣帶回用戶端送來的欄位；Agent 新增的站附上完整資料，
+// 用戶端套用後可以直接顯示與導航，不用再為了補資料查一次 Google（T4 規格第 3 節第 4 點）
+function draftStopView(s) {
+  const out = { id: s.id, day: s.day, time: s.time, stayMin: s.stayMin, name: s.name, lat: s.lat, lng: s.lng, kind: s.kind };
+  if (s.stopType) out.stopType = s.stopType;
+  if (s.anchor) out.anchor = s.anchor;
+  if (s.keepReason) out.keepReason = s.keepReason;
+  if (s.replaces) out.replaces = s.replaces;
+  if (s.agentAdded || s.replaces) {
+    out.agentAdded = Boolean(s.agentAdded);
+    const place = D.findPlace(s.name) || {};
+    out.stopType = s.kind === 'food' ? 'food' : 'scenic';
+    if (place.businessHours) out.businessHours = place.businessHours;
+    if (place.desc) out.desc = place.desc;
+    out.emoji = place.emoji || (s.kind === 'food' ? '🍽️' : '📍');
+  } else if (s.businessHours) {
+    out.businessHours = s.businessHours;
+  }
+  return out;
+}
+
 function buildProposal(ctx, p) {
-  const before = I.costPerPerson(ctx.trip);
+  // 延誤情境的 ctx.trip 是「程式已順延」的版本；對照要用使用者原本的計畫
+  const original = ctx.baseTrip || ctx.trip;
+  const before = I.costPerPerson(original);
   const after = I.costPerPerson(ctx.draft);
   return {
     type: 'proposal',
@@ -136,12 +160,26 @@ function buildProposal(ctx, p) {
     reasons: p.reasons,
     fallback: Boolean(p.fallback),
     simulated: Boolean(ctx.scenario),
-    changes: I.diffTrips(ctx.trip, ctx.draft),
+    ...(p.retimeOnly ? { retimeOnly: true } : {}),
+    changes: I.diffTrips(original, ctx.draft),
     costDelta: { perPersonBefore: before, perPersonAfter: after, diff: after - before, note: '門票加餐費估算，不含交通' + (ctx.draft.extraNights ? `與多 ${ctx.draft.extraNights} 晚的住宿費` : '') },
     ...(ctx.draft.extraNights ? { extraNights: ctx.draft.extraNights } : {}),
     ...(ctx.trip.island ? { ferry: { before: F.legsOf(ctx.trip).map(legBrief), after: F.legsOf(ctx.draft).map(legBrief), note: '依海面預報推估，實際班次與是否停航以船公司公告為準' } } : {}),
     warnings: ctx.draftCheck.warnings.slice(0, 5).map((w) => w.message),
-    draft: { ...ctx.draft, stops: ctx.draft.stops.map((s) => ({ id: s.id, day: s.day, time: s.time, stayMin: s.stayMin, name: s.name, lat: s.lat, lng: s.lng, kind: s.kind, ...(s.replaces ? { replaces: s.replaces } : {}), ...(s.agentAdded ? { agentAdded: true } : {}) })) }
+    draft: { ...ctx.draft, stops: ctx.draft.stops.map(draftStopView) }
+  };
+}
+
+// 延誤情境的規則式降級：從後面刪不固定的站再順延，直到排得下
+function delayFallback(ctx, why) {
+  const r = DL.fallback(ctx.baseTrip, ctx.delay);
+  if (!r) return null;
+  ctx.draft = r.draft;
+  ctx.draftCheck = r.check;
+  return {
+    summary: r.removed.length ? `快速調整：刪掉${r.removed.map((n) => `「${n}」`).join('')}，其餘依車程順延` : '快速調整：依車程順延',
+    reasons: [why, '依時間順序自動刪站，未經 AI 推理'],
+    fallback: true
   };
 }
 
@@ -193,10 +231,57 @@ async function runAgent({ trip: rawTrip, trigger, scenario, onEvent, onUsage }) 
   };
   let toolCalls = 0;
 
-  emit({ type: 'start', trigger: trigger && trigger.type, simulated: Boolean(ctx.scenario), stops: trip.stops.length });
+  // ── T4 延誤：程式先順延，排得下就不呼叫 AI ──
+  let firstUserMessage = null;
+  if (trigger && trigger.type === 'delay') {
+    const req = DL.parseDelayRequest(trigger, rawTrip, scenario);
+    if (req.error) return finish({ type: 'error', message: req.error });
+    const base = DL.dayTrip(trip, req);
+    emit({ type: 'start', trigger: 'delay', simulated: req.simulated, stops: base.stops.length });
+    if (!base.stops.length) return finish({ type: 'no_change', reason: `第 ${req.day} 天後面沒有行程了`, llmSkipped: true });
+    if (req.appConflicts.length) console.log('[agent] T4 appConflicts（用戶端判斷，僅記錄）：' + JSON.stringify(req.appConflicts));
+    ctx.delay = req;
+    ctx.baseTrip = base;
+    ctx.scenario = req.simulated ? scenario : null;
+    ctx.trip = DL.shift(base, req);
+    ctx.check = async (t) => DL.check(t, base, req);
+
+    emit({ type: 'check', label: `程式依車程順延後面的站，檢查營業時間與期限（不呼叫 AI）` });
+    const pre = await ctx.check(ctx.trip);
+    if (pre.ok) {
+      ctx.draft = ctx.trip;
+      ctx.draftCheck = pre;
+      const moved = I.diffTrips(base, ctx.draft).filter((c) => c.type === 'retime');
+      const end = I.dayEnds(ctx.draft)[req.day];
+      const reasons = [`從「${req.from.name}」${I.toClock(req.leave.min)} 出發，依車程重新估算後面每一站的時間`];
+      if (req.returnTrain) reasons.push(`仍趕得上 ${I.toClock(req.returnTrain.min)} 的回程火車`);
+      if (req.lastFerry) reasons.push(`仍趕得上 ${I.toClock(req.lastFerry.min)} 的末班船`);
+      reasons.push('營業時間與每天結束時間都檢查過');
+      return finish({
+        ...buildProposal(ctx, {
+          summary: moved.length
+            ? `${req.delayMin != null ? `延誤 ${req.delayMin} 分鐘：` : ''}後面 ${moved.length} 站順延，${end} 結束，都來得及`
+            : '延誤不影響後面的行程，時間都不用改',
+          reasons,
+          retimeOnly: true
+        }),
+        llmSkipped: true
+      });
+    }
+    const issues = pre.violations.map((v) => v.message);
+    emit({ type: 'check_result', label: `順延後有 ${issues.length} 個衝突，啟動 AI 代理人`, issues });
+    if (!amd.isEnabled()) {
+      const fb = delayFallback(ctx, 'AI 代理人未啟用');
+      return fb ? finish(buildProposal(ctx, fb))
+        : finish({ type: 'error', message: '延誤後的行程排不下，自動刪站也解決不了（多半是固定的站或期限本身就來不及）：' + issues.slice(0, 2).join('；') });
+    }
+    firstUserMessage = DL.triggerText(req, issues, base);
+  } else {
+    emit({ type: 'start', trigger: trigger && trigger.type, simulated: Boolean(ctx.scenario), stops: trip.stops.length });
+  }
 
   // ── 程式先檢查：天氣觸發但沒有任何站受影響 → 不呼叫 LLM ──
-  if (!trigger || trigger.type !== 'user') {
+  if (!firstUserMessage && (!trigger || trigger.type !== 'user')) {
     emit({ type: 'check', label: trip.island ? '程式檢查天氣、營業時間與海象（不呼叫 AI）' : '程式檢查天氣與營業時間（不呼叫 AI）' });
     const pre = await ctx.check(trip);
     const issues = pre.violations.filter((v) => ['rain', 'closed', 'hours', 'suspended', 'ferry_risk'].includes(v.code));
@@ -206,14 +291,14 @@ async function runAgent({ trip: rawTrip, trigger, scenario, onEvent, onUsage }) 
     emit({ type: 'check_result', label: `發現 ${issues.length} 個問題，啟動 AI 代理人`, issues: issues.map((v) => v.message) });
   }
 
-  if (!amd.isEnabled()) {
+  if (!firstUserMessage && !amd.isEnabled()) {
     const fb = await fallbackProposal(ctx, 'AI 代理人未啟用');
     return fb ? finish(buildProposal(ctx, fb)) : finish({ type: 'error', message: 'AI 代理人未啟用（AI_PROVIDER 不是 amd）' });
   }
 
   const messages = [
     { role: 'system', content: SYSTEM_PROMPT },
-    { role: 'user', content: `${triggerText(trigger)}\n今天是 ${I.todayIso()}。` }
+    { role: 'user', content: firstUserMessage || `${triggerText(trigger)}\n今天是 ${I.todayIso()}。` }
   ];
   let nudged = false;
 
@@ -266,7 +351,8 @@ async function runAgent({ trip: rawTrip, trigger, scenario, onEvent, onUsage }) 
     // 原始錯誤只進伺服器日誌：上游訊息可能含模型內部格式，不該出現在使用者畫面
     console.warn('[agent] 降級：' + why + (err.code ? '' : '｜' + String(err.message || err).slice(0, 300)));
     // 規則式替換只會處理「下雨的戶外站」；使用者主動提的需求（好累、想早點結束）沒有規則可套，直接請他再試
-    const fb = trigger && trigger.type === 'user' ? null : await fallbackProposal(ctx, why);
+    const fb = ctx.delay ? delayFallback(ctx, why)
+      : (trigger && trigger.type === 'user' ? null : await fallbackProposal(ctx, why));
     if (fb) {
       emit({ type: 'fallback', label: why + '，改用快速替代方案' });
       return finish(buildProposal(ctx, fb));

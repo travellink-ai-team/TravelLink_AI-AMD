@@ -102,7 +102,8 @@ function stopView(trip, s) {
     ...(trip.island ? { side: F.sideOf(s, trip.island) === 'island' ? '島上' : '本島' } : {}),
     ...(trip.island && F.isHarbor(s.name, trip.island) ? { harbor: true } : {}),
     ...(s.timeLocked ? { timeLocked: true } : {}),
-    ...(s.keepReason ? { keepReason: s.keepReason } : {})
+    ...(s.keepReason ? { keepReason: s.keepReason } : {}),
+    ...(s.anchor ? { anchor: s.anchor, fixed: '錨點站，不能刪、不能改時間' } : {})
   };
 }
 

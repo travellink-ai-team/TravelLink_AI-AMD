@@ -33,6 +33,14 @@ function todayIso() {
   return new Date(Date.now() + 8 * 3600 * 1000).toISOString().slice(0, 10);   // 台灣時間
 }
 
+const ANCHORS = new Set(['station', 'lodging', 'ferry']);
+const STOP_TYPES = new Set(['scenic', 'food', 'transit']);
+
+/** 錨點站與 keepReason 站（訂位、預約）：Agent 不能刪除、替換或移到別天 */
+function isFixedStop(s) {
+  return Boolean(s && (s.anchor || s.keepReason));
+}
+
 /** 前端送來的行程一律重新組裝：限長度、限數量，座標缺的從本地資料補，不信任其他欄位 */
 function normalizeTrip(raw) {
   const r = raw || {};
@@ -52,16 +60,25 @@ function normalizeTrip(raw) {
     const place = D.findPlace(s.name);
     const lat = Number.isFinite(s.lat) ? s.lat : place && place.lat;
     const lng = Number.isFinite(s.lng) ? s.lng : place && place.lng;
+    const anchor = ANCHORS.has(s.anchor) ? s.anchor : '';
+    const stopType = STOP_TYPES.has(s.stopType) ? s.stopType : '';
     trip.stops.push({
-      id: String(s.id || 's' + (i + 1)).replace(/[^\w-]/g, '').slice(0, 40) || 's' + (i + 1),
+      // id 要原樣送回（用戶端靠它把提案套回 collabStopId），只去掉控制字元，不能過濾成英數——
+      // App 的舊 id 長得像 web_{order}_{站名}，含中文
+      id: String(s.id || 's' + (i + 1)).replace(/[\u0000-\u001f"\\]/g, '').trim().slice(0, 80) || 's' + (i + 1),
       day: Math.min(14, Math.max(1, Number(s.day) || 1)),
       time: clock(s.time, '09:00'),
-      stayMin: Math.min(600, Math.max(10, Number(s.stayMin) || (place && place.duration) || 60)),
+      stayMin: Math.min(600, Math.max(5, Number(s.stayMin) || (place && place.duration) || 60)),
       name: String(s.name).slice(0, 80),
       lat: Number.isFinite(lat) ? lat : null,
       lng: Number.isFinite(lng) ? lng : null,
-      kind: s.kind === 'food' || (place && place.kind === 'food') ? 'food' : 'scenic',
-      timeLocked: s.timeLocked === true,       // 使用者手動改過的時間：不自動挪
+      kind: s.kind === 'food' || stopType === 'food' || (!stopType && place && place.kind === 'food') ? 'food' : 'scenic',
+      ...(stopType ? { stopType } : {}),
+      // 錨點站（車站、住宿、船班港口）一律固定：不刪、不移、不改時間
+      ...(anchor ? { anchor } : {}),
+      // 用戶端送來的營業時間原文優先於本地資料（兩端判斷公休的依據一致，也避開同名抓錯）
+      ...(s.businessHours ? { businessHours: String(s.businessHours).slice(0, 600) } : {}),
+      timeLocked: s.timeLocked === true || Boolean(anchor),   // 使用者手動改過的時間：不自動挪
       keepReason: s.keepReason ? String(s.keepReason).slice(0, 60) : ''
     });
   });
@@ -177,6 +194,15 @@ function applyOps(trip, ops) {
     const idx = draft.stops.findIndex((s) => s.id === String(op && op.stopId || ''));
     const fail = (msg) => results.push({ op: type, ok: false, error: msg });
     const isHarbor = idx >= 0 && trip.island && F.isHarbor(draft.stops[idx].name, trip.island);
+    const target = idx >= 0 ? draft.stops[idx] : null;
+    if (target && isFixedStop(target) && ['remove', 'replace', 'move'].includes(type)) {
+      fail(`「${target.name}」是${target.anchor ? '錨點站（車站／住宿／港口）' : `固定行程（${target.keepReason}）`}，不能刪除、替換或移動`);
+      continue;
+    }
+    if (target && target.anchor && type === 'retime') {
+      fail(`「${target.name}」是錨點站，時間不能改`);
+      continue;
+    }
     if ((type === 'remove' || type === 'replace') && isHarbor) {
       fail(`「${draft.stops[idx].name}」是搭船的港口站，不能刪除或替換；要改搭船的日期或時間請用 move／retime`);
       continue;
@@ -261,7 +287,9 @@ function validate(trip, forecast, seaByDate) {
   trip.stops.forEach((s, i) => {
     const date = dateOfDay(trip.startDate, s.day);
     const start = toMin(s.time), end = start + s.stayMin;
-    const place = D.findPlace(s.name);
+    // 用戶端有送營業時間原文就用它（App／網頁判斷公休的依據），沒有才用本地資料
+    const found = D.findPlace(s.name);
+    const place = s.businessHours ? { ...(found || { name: s.name, kind: s.kind }), businessHours: s.businessHours } : found;
 
     // 港口站去回程各出現一次是正常的，也沒有營業時間可言
     const harbor = trip.island && F.isHarbor(s.name, trip.island);
@@ -363,5 +391,5 @@ function diffTrips(before, after) {
 }
 
 module.exports = {
-  toMin, toClock, dateOfDay, todayIso, normalizeTrip, reflow, applyOps, validate, costPerPerson, dayEnds, diffTrips
+  toMin, toClock, dateOfDay, todayIso, normalizeTrip, reflow, applyOps, validate, costPerPerson, dayEnds, diffTrips, isFixedStop, travel
 };
