@@ -1158,9 +1158,15 @@ app.post('/api/agent/replan', agentLimiter, requireFirebaseUser, async (req, res
   if (rain && typeof rain === 'object') {
     scenario.rain = { date: String(rain.date || ''), from: String(rain.from || ''), to: String(rain.to || ''), pop: Number(rain.pop) || 80 };
   }
-  if (sea && typeof sea === 'object' && /^\d{4}-\d{2}-\d{2}$/.test(String(sea.date || ''))) {
-    scenario.sea = { date: String(sea.date), waveMaxM: Math.min(10, Number(sea.waveMaxM) || 3.5), gustMax: Math.min(17, Number(sea.gustMax) || 9) };
-  }
+  // 可以是一天，也可以是最多 7 天的陣列（例如 demo「這幾天都風浪大」）
+  const seaDays = (Array.isArray(sea) ? sea : [sea]).slice(0, 7)
+    .filter((x) => x && typeof x === 'object' && /^\d{4}-\d{2}-\d{2}$/.test(String(x.date || '')))
+    .map((x) => ({
+      date: String(x.date),
+      waveMaxM: Math.min(10, Number(x.waveMaxM) || 3.5),
+      ...(Number(x.gustMax) ? { gustMax: Math.min(17, Number(x.gustMax)) } : {})
+    }));
+  if (seaDays.length) scenario.sea = Array.isArray(sea) ? seaDays : seaDays[0];
 
   const run = genRuns.getOwnedRun(req.headers['x-run-id'], req.user.uid);
   if (run) genRuns.retain(run);

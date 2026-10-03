@@ -148,16 +148,20 @@ async function fetchTdxAlerts() {
 
 /**
  * 某離島在某日的海況與停航風險。
- * scenario.sea = { date, waveMaxM, gustMax?, windMax? } 會覆蓋該日（demo 情境注入）。
+ * scenario.sea = { date, waveMaxM, gustMax?, windMax? } 會覆蓋該日（demo 情境注入）；
+ * 也可以給陣列，一次覆蓋好幾天（測試要固定每一天，不能跟著真實天氣變）。
  */
 async function seaOn(island, isoDate, scenario) {
   const area = SEA_AREA[island] || '綠島蘭嶼海面';
-  const inj = scenario && scenario.sea;
-  if (inj && inj.date === isoDate) {
+  const injList = scenario && scenario.sea ? [].concat(scenario.sea) : [];
+  const inj = injList.find((x) => x && x.date === isoDate);
+  if (inj) {
     const waveMaxM = Number(inj.waveMaxM) || 3.5;
-    const gustMax = Number(inj.gustMax) || 9;
-    const windMax = Number(inj.windMax) || 6;
-    const waveType = waveMaxM >= 4 ? '大浪轉巨浪' : '中浪轉大浪';
+    // 沒給風力時依浪高推一個合理值：注入「平靜」的日子不該因為預設陣風 9 級變成中風險
+    const rough = waveMaxM >= 3;
+    const gustMax = Number(inj.gustMax) || (rough ? 9 : 5);
+    const windMax = Number(inj.windMax) || (rough ? 6 : 3);
+    const waveType = waveMaxM >= 4 ? '大浪轉巨浪' : (rough ? '中浪轉大浪' : '小浪');
     return {
       date: isoDate, area, simulated: true,
       wave: `${Math.max(1, waveMaxM - 1)}轉${waveMaxM}公尺`, wind: `${windMax}級陣風${gustMax}級`, waveType,

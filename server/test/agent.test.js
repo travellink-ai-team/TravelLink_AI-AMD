@@ -57,7 +57,17 @@ const GREEN = {
   ]
 };
 const day3 = (() => { const d = new Date(tomorrow + 'T00:00:00Z'); d.setUTCDate(d.getUTCDate() + 2); return d.toISOString().slice(0, 10); })();
-const SEA_SCENARIO = { sea: { date: day3, waveMaxM: 3.5, gustMax: 9 } };
+const dayN = (n) => { const d = new Date(tomorrow + 'T00:00:00Z'); d.setUTCDate(d.getUTCDate() + n - 1); return d.toISOString().slice(0, 10); };
+// 四天都注入，測試結果不跟著真實天氣變（2026-10-03 真實預報 10/5～10/7 都是高風險，只注入第 3 天會讓測試失敗）
+const SEA_SCENARIO = { sea: [
+  { date: dayN(1), waveMaxM: 1 }, { date: dayN(2), waveMaxM: 1 },
+  { date: day3, waveMaxM: 3.5, gustMax: 9 }, { date: dayN(4), waveMaxM: 4 }
+] };
+// 沒有安全的搭船日：第 2～4 天都高風險
+const STORM_ALL = { sea: [
+  { date: dayN(1), waveMaxM: 1 }, { date: dayN(2), waveMaxM: 3.5 },
+  { date: day3, waveMaxM: 4 }, { date: dayN(4), waveMaxM: 4 }
+] };
 
 (async () => {
   const D = require('../agent/data');
@@ -230,6 +240,15 @@ const SEA_SCENARIO = { sea: { date: day3, waveMaxM: 3.5, gustMax: 9 } };
     } else console.log(JSON.stringify(storm).slice(0, 400));
     console.log('   ' + storm.usage.llmCalls + ' 次 LLM、' + storm.steps + ' 次工具、' + (storm.ms / 1000).toFixed(1) + 's');
     ok('live A：產出提案或向使用者提問', storm.type === 'proposal' || storm.type === 'question');
+
+    // 情境 A2：第 2～4 天都高風險，沒有安全的搭船日 → 要清楚告訴使用者並給選擇，不能硬排或報錯
+    console.log('\n── 情境 A2（綠島，第 2～4 天都浪高 3.5～4 公尺）──');
+    const noSafe = await runAgent({ trip: GREEN, trigger: { type: 'weather' }, scenario: STORM_ALL, onEvent: () => {} });
+    if (noSafe.type === 'question') { console.log('❓ ' + noSafe.question); noSafe.options.forEach((o) => console.log('   - ' + o)); }
+    else console.log(JSON.stringify(noSafe).slice(0, 300));
+    console.log('   ' + noSafe.usage.llmCalls + ' 次 LLM、' + (noSafe.ms / 1000).toFixed(1) + 's');
+    ok('live A2：沒有安全日 → 向使用者提問（不是錯誤）', noSafe.type === 'question' && noSafe.options.length >= 2);
+    ok('live A2：問題裡沒有內部代號', noSafe.type === 'question' && !/gd+|stopId|move_ferry/.test(noSafe.question + noSafe.options.join('')));
     if (storm.type === 'proposal') {
       const after = I.normalizeTrip(storm.draft);
       const v = I.validate(after, null, await seaOf(after, SEA_SCENARIO));
