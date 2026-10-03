@@ -1,6 +1,7 @@
 # T4 延誤觸發：API 格式 v1（定案版）
 
 > 2026-10-03。整合 cloud session 的提案與 App 組員的 9 點回覆，事實都對照過程式碼與 Firestore 實際資料。
+> 2026-10-03 第二輪：納入 App 組員實作時的 10 點確認（id 演算法細節、`updatedAt` 規則、`retime` 套用方式、`returnTrain` 送哪一班…），見第 2.1、5、6、7 節。後端已實作並在正式站測過。
 > 網頁與 App 共用同一支 `POST /api/agent/replan`，回傳的 SSE 事件格式**不變**（見 [frontend-handoff.md](frontend-handoff.md)），兩端的面板與提案卡處理都可以沿用。
 
 ## 1. 六個待決定事項（定案）
@@ -10,7 +11,7 @@
 | 1 | 延誤怎麼算 | `delayMin` ＝ 目前這站的「預計離開時間」減「原定離開時間」 |
 | 2 | 只要順延就能解決 | 回傳**只改時間**的提案（`changes` 只有 `retime`），**不呼叫 AI** |
 | 3 | 先通知還是直接呼叫 | 先通知，使用者按下才送出；兩端都不自動呼叫 |
-| 4 | App 有沒有對應欄位 | 有落差，見第 4 節的欄位對照與第 5 節的遷移 |
+| 4 | App 有沒有對應欄位 | 有落差，見第 4 節的欄位對照與第 5 節的 id 規則 |
 | 5 | 多日行程 | 只處理**當天**；當天終點如果是住宿站，視為固定的收工點 |
 | 6 | 網頁要不要接 T4 | 要，兩端行為一致；網頁沿用行程進行中模式現有的衝突判斷 |
 
@@ -32,16 +33,16 @@ Authorization: Bearer <Firebase ID token>
       "leaveAt": "2026-11-07T15:20:00+08:00",  // 預計離開時間（帶日期與時區）
       "delayMin": 50                       // ＝ leaveAt − 原定離開時間
     },
-    "returnTrain": { "departAt": "2026-11-07T18:05:00+08:00", "station": "台東車站" },   // 選填
-    "lastFerry":   { "departAt": "2026-11-07T16:30:00+08:00", "harbor": "南寮漁港" },   // 選填
+    "returnTrain": { "departAt": "2026-11-07T18:05:00+08:00", "station": "台東車站" },   // 選填，送「必須搭上的那班」，見 2.1
+    "lastFerry":   { "departAt": "2026-11-07T16:30:00+08:00", "harbor": "南寮漁港" },   // 選填，當天從島上出發的末班船
     "appConflicts": [                       // 選填：用戶端自己算出的衝突，後端只記錄、以後端重算為準
-      { "kind": "closing", "stopId": "cstop-9x8y7z", "message": "趕不上 17:00 關門" }
+      { "kind": "closes_during_visit", "stopId": "cstop-9x8y7z", "message": "趕不上 17:00 關門" }   // kind 用各端自己的名稱即可
     ]
   },
   "trip": {
     "title": "...", "region": "台東", "startDate": "2026-11-07", "endTime": "20:00", "people": 2,
     "updatedAt": 1794050400000,            // Firestore 的 updatedAt 是 Timestamp，送 updatedAt.toMillis()（毫秒），套用前比對用
-    "stops": [ /* 見下方，只放「還沒開始的站」＋當天的錨點站 */ ]
+    "stops": [ /* 見下方，只放「還沒開始的站」＋「目前這站之後」的錨點站 */ ]
   },
   "scenario": { "delay": { "minutes": 50 } }   // 選填，demo 用：忽略 from.leaveAt，固定延誤 50 分鐘
 }
@@ -58,22 +59,33 @@ Authorization: Bearer <Firebase ID token>
 | `name` | ✅ | 站名 |
 | `lat`, `lng` | 選填 | App 舊行程或手動新增的站可能沒有，後端要能處理 |
 | `stopType` | 建議 | `scenic` \| `food` \| `transit`。舊欄位 `kind: 'food'` 仍然接受 |
-| `anchor` | 錨點站必填 | `station`（出發／回程車站）\| `lodging`（住宿）\| `ferry`（船班港口）。**一律固定**：不刪除、不移動、不改時間 |
+| `anchor` | 錨點站必填 | `station`（出發／回程車站）\| `lodging`（住宿）\| `ferry`（船班港口）。**一律固定**：不刪除、不移動、不改時間。**只有延誤請求才帶**（天氣請求帶了，綠島停航就沒辦法把船班移到前一天）；**只送目前這站之後的**（已經過的出發站送進來會被判 `late_start`） |
 | `businessHours` | 建議 | 營業時間**原文**。後端優先用這個，沒有才查本地資料，兩端判斷公休的依據才會一樣（也避開同名抓錯） |
 | `timeLocked` | 選填 | 使用者手動改過時間＝`true`。對應 Firestore 的 **`manualStartMin` 不是 null** |
-| `keepReason` | 選填 | 訂位、預約等固定時間的站，例如 `"已訂位 18:00"`。有這欄就不會被刪除或挪動 |
+| `keepReason` | 選填 | 訂位、預約等固定時間的站，例如 `"已訂位 18:00"`。有這欄就不會被刪除或挪動。App 目前沒有訂位資料，不送 |
 
 > ⚠️ 欄位名稱：組員提議用 `kind: 'station'|'lodging'|'ferry'` 表示錨點，但目前 API 的 `kind` 已經用來區分 `food`／`scenic`，所以錨點改用 **`anchor`** 欄位，`stopType` 表示景點類型，兩者分開。
+
+### 2.1 `returnTrain`／`lastFerry` 送哪一班
+
+後端拿它當**硬性期限**：最快到站（前一站結束＋車程，再預留火車 10 分鐘、船 20 分鐘）要早於開車／開船時間。
+
+- `returnTrain` 送**使用者必須搭上的那一班**，依序：
+  1. 行程原本規劃要搭的那班（使用者有選或有記錄）
+  2. 沒有的話，送**當天回程的末班車**
+  3. 都不知道就**不要送**，後端改用錨點車站的表定時間檢查（前一站結束＋車程不能晚於它）
+- ⚠️ **不要送「抵達車站後第一班趕得上的車」**：那班是照抵達時間挑的，永遠趕得上，期限檢查就失去作用。
+- `lastFerry` 送**當天從島上出發的末班船**。
 
 ## 3. 後端處理順序
 
 1. **程式先檢查（不呼叫 AI）**：從 `from.leaveAt` 加上到下一站的車程開始，把當天剩下的站順延，再跑既有的驗證：營業時間、車程、每天結束時間，以及新增的 **`returnTrain.departAt`、`lastFerry.departAt` 期限**（趕到車站或港口的時間必須早於期限）。
 2. **全部排得下** → 回傳只改時間的提案（`llmSkipped: true`）。
-3. **有站來不及** → 交給 gpt-oss-120b 處理，可用的方法限定為：刪站、縮短停留、調換順序。錨點站、`keepReason` 站、`timeLocked` 站都不能動。
+3. **有站來不及** → 交給 gpt-oss-120b 處理，可用的方法限定為：**刪站、縮短停留**（不調換順序、不新增景點）。錨點站、`keepReason` 站、`timeLocked` 站都不能動。AI 失敗時改用規則：從固定站之前、最後面的可刪站開始刪，直到排得下（提案標 `fallback: true`）。
 4. 新增的站：提案裡要附上 `businessHours`、`stopType`、`lat`、`lng`、`desc`、`emoji`，用戶端套用後可以直接顯示與導航，不用再查一次 Google。
 5. 用戶端送來的 `appConflicts` 與後端重算的結果都寫進紀錄，規則有落差時比較容易發現。
 
-回傳的事件和現在一樣（`start`／`check`／`tool_call`／`tool_result`／`proposal`／`question`／`no_change`／`error`）。`proposal.changes[]` 會出現 `retime`（`from`/`to` 是時間）、`remove`、`move`。
+回傳的事件和現在一樣（`start`／`check`／`tool_call`／`tool_result`／`proposal`／`question`／`no_change`／`error`）。`proposal.changes[]` 會出現 `retime`（`from`/`to` 是時間；縮短停留時另帶 `stayFrom`/`stayTo`）與 `remove`。只改時間的提案會帶 `retimeOnly: true`、`llmSkipped: true`。格式錯誤（缺 id、時間沒帶時區…）在開 SSE 前就回 **400** `{ error, message }`，`message` 可以直接顯示。
 
 ## 4. 欄位對照（實際查證結果）
 
@@ -100,19 +112,32 @@ Authorization: Bearer <Firebase ID token>
 
 **網頁（已完成）**：生成後、存本機與 Firestore 前，每一站給 `collabStopId`，演算法與 planner 的 `getStableCollabStopId` 完全一致；既有的 `collabStopId`／`stopId` 一律沿用、不覆蓋。
 
-**App 要做的（v1 必要）**：
-1. **建立行程**時就幫每一站寫入 `collabStopId`（建議 UUID，或沿用自己的 `stopId` 值）。
-2. **讀取**優先用 `collabStopId`，沒有才用 `stopId`；**不要**再用 `web_{order}_{站名}` 現算。
-3. **存檔**時把 `collabStopId` 原樣寫回，絕對不能丟掉；新增的站自己產生新的 id。
+**兩種 id 都沒有的站怎麼算（兩端一致）**：沿用 planner `getStableCollabStopId`／explore `assignCollabStopIds` 的演算法：
+- 雜湊輸入＝**Firestore 上那一站的 `type`、`name`**，加上**它在 Firestore `stops` 陣列裡的位置**，用 `|` 接起來轉小寫，FNV-1a，輸出 `cstop-<base36>`。
+- **載入時就算好，整段編輯沿用**，不要在使用者調換順序之後才算（順序變了結果就不同）；**第一次存檔就寫進 Firestore**，之後只讀不算。
+- 已經有 `collabStopId` 或 `stopId` 的站一律沿用；極少數雜湊碰撞時，新的那站加 `-2`、`-3`，舊的不改。
+- 新增的站可以用 UUID。
 
-**舊資料**：不刪除、不做大量遷移。送出 T4 請求前，用戶端發現有站缺 id 就先用 transaction 補寫進 Firestore 再送；後端收到缺 `id` 的站會回 400，不會產生套不回去的提案。
+**App 要做的（v1 必要）**：
+1. **建立行程**時就幫每一站寫入 `collabStopId`。
+2. **讀取**優先用 `collabStopId`，沒有才用 `stopId`，兩者都沒有就照上面的演算法；**不要**再用 `web_{order}_{站名}`。原本用 `web_` id 的回憶紀錄（實查 3 份行程、9 筆），用站名重新對應後把新 id 寫回。
+3. **存檔**時把 `collabStopId` 原樣寫回，絕對不能丟掉。
+
+**舊資料**：不刪除、不做大量遷移。**送出任何 Agent 請求前**（延誤、天氣、文字需求都一樣，套用提案時都靠 id 對站），用戶端發現有站缺 id 就先補寫進 Firestore 再送。後端目前對延誤請求強制要求 id（缺就 400），不會產生套不回去的提案。
 
 ## 6. 套用提案（兩端同一套）
 
 1. 取共編鎖：`micro_trips/{tripId}.regenLock = { by: <email>, byName, at: serverTimestamp() }`，**要用 transaction**：別人持有、而且還沒超過 **5 分鐘**就放棄，否則上鎖。（網頁實作在 `app/collab.js` 的 `acquireRegenLock`／`releaseRegenLock`）
 2. 比對 `updatedAt`（Firestore Timestamp，用 `toMillis()` 比）：如果跟送出請求時的 `trip.updatedAt` 不一樣，代表行程在這段期間被改過，**拒絕套用**，請使用者重新檢查。
 3. 只改提案涉及的站（用 `id` 對應），已經走過的站、錨點站都不動。
-4. 寫入完成後，刪除 `regenLock` 欄位。
+4. **延誤（T4）提案的 `retime`：不要鎖時間**。只套用「刪站」與「縮短停留（`stayMin`）」，時間交給排程從「預計離開時間」重新算，**不要寫進 `manualStartMin`**（否則順延過的站全被鎖住，之後改不動）。套用後重算的時間應該跟提案差不多（幾分鐘內）。天氣、文字需求的提案沿用網頁現有做法（Agent 明確改的時間才固定）。
+5. 寫入完成後，刪除 `regenLock` 欄位。
+
+### 6.1 `updatedAt` 什麼時候更新（兩端一致）
+
+- **只有 `stops` 內容（或標題等使用者看得到的內容）真的變了，才更新頂層 `updatedAt: serverTimestamp()`**。網頁實查：planner 存檔（`persistCurrentTripStops`）、explore 第一次存檔（`saveMicroTripToFirebase`）都會更新。
+- **背景寫入不要動頂層 `updatedAt`**：網頁的路線快取寫在自己的 `routeGeometry.updatedAt`，停車進度（`tripProgress`）、回饋（`feedback` 子集合）都不碰它。App 背景重算路線也照這樣寫在自己的欄位，否則 AI 處理的那幾秒內剛好重算，套用就會被誤判「行程被改過」而拒絕。
+- App 以前從不寫 `updatedAt`，現在每次存 `stops` 都要寫。
 
 ## 7. 限流與時間
 
@@ -121,6 +146,8 @@ Authorization: Bearer <Firebase ID token>
 
 ## 8. 範圍
 
-**v1（這次做）**：第 2 節的必填欄位、`anchor`、`businessHours`、`returnTrain`／`lastFerry`、只改時間的提案、`scenario.delay`、第 5 節的 id 規則（網頁已完成、App 待做）、第 6 節的套用流程。
+**v1（這次做）**：第 2 節的必填欄位、`anchor`、`businessHours`、`returnTrain`／`lastFerry`（2.1）、只改時間的提案、`scenario.delay`、第 5 節的 id 規則（網頁已完成、App 待做）、第 6 節的套用流程與 `updatedAt` 規則。
+
+**狀態**：後端已完成（commit `b6c367a`，`server/agent/delay.js`；`node server/test/delay.test.js [--live]`），2026-10-03 在正式站以真實登入測過：缺 id／時間沒帶時區回 400、延誤 20 分鐘只改時間（54ms，不呼叫 AI）、延誤 90 分鐘＋回程火車由 gpt-oss 刪站（約 3 秒）、`scenario.delay` 標模擬。網頁介面交給 cloud，App 由組員串接。
 
 **v2（之後）**：`appConflicts` 的比對報表、依帳號限流、多日行程跨天順延。
