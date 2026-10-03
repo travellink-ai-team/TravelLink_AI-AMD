@@ -464,5 +464,371 @@ window.WAI_AGENT_MOCK = {
     "ms": 1
    }
   ]
+ },
+ "delay-retime": {
+  "recorded": true,
+  "recordedAt": "2026-10-03T12:21:37.146Z",
+  "request": {
+   "tripStops": [
+    {
+     "id": "cstop-a1",
+     "name": "加路蘭"
+    },
+    {
+     "id": "cstop-b2",
+     "name": "臺東美術館"
+    },
+    {
+     "id": "cstop-c3",
+     "name": "榕樹下米苔目(中華路創始老店-別無分店)"
+    },
+    {
+     "id": "cstop-d4",
+     "name": "台東車站"
+    }
+   ],
+   "trigger": {
+    "type": "delay",
+    "source": "web",
+    "day": 1,
+    "now": "2026-11-07T14:20:00+08:00",
+    "from": {
+     "stopId": "cstop-f0",
+     "name": "臺東森林公園",
+     "lat": 22.7698,
+     "lng": 121.1608,
+     "leaveAt": "2026-11-07T14:50:00+08:00",
+     "delayMin": 20
+    }
+   }
+  },
+  "events": [
+   {
+    "type": "start",
+    "trigger": "delay",
+    "simulated": false,
+    "stops": 4,
+    "ms": 11
+   },
+   {
+    "type": "check",
+    "label": "程式依車程順延後面的站，檢查營業時間與期限（不呼叫 AI）",
+    "ms": 11
+   },
+   {
+    "type": "proposal",
+    "summary": "延誤 20 分鐘：後面 2 站順延，19:40 結束，都來得及",
+    "reasons": [
+     "從「臺東森林公園」14:50 出發，依車程重新估算後面每一站的時間",
+     "營業時間與每天結束時間都檢查過"
+    ],
+    "fallback": false,
+    "simulated": false,
+    "retimeOnly": true,
+    "changes": [
+     {
+      "type": "retime",
+      "day": 1,
+      "name": "加路蘭",
+      "from": "15:00",
+      "to": "15:10",
+      "stayFrom": 60,
+      "stayTo": 60
+     },
+     {
+      "type": "retime",
+      "day": 1,
+      "name": "臺東美術館",
+      "from": "16:20",
+      "to": "16:30",
+      "stayFrom": 30,
+      "stayTo": 30
+     }
+    ],
+    "costDelta": {
+     "perPersonBefore": 101,
+     "perPersonAfter": 101,
+     "diff": 0,
+     "note": "門票加餐費估算，不含交通"
+    },
+    "warnings": [
+     "「台東車站」營業時間未知"
+    ],
+    "draft": {
+     "title": "台東市區一日遊",
+     "region": "台東",
+     "startDate": "2026-11-07",
+     "endTime": "21:00",
+     "people": 2,
+     "budgetPerPerson": null,
+     "stops": [
+      {
+       "id": "cstop-a1",
+       "day": 1,
+       "time": "15:10",
+       "stayMin": 60,
+       "name": "加路蘭",
+       "lat": 22.812171,
+       "lng": 121.187132,
+       "kind": "scenic",
+       "stopType": "scenic"
+      },
+      {
+       "id": "cstop-b2",
+       "day": 1,
+       "time": "16:30",
+       "stayMin": 30,
+       "name": "臺東美術館",
+       "lat": 22.764304,
+       "lng": 121.1499119,
+       "kind": "scenic",
+       "stopType": "scenic"
+      },
+      {
+       "id": "cstop-c3",
+       "day": 1,
+       "time": "18:00",
+       "stayMin": 60,
+       "name": "榕樹下米苔目(中華路創始老店-別無分店)",
+       "lat": 22.7547249,
+       "lng": 121.1533815,
+       "kind": "food",
+       "stopType": "food"
+      },
+      {
+       "id": "cstop-d4",
+       "day": 1,
+       "time": "19:20",
+       "stayMin": 20,
+       "name": "台東車站",
+       "lat": 22.79374,
+       "lng": 121.1231,
+       "kind": "scenic",
+       "anchor": "station"
+      }
+     ],
+     "days": 1,
+     "island": null
+    },
+    "llmSkipped": true,
+    "usage": {
+     "promptTokens": 0,
+     "completionTokens": 0,
+     "llmCalls": 0
+    },
+    "steps": 0,
+    "model": "gpt-oss-120b",
+    "upstreamModels": [],
+    "ms": 14
+   }
+  ]
+ },
+ "delay-ai": {
+  "recorded": true,
+  "recordedAt": "2026-10-03T12:21:40.972Z",
+  "request": {
+   "tripStops": [
+    {
+     "id": "cstop-a1",
+     "name": "加路蘭"
+    },
+    {
+     "id": "cstop-b2",
+     "name": "臺東美術館"
+    },
+    {
+     "id": "cstop-c3",
+     "name": "榕樹下米苔目(中華路創始老店-別無分店)"
+    },
+    {
+     "id": "cstop-d4",
+     "name": "台東車站"
+    }
+   ],
+   "trigger": {
+    "type": "delay",
+    "source": "web",
+    "day": 1,
+    "now": "2026-11-07T14:20:00+08:00",
+    "from": {
+     "stopId": "cstop-f0",
+     "name": "臺東森林公園",
+     "lat": 22.7698,
+     "lng": 121.1608,
+     "leaveAt": "2026-11-07T16:00:00+08:00",
+     "delayMin": 90
+    },
+    "returnTrain": {
+     "departAt": "2026-11-07T19:40:00+08:00",
+     "station": "台東車站"
+    }
+   }
+  },
+  "events": [
+   {
+    "type": "start",
+    "trigger": "delay",
+    "simulated": false,
+    "stops": 4,
+    "ms": 0
+   },
+   {
+    "type": "check",
+    "label": "程式依車程順延後面的站，檢查營業時間與期限（不呼叫 AI）",
+    "ms": 0
+   },
+   {
+    "type": "check_result",
+    "label": "順延後有 3 個衝突，啟動 AI 代理人",
+    "issues": [
+     "「臺東美術館」營業 09:00–12:00, 13:30–17:00，排在 17:40–18:10 不在營業時間內",
+     "「台東車站」19:20 來不及（前一站結束加車程要 19:36）",
+     "趕不上 19:40 的回程火車（台東車站）：最快 19:36 才到，至少要提早 10 分鐘"
+    ],
+    "ms": 1
+   },
+   {
+    "type": "tool_call",
+    "tool": "get_trip_state",
+    "label": "讀取目前行程",
+    "ms": 208
+   },
+   {
+    "type": "tool_result",
+    "tool": "get_trip_state",
+    "ok": true,
+    "detail": "1 天、4 站",
+    "ms": 208
+   },
+   {
+    "type": "tool_call",
+    "tool": "propose_patch",
+    "label": "組合修改草稿並驗證",
+    "ms": 872
+   },
+   {
+    "type": "tool_result",
+    "tool": "propose_patch",
+    "ok": true,
+    "detail": "✅ 驗證通過",
+    "ms": 874
+   },
+   {
+    "type": "tool_call",
+    "tool": "present_proposal",
+    "label": "提出方案",
+    "ms": 3821
+   },
+   {
+    "type": "tool_result",
+    "tool": "present_proposal",
+    "ok": true,
+    "detail": "",
+    "ms": 3821
+   },
+   {
+    "type": "proposal",
+    "summary": "刪除「臺東美術館」並將「榕樹下米苔目」停留時間縮短至 30 分鐘",
+    "reasons": [
+     "「臺東美術館」排在 17:40–18:10 不在營業時間內，必須移除",
+     "將「榕樹下米苔目」停留時間從 60 分鐘縮短至 30 分鐘，使後續行程能在 19:20 抵達台東車站",
+     "保留錨點站「台東車站」的時間不變，確保能於 19:40 搭上回程火車"
+    ],
+    "fallback": false,
+    "simulated": false,
+    "changes": [
+     {
+      "type": "retime",
+      "day": 1,
+      "name": "加路蘭",
+      "from": "15:00",
+      "to": "16:20",
+      "stayFrom": 60,
+      "stayTo": 60
+     },
+     {
+      "type": "retime",
+      "day": 1,
+      "name": "榕樹下米苔目(中華路創始老店-別無分店)",
+      "from": "18:00",
+      "to": "18:20",
+      "stayFrom": 60,
+      "stayTo": 30
+     },
+     {
+      "type": "remove",
+      "day": 1,
+      "time": "16:20",
+      "from": "臺東美術館"
+     }
+    ],
+    "costDelta": {
+     "perPersonBefore": 101,
+     "perPersonAfter": 101,
+     "diff": 0,
+     "note": "門票加餐費估算，不含交通"
+    },
+    "warnings": [
+     "「台東車站」營業時間未知"
+    ],
+    "draft": {
+     "title": "台東市區一日遊",
+     "region": "台東",
+     "startDate": "2026-11-07",
+     "endTime": "21:00",
+     "people": 2,
+     "budgetPerPerson": null,
+     "stops": [
+      {
+       "id": "cstop-a1",
+       "day": 1,
+       "time": "16:20",
+       "stayMin": 60,
+       "name": "加路蘭",
+       "lat": 22.812171,
+       "lng": 121.187132,
+       "kind": "scenic",
+       "stopType": "scenic"
+      },
+      {
+       "id": "cstop-c3",
+       "day": 1,
+       "time": "18:20",
+       "stayMin": 30,
+       "name": "榕樹下米苔目(中華路創始老店-別無分店)",
+       "lat": 22.7547249,
+       "lng": 121.1533815,
+       "kind": "food",
+       "stopType": "food"
+      },
+      {
+       "id": "cstop-d4",
+       "day": 1,
+       "time": "19:20",
+       "stayMin": 20,
+       "name": "台東車站",
+       "lat": 22.79374,
+       "lng": 121.1231,
+       "kind": "scenic",
+       "anchor": "station"
+      }
+     ],
+     "days": 1,
+     "island": null,
+     "extraNights": 0
+    },
+    "usage": {
+     "promptTokens": 8023,
+     "completionTokens": 1382,
+     "llmCalls": 3
+    },
+    "steps": 3,
+    "model": "gpt-oss-120b",
+    "upstreamModels": [
+     "openai/gpt-oss-120b"
+    ],
+    "ms": 3822
+   }
+  ]
  }
 };

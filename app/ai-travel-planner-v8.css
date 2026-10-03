@@ -8722,3 +8722,14 @@ button.notif-item { cursor: pointer; }
   .agent-weather-btn { flex: 1 1 100%; }
   .agent-compare-grid { grid-template-columns: 1fr; }
 }
+
+/* ── 旅程應變 Agent：T4 延誤（入口在「預計離開時間」的衝突提示）── */
+.leave-impact-action.leave-impact-ai { background: var(--accent); color: #fff; border-color: var(--accent); white-space: nowrap; }
+.agent-badge.retime { background: var(--accent-light); color: var(--accent-dark); }
+.agent-anchor-mark { display: inline-block; font-size: 10px; font-weight: 700; line-height: 1.4; padding: 0 5px; margin-left: 2px; border-radius: 6px; background: var(--surface2); color: var(--ink2); white-space: nowrap; vertical-align: middle; }
+.agent-delay-note { margin-top: 8px; font-size: 12px; color: var(--ink2); background: var(--surface2); border-radius: 8px; padding: 6px 10px; text-wrap: pretty; }
+.agent-demo-delay { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; margin-top: 10px; }
+.agent-demo-delay label { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; color: var(--ink2); }
+.agent-demo-delay input { width: 64px; font: inherit; font-size: 13px; padding: 3px 6px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); }
+.agent-demo-btn { white-space: nowrap; flex-shrink: 0; border: 1px solid #c4b5fd; background: #fff; color: #5b21b6; font-weight: 700; font-size: 13px; border-radius: 10px; padding: 5px 12px; cursor: pointer; }
+.agent-demo-btn:disabled { opacity: .5; cursor: not-allowed; }

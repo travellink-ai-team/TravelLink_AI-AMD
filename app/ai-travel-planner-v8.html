@@ -9,7 +9,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@300;400;500;700&family=Noto+Serif+TC:wght@500;700&family=DM+Serif+Display&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="./ai-travel-planner-v8.css?v=20261002-agent1">
+<link rel="stylesheet" href="./ai-travel-planner-v8.css?v=20261003-t4delay1">
 <link rel="stylesheet" href="./design-tokens.css?v=20260727-fix3">
 <link rel="stylesheet" href="./trip-photo-gallery.css?v=20260922-gallery1">
 <script src="./icons.js?v=20260727-fix3"></script>
@@ -125,6 +125,11 @@
             <label>降雨機率 <input type="number" id="agentRainPop" value="80" min="0" max="100" step="5">%</label>
           </div>
           <div class="agent-demo-note">只替換天氣資料，代理人照常執行；畫面會標示「模擬情境」。</div>
+          <div class="agent-demo-delay">
+            <button type="button" class="agent-demo-btn" id="agentDelayDemoBtn" onclick="agentDelayDemo()">⏱ 模擬：延誤 <span id="agentDelayDemoMin">50</span> 分鐘</button>
+            <label>分鐘 <input type="number" id="agentDelayMinutes" value="50" min="5" max="300" step="5"></label>
+          </div>
+          <div class="agent-demo-note">要在行程進行中、停在某一站時使用（可以搭配「展示模擬」）；從目前這站延誤後，讓代理人調整今天後面的行程。</div>
         </div>
         <div class="agent-run" id="agentRunPanel" hidden>
           <div class="agent-run-head">
@@ -659,7 +664,7 @@
 <script src="./trip-photo-manager.js?v=20260928-order1"></script>
 <script src="./trip-photo-sync.js?v=20260927-ownfile1"></script>
 <script src="./trip-photo-gallery.js?v=20260927-labels1"></script>
-<script src="./ai-travel-planner-v8.js?v=20261002-agent1"></script>
+<script src="./ai-travel-planner-v8.js?v=20261003-t4delay1"></script>
 <script>
   // 動態載入 Google Maps：金鑰統一由 weather.env.js 的 TRAVEL_APP_CONFIG 提供，
   // 避免在頁面硬編金鑰（先前硬編的舊金鑰已失效，導致 InvalidKeyMapError）。
