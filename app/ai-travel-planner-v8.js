@@ -11153,9 +11153,10 @@
     document.getElementById('stayModal').style.display = 'flex';
   };
 
-  function applyExpectedLeave(stopId, leaveMin) {
+  // opts.silent：只寫入並重算，不跳「後面可能趕不上」提示（展示的「模擬：延誤」直接交給管家處理）
+  function applyExpectedLeave(stopId, leaveMin, opts) {
     const index = replanStops.findIndex((s) => s.id === stopId);
-    if (index < 0 || index !== getStayingStopIndex() || collabReadOnly) return;
+    if (index < 0 || index !== getStayingStopIndex() || collabReadOnly) return null;
     const before = buildReplanSchedule();
     replanStops[index].expectedLeaveMin = Number.isFinite(leaveMin) ? Math.round(leaveMin) : null;
     const after = buildReplanSchedule();
@@ -11166,7 +11167,8 @@
       dayEnds: getTripDayEndMinutes(),
       hoursWarning: (row) => getBusinessHoursWarning(row)
     });
-    showLeaveImpact(stopId, impact);
+    if (!(opts && opts.silent)) showLeaveImpact(stopId, impact);
+    return impact;
   }
 
   function showLeaveImpact(stopId, impact) {
@@ -21370,7 +21372,17 @@
     }
     const input = document.getElementById('agentDelayMinutes');
     const minutes = Math.max(5, Math.min(300, Math.round(Number(input && input.value) || 50)));
-    startDelayAgentRun(replanStops[index].id, minutes);
+    // 跟真實入口走同一條路：先把目前這站的預計離開設成「原定離開＋N 分」，planner 的排程才會跟著順延，
+    // 套用後重算的時間才對得上提案。請求照樣帶 scenario.delay，提案標「模擬情境」。
+    // 展示模擬中 schedulePersistTrip 本來就不存檔，重新整理會還原。
+    const stop = replanStops[index];
+    const plannedLeave = agentPlannedSchedule(index)[index].end;
+    if (!applyExpectedLeave(stop.id, plannedLeave + minutes, { silent: true })) {
+      feedbackToast('目前無法設定這一站的預計離開時間', 'orange');
+      return;
+    }
+    feedbackToast(`🕒 已把「${stop.name}」的預計離開設為 ${toClockFieldValue(plannedLeave + minutes)}（模擬延誤 ${minutes} 分）`, 'blue');
+    startDelayAgentRun(stop.id, minutes);
   }
 
   function syncAgentDelayDemoLabel() {
