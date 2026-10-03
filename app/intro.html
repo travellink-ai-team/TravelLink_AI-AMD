@@ -252,6 +252,7 @@
   .msg-bubble {
     max-width: 75%; padding: 12px 16px; border-radius: 16px; font-size: 14px; line-height: 1.6;
   }
+  .msg.ai .msg-bubble { text-wrap: pretty; } /* 中文句尾不留孤字（cjk-line-wrap） */
   .msg.ai .msg-bubble { background: var(--bg); border: 1px solid var(--border); border-top-left-radius: 4px; }
   .msg.user .msg-bubble { background: var(--accent); color: #fff; border-top-right-radius: 4px; }
   .msg-bubble ul { padding-left: 18px; margin-top: 6px; }
@@ -562,7 +563,7 @@
         <div class="mm-card"><div class="mm-card-title"><span class="mm-dot"></span>手機優先</div><div class="mm-tags"><span class="mm-tag">底部導覽列</span><span class="mm-tag">觸控目標 44px</span></div></div>
         <div class="mm-card"><div class="mm-card-title"><span class="mm-dot"></span>地圖與清單並列</div><div class="mm-tags"><span class="mm-tag">路線高亮</span><span class="mm-tag">站點編號標記</span></div></div>
         <div class="mm-card"><div class="mm-card-title"><span class="mm-dot"></span>語音導遊</div><div class="mm-tags"><span class="mm-tag">沿途語音導覽</span><span class="mm-tag">隨時停止</span></div></div>
-        <div class="mm-card"><div class="mm-card-title"><span class="mm-dot"></span>AI 隨行管家</div><div class="mm-tags"><span class="mm-tag">行程中隨問隨答</span><span class="mm-tag">景點介紹</span></div></div>
+        <div class="mm-card"><div class="mm-card-title"><span class="mm-dot"></span>AI 隨行管家</div><div class="mm-tags"><span class="mm-tag">隨問隨答</span><span class="mm-tag">改行程先經你確認</span></div></div>
         <div class="mm-card"><div class="mm-card-title"><span class="mm-dot"></span>無障礙</div><div class="mm-tags"><span class="mm-tag">按鈕皆有標籤</span><span class="mm-tag">Esc 關閉彈窗</span></div></div>
         <div class="mm-card"><div class="mm-card-title"><span class="mm-dot"></span>匯入與匯出</div><div class="mm-tags"><span class="mm-tag">網址匯入行程</span><span class="mm-tag">匯出行程圖</span></div></div>
       </div>
@@ -999,10 +1000,10 @@ const responses = {
     { text: "預算頁會把費用拆到每一站 💰\n\n・景點門票：抓真實票價\n・餐廳：依 Google 價位帶估人均消費\n・交通：依距離與車種試算\n\n你設定的每人預算會當成上限，排出來若超支會即時警示，也會優先挑符合預算的餐廳。", follow: ["會下雨怎麼辦？", "想找朋友一起"] }
   ],
   "下雨天怎麼辦？": [
-    { text: "行程會串接中央氣象署預報 🌦\n\n出發前若預報有雨，戶外景點會標示提醒，並附上鄰近的室內替代景點，點「查看替換」就能一鍵換掉，時間軸會自動重算，不用整趟重排。", follow: ["台東一日遊，兩個人", "會花多少錢？", "想找朋友一起"] }
+    { text: "行程會串接中央氣象署預報 🌦\n\n出發前若預報有雨，戶外景點會標示提醒，並附上鄰近的室內替代景點，點「查看替換」就能一鍵換掉，時間軸會自動重算，不用整趟重排。\n\n旅途中也可以請 AI⁠ ⁠隨⁠行⁠管⁠家依中央氣象署預報檢查行程；它提出的調整方案，要你按「⁠套⁠用⁠」才會修改。", follow: ["台東一日遊，兩個人", "會花多少錢？", "想找朋友一起"] }
   ],
   "會下雨怎麼辦？": [
-    { text: "行程會串接中央氣象署預報 🌦\n\n出發前若預報有雨，戶外景點會標示提醒，並附上鄰近的室內替代景點，點「查看替換」就能一鍵換掉，時間軸會自動重算，不用整趟重排。", follow: ["想找朋友一起", "會花多少錢？"] }
+    { text: "行程會串接中央氣象署預報 🌦\n\n出發前若預報有雨，戶外景點會標示提醒，並附上鄰近的室內替代景點，點「查看替換」就能一鍵換掉，時間軸會自動重算，不用整趟重排。\n\n旅途中也可以請 AI⁠ ⁠隨⁠行⁠管⁠家依中央氣象署預報檢查行程；它提出的調整方案，要你按「⁠套⁠用⁠」才會修改。", follow: ["想找朋友一起", "會花多少錢？"] }
   ],
 };
 
