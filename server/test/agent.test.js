@@ -6,6 +6,8 @@ const path = require('path');
 require('dotenv').config({ path: path.join(__dirname, '..', '.env') });
 const LIVE = process.argv.includes('--live');
 if (!LIVE) { process.env.AI_PROVIDER = 'off'; process.env.CWA_API_KEY = ''; }
+// 這份測試涵蓋綠島停航（情境 A），所以一律打開停航功能；關閉時的行為見 test/sea-flag.test.js
+process.env.AGENT_SEA_RISK = 'on';
 
 const I = require('../agent/itinerary');
 const { runAgent } = require('../agent/loop');

@@ -23,7 +23,10 @@ const MAX_FAILED_ROUNDS = 3;
 const MAX_LLM_CALLS = 16;
 const TIMEOUT_MS = Number(process.env.AGENT_TIMEOUT_MS) || 60 * 1000;
 
-const SYSTEM_PROMPT = [
+// 離島停航功能關閉時（預設），第 7 條換成「船班不動」；打開時用完整的停航處理規則（見 sea.js 的 enabled）
+const RULE7_SEA = '7. 離島（綠島／蘭嶼）行程：港口站代表搭船，不能刪除或替換。若某段船班停航風險高，可選擇 (a) 把回程提前到風險低的日子；(b) 延後回程、多住一晚（day＝天數 + 1）。兩者都用一個 「type: move_ferry、direction: return、day、time」的 op 完成，港口站、之後的本島站、來不及去的島上站都由程式處理，結果會列出被刪掉的島上景點。之後可再用 insert 在本島補景點或餐廳。先用 get_sea_conditions 確認候選日子的風險：風險高的日子不能當作新的搭船日，也不能出現在選項裡。只剩一個可行方案時直接 propose_patch，不要問；兩案都可行且取捨明顯（少玩幾個景點 vs 多一晚住宿費）時才用 ask_user。使用者已經說明選擇時就直接照做。沒有船班時刻資料，提案要提醒向船公司確認班次。若提前回程與多住一晚的日子也都是高風險（沒有安全的搭船日），不要硬組草稿，直接用 ask_user：question 說明哪幾天風險高與依據（浪高、風力），options 給可行的選擇，例如「保留原訂，出發前再看船公司公告」「改成本島台東行程、不去綠島」「延後整趟行程」。';
+const RULE7_NO_SEA = '7. 離島（綠島／蘭嶼）行程：港口站代表搭船，不能刪除、替換或改時間；船班不在調整範圍，只調整島上與本島的其他站。';
+const SYSTEM_PROMPT_LINES = [
   '你是 TravelLink AI 的「旅程應變代理人」，負責在台東旅途中發現問題、找替代方案、修好行程，再請使用者確認。',
   '工作方式：',
   '1. 先呼叫 get_trip_state 了解行程；與天氣有關時呼叫 get_weather_forecast。',
@@ -32,11 +35,12 @@ const SYSTEM_PROMPT = [
   '4. 用 propose_patch 組草稿；程式會驗證營業時間、時間順序、天氣與每天結束時間。有 violations 就修改後重送（ops 每次都要完整重給）。',
   '5. 使用者說累、想輕鬆或想早點結束時，優先用 remove 減少站數（或縮短 stayMin），不要只是替換地點。',
   '6. 驗證通過後呼叫 present_proposal，summary 用一句繁體中文說明改了什麼，reasons 寫原因（引用降雨機率、距離、營業時間等具體數字）。summary 與 reasons 只能描述草稿裡真的發生的修改，不可宣稱沒做到的效果。',
-  '7. 離島（綠島／蘭嶼）行程：港口站代表搭船，不能刪除或替換。若某段船班停航風險高，可選擇 (a) 把回程提前到風險低的日子；(b) 延後回程、多住一晚（day＝天數 + 1）。兩者都用一個 「type: move_ferry、direction: return、day、time」的 op 完成，港口站、之後的本島站、來不及去的島上站都由程式處理，結果會列出被刪掉的島上景點。之後可再用 insert 在本島補景點或餐廳。先用 get_sea_conditions 確認候選日子的風險：風險高的日子不能當作新的搭船日，也不能出現在選項裡。只剩一個可行方案時直接 propose_patch，不要問；兩案都可行且取捨明顯（少玩幾個景點 vs 多一晚住宿費）時才用 ask_user。使用者已經說明選擇時就直接照做。沒有船班時刻資料，提案要提醒向船公司確認班次。若提前回程與多住一晚的日子也都是高風險（沒有安全的搭船日），不要硬組草稿，直接用 ask_user：question 說明哪幾天風險高與依據（浪高、風力），options 給可行的選擇，例如「保留原訂，出發前再看船公司公告」「改成本島台東行程、不去綠島」「延後整趟行程」。',
+  'RULE7_PLACEHOLDER',
   'ask_user 的 question 與 options 要用旅客看得懂的話（日期、時段、景點名稱、大約花費），不可出現 stopId、op 名稱等內部代號。',
   '8. 只有在方案之間有明顯取捨（例如多花錢 vs 少去一個景點）時才用 ask_user；確認不需要修改就呼叫 no_change_needed。',
   '9. 每一輪都要呼叫工具，不要只回文字。全程使用繁體中文。'
-].join('\n');
+];
+const systemPrompt = () => SYSTEM_PROMPT_LINES.map((l) => (l === 'RULE7_PLACEHOLDER' ? (SEA.enabled() ? RULE7_SEA : RULE7_NO_SEA) : l)).join('\n');
 
 /**
  * gpt-oss 在 vLLM 上偶爾會吐出格式錯亂的回應，vLLM 解析失敗回 500
@@ -61,7 +65,9 @@ async function chatWithRetry(messages, t0, tools = T.DEFINITIONS) {
 
 function triggerText(trigger) {
   const t = trigger || {};
-  if (t.type === 'weather') return '系統偵測到行程有天氣或海象風險（降雨、公休、或離島船班停航風險），請檢查受影響的部分並提出調整方案。';
+  if (t.type === 'weather') return SEA.enabled()
+    ? '系統偵測到行程有天氣或海象風險（降雨、公休、或離島船班停航風險），請檢查受影響的部分並提出調整方案。'
+    : '系統偵測到行程有天氣風險（降雨或公休），請檢查受影響的部分並提出調整方案。';
   if (t.type === 'user') return `使用者說：「${String(t.message || '').slice(0, 200)}」。請依需求調整行程。`;
   return '請檢查行程是否需要調整。';
 }
@@ -164,7 +170,7 @@ function buildProposal(ctx, p) {
     changes: I.diffTrips(original, ctx.draft),
     costDelta: { perPersonBefore: before, perPersonAfter: after, diff: after - before, note: '門票加餐費估算，不含交通' + (ctx.draft.extraNights ? `與多 ${ctx.draft.extraNights} 晚的住宿費` : '') },
     ...(ctx.draft.extraNights ? { extraNights: ctx.draft.extraNights } : {}),
-    ...(ctx.trip.island ? { ferry: { before: F.legsOf(ctx.trip).map(legBrief), after: F.legsOf(ctx.draft).map(legBrief), note: '依海面預報推估，實際班次與是否停航以船公司公告為準' } } : {}),
+    ...(ctx.trip.island && SEA.enabled() ? { ferry: { before: F.legsOf(ctx.trip).map(legBrief), after: F.legsOf(ctx.draft).map(legBrief), note: '依海面預報推估，實際班次與是否停航以船公司公告為準' } } : {}),
     warnings: ctx.draftCheck.warnings.slice(0, 5).map((w) => w.message),
     draft: { ...ctx.draft, stops: ctx.draft.stops.map(draftStopView) }
   };
@@ -244,11 +250,12 @@ async function runAgent({ trip: rawTrip, trigger, scenario, onEvent, onUsage }) 
   let forecastPromise = null;
   const seaCache = new Map();
   const ctx = {
-    trip, scenario: scenario && (scenario.rain || scenario.sea) ? scenario : null,
+    trip, scenario: scenario && (scenario.rain || (SEA.enabled() && scenario.sea)) ? scenario : null,
     draft: null, draftCheck: null, failedRounds: 0,
     getForecast: () => (forecastPromise || (forecastPromise = D.getForecast(trip.region, scenario).then((f) => (f.periods.length ? f : null)))),
     // 離島行程每一天（含可能多住的一晚）的海況，同一天只查一次
     getSea: async (t) => {
+      if (!SEA.enabled()) return null;   // 停航功能關閉：validate 不檢查船班風險
       if (!t.island) return {};
       const out = {};
       for (let d = 1; d <= Math.min(14, t.days + 1); d++) {
@@ -321,11 +328,12 @@ async function runAgent({ trip: rawTrip, trigger, scenario, onEvent, onUsage }) 
 
   // ── 程式先檢查：天氣觸發但沒有任何站受影響 → 不呼叫 LLM ──
   if (!firstUserMessage && (!trigger || trigger.type !== 'user')) {
-    emit({ type: 'check', label: trip.island ? '程式檢查天氣、營業時間與海象（不呼叫 AI）' : '程式檢查天氣與營業時間（不呼叫 AI）' });
+    const seaOn = Boolean(trip.island) && SEA.enabled();
+    emit({ type: 'check', label: seaOn ? '程式檢查天氣、營業時間與海象（不呼叫 AI）' : '程式檢查天氣與營業時間（不呼叫 AI）' });
     const pre = await ctx.check(trip);
     const issues = pre.violations.filter((v) => ['rain', 'closed', 'hours', 'suspended', 'ferry_risk'].includes(v.code));
     if (!issues.length) {
-      return finish({ type: 'no_change', reason: pre.warnings.some((w) => w.code === 'weather_unknown') ? '拿不到天氣預報，暫時無法判斷' : (trip.island ? '行程時段沒有降雨、公休或船班停航風險' : '行程時段沒有降雨或公休問題'), llmSkipped: true });
+      return finish({ type: 'no_change', reason: pre.warnings.some((w) => w.code === 'weather_unknown') ? '拿不到天氣預報，暫時無法判斷' : (seaOn ? '行程時段沒有降雨、公休或船班停航風險' : '行程時段沒有降雨或公休問題'), llmSkipped: true });
     }
     emit({ type: 'check_result', label: `發現 ${issues.length} 個問題，啟動 AI 代理人`, issues: issues.map((v) => v.message) });
   }
@@ -336,7 +344,7 @@ async function runAgent({ trip: rawTrip, trigger, scenario, onEvent, onUsage }) 
   }
 
   const messages = [
-    { role: 'system', content: SYSTEM_PROMPT },
+    { role: 'system', content: systemPrompt() },
     { role: 'user', content: firstUserMessage || `${triggerText(trigger)}\n今天是 ${I.todayIso()}。` }
   ];
   let nudged = false;
@@ -345,7 +353,7 @@ async function runAgent({ trip: rawTrip, trigger, scenario, onEvent, onUsage }) 
     for (let call = 0; call < MAX_LLM_CALLS; call++) {
       const remaining = TIMEOUT_MS - (Date.now() - t0);
       if (remaining <= 0) throw Object.assign(new Error('timeout'), { code: 'timeout' });
-      const res = await chatWithRetry(messages, t0, ctx.delay ? DELAY_TOOL_DEFS : T.DEFINITIONS);
+      const res = await chatWithRetry(messages, t0, ctx.delay ? DELAY_TOOL_DEFS : T.definitions());
       usage.llmCalls += 1;
       if (res.model) upstreamModels.add(res.model);
       if (res.usage) {

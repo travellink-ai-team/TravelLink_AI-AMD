@@ -185,4 +185,8 @@ async function seaOn(island, isoDate, scenario) {
   };
 }
 
-module.exports = { seaOn, fetchTdxAlerts, waveMaxOf, windOf, riskOf, THRESHOLDS };
+// 離島停航風險（海象工具、move_ferry、停航檢查）目前不對使用者開放：2026-10-03 決定先停用，程式保留。
+// 要打開：server/.env 設 AGENT_SEA_RISK=on，重啟代理。
+const enabled = () => String(process.env.AGENT_SEA_RISK || '').trim().toLowerCase() === 'on';
+
+module.exports = { enabled, seaOn, fetchTdxAlerts, waveMaxOf, windOf, riskOf, THRESHOLDS };

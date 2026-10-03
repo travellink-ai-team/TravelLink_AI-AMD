@@ -364,7 +364,8 @@ function validate(trip, forecast, seaByDate) {
   if (!forecast) warnings.push({ code: 'weather_unknown', message: '拿不到天氣預報，未檢查降雨' });
 
   // 船班停航風險：高＝擋下，中＝提醒。港口站有 keepReason（使用者堅持）就只提醒。
-  for (const leg of F.legsOf(trip)) {
+  // seaByDate 是 null＝不檢查（停航功能關閉，或延誤情境）
+  if (seaByDate) for (const leg of F.legsOf(trip)) {
     const date = dateOfDay(trip.startDate, leg.day);
     const sea = seaByDate && seaByDate[date];
     const from = trip.stops.find((x) => x.id === leg.fromStopId);

@@ -18,6 +18,8 @@ const fn = (name, description, properties, required) => ({
   function: { name, description, parameters: { type: 'object', properties, required: required || [] } }
 });
 
+const SEA_TOOLS = new Set(['get_sea_conditions', 'get_ferry_status']);
+
 const DEFINITIONS = [
   fn('get_trip_state', '取得目前行程：每天的站點（stopId、時間、停留分鐘、室內/戶外）、日期、結束時間、人數、預算。第一步一定先呼叫。', {}),
   fn('get_weather_forecast', '取得行程期間每個時段的降雨機率與天氣描述，並標出哪些站落在降雨機率 ≥ 50% 的時段。', {}),
@@ -245,6 +247,9 @@ const IMPL = {
   },
 
   async propose_patch(ctx, args) {
+    if (!SEA.enabled() && Array.isArray(args.ops) && args.ops.some((o) => o && o.type === 'move_ferry')) {
+      return { error: '船班不在這次的調整範圍：港口站與船班時間不能改，請只調整其他站' };
+    }
     const { draft, results } = I.applyOps(ctx.trip, args.ops);
     const check = await ctx.check(draft);
     ctx.draft = draft;
@@ -280,7 +285,7 @@ const IMPL = {
 };
 
 async function runTool(ctx, name, rawArgs) {
-  if (!Object.prototype.hasOwnProperty.call(IMPL, name)) return { error: `沒有這個工具：${name}` };
+  if (!Object.prototype.hasOwnProperty.call(IMPL, name) || (SEA_TOOLS.has(name) && !SEA.enabled())) return { error: `沒有這個工具：${name}` };
   let args = rawArgs;
   if (typeof args === 'string') {
     try { args = args.trim() ? JSON.parse(args) : {}; } catch (_e) { return { error: '參數不是有效的 JSON' }; }
@@ -293,4 +298,18 @@ function labelOf(name, args) {
   try { return (LABELS[name] || (() => name))(args || {}); } catch (_e) { return name; }
 }
 
-module.exports = { DEFINITIONS, TERMINAL, runTool, labelOf, stopView };
+// 停航功能關閉時：不給海象／船班工具，propose_patch 也拿掉 move_ferry 選項
+function definitions() {
+  if (SEA.enabled()) return DEFINITIONS;
+  return DEFINITIONS.filter((d) => !SEA_TOOLS.has(d.function.name)).map((d) => {
+    if (d.function.name !== 'propose_patch') return d;
+    const c = JSON.parse(JSON.stringify(d));
+    const p = c.function.parameters.properties.ops.items.properties;
+    p.type.enum = p.type.enum.filter((x) => x !== 'move_ferry');
+    delete p.type.description;
+    delete p.direction;
+    return c;
+  });
+}
+
+module.exports = { definitions, DEFINITIONS, TERMINAL, runTool, labelOf, stopView };
