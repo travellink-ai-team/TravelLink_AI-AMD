@@ -3964,6 +3964,47 @@ function sanitizeTripForFirestore(value) {
   return value; // 保留 Timestamp、GeoPoint、Date 與 FieldValue 等 SDK 型別。
 }
 
+// 每一站在建立當下就給 collabStopId，存進 localStorage 與 Firestore。
+// 它是站的身分證：共編三方合併、地圖 pin、旅程應變 Agent（T4）套用提案都靠它對應站點。
+// planner 存檔時會寫入，但生成後第一次存檔（這裡）原本沒寫：2026-10-03 查 Firestore，
+// 202／251 份行程缺這欄，其中 56 份是網頁生成後沒再編輯過的。缺了之後各端只能自己現算，
+// 網頁用「類型｜站名｜順序」、App 用 web_{順序}_{站名}，兩邊對不上，提案會套不回去。
+// 演算法必須與 planner 的 getStableCollabStopId 完全一致（同一站兩頁算出同一個 id）。
+function stableCollabStopId(stop, index) {
+  const existing = stop && (stop.collabStopId || stop.stopId);
+  if (existing) return String(existing);
+  const seed = [stop && stop.type || '', stop && stop.name || '', Number(index) || 0].join('|').toLowerCase();
+  let hash = 2166136261;
+  for (let i = 0; i < seed.length; i += 1) {
+    hash ^= seed.charCodeAt(i);
+    hash = Math.imul(hash, 16777619);
+  }
+  return `cstop-${(hash >>> 0).toString(36)}`;
+}
+
+function assignCollabStopIds(stops) {
+  if (!Array.isArray(stops)) return stops;
+  // 已經存在的 id 絕對不改（別的裝置可能已經在用），先全部保留起來
+  const used = new Set();
+  stops.forEach((stop) => {
+    const existing = stop && typeof stop === 'object' && (stop.collabStopId || stop.stopId);
+    if (existing) {
+      stop.collabStopId = String(existing);
+      used.add(stop.collabStopId);
+    }
+  });
+  stops.forEach((stop, i) => {
+    if (!stop || typeof stop !== 'object' || stop.collabStopId) return;
+    const base = stableCollabStopId(stop, i);
+    let id = base;
+    // 極少數雜湊碰撞時加後綴，確保同一份行程內不重複
+    for (let n = 2; used.has(id); n += 1) id = `${base}-${n}`;
+    stop.collabStopId = id;
+    used.add(id);
+  });
+  return stops;
+}
+
 async function saveMicroTripToFirebase(trip) {
   if (!firebaseEnabled || !firebaseDb) return false;
   try {
@@ -7522,6 +7563,8 @@ async function _doGeneration(trip, wData) {
     if (!Array.isArray(trip.stops) || trip.stops.length === 0) {
       throw new Error('這次沒有產生景點，原本的規劃偏好已保留，請重試生成。');
     }
+    // 在存本機與 Firestore 之前給 id：兩份副本拿到同一組 id
+    assignCollabStopIds(trip.stops);
     _genPerf.mark('step2 後處理');
     _genPerf.table('行程生成');
 

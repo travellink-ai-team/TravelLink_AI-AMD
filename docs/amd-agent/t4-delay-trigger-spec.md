@@ -79,20 +79,33 @@ Authorization: Bearer <Firebase ID token>
 
 | 需要的資訊 | 網頁（Firestore） | App 現況 | v1 怎麼做 |
 |---|---|---|---|
-| 站的 id | `collabStopId`（新行程都有；**舊行程沒有**） | 只有 `stopId`，沒有就用 `web_{order}_{站名}` | App 改成優先讀 `collabStopId`；舊行程見第 5 節 |
+| 站的 id | `collabStopId`（planner 存檔會寫；explore 生成已修正） | 只有 `stopId`，沒有就用 `web_{order}_{站名}` | 見第 5 節：App 建立、讀取、存檔都要處理 |
 | 手動鎖定時間 | **`manualStartMin` / `manualEndMin`**（從 0 點起算的分鐘，`null`＝沒鎖） | 沒有 | App 讀進來時保留這兩欄、送回時原樣寫回；送 API 時換算成 `timeLocked: manualStartMin != null` |
 | 座標 | `lat`/`lng`（少數站缺） | 部分舊站是空的 | 後端處理缺座標的站 |
 | 營業時間 | `businessHours` 原文 | 有 | 兩端都送原文 |
 | 錨點 | 用站名與 `ferry-config.js` 推斷 | 有三種錨點 | 兩端都送 `anchor` |
 
-## 5. 舊行程沒有 `collabStopId`（共編會壞，必須處理）
+## 5. 每一站都必須有 `collabStopId`（單人、共編都一樣）
 
-實際查 Firestore：2026-07 之前建立的行程（**包含一份共編行程**）stops 上**完全沒有** `collabStopId`。網頁遇到時會用 `type|name|index` 現算一個 `cstop-…`，App 則是 `web_{order}_{站名}`，兩邊算出來不一樣，而且只要站的順序改變，網頁算出的 id 也會跟著變。
+`collabStopId` 是站的身分證：共編的三方合併（`mergeCollabStops`）、地圖 pin、T4 套用提案都用它對應站點。名字有 collab，但**單人行程也要有**：單人轉共編時（`collab.js` 開共編、後端核准加入申請）都**不會**改寫 stops，所以必須在**建立行程的當下**就寫進去。
 
-**v1 規則**：送出 T4 請求前，行程的每一站都必須有**已經存進 Firestore** 的 `collabStopId`。
+**2026-10-03 查 Firestore（唯讀）**：251 份行程有 202 份缺這欄。逐一追查寫入來源：
 
-- **一次性補齊（建議）**：用後端的 Admin SDK 跑一次遷移，幫所有缺 `collabStopId` 的站補上（演算法沿用網頁的 `getStableCollabStopId`），補完後兩端都只讀不算。**這會寫入正式資料庫，執行前要先確認。**
-- 補齊之前，用戶端如果發現有站缺 id，就先用 transaction 把 id 寫回 Firestore，再送出請求。
+| 存檔流程 | 會寫 `collabStopId` 嗎 | 證據 |
+|---|---|---|
+| 網頁 explore：生成後第一次存檔 | ❌ → **已修正**（`assignCollabStopIds`，`?v=20261003-stopid1`） | 56 份網頁生成、之後沒再編輯的行程全部缺 |
+| **App 建立／編輯行程** | ❌ **待 App 修正** | 91 份帶 App 的 `stopId`、沒有 `collabStopId` |
+| 網頁 planner 編輯後存檔（`serializeStopForPersistence`） | ✅ | 缺 id 的網頁行程最後存檔都在 2026-07（planner 7/15 起才寫），8 月之後沒有 |
+| 共編流程（`collab.js`、後端 join-requests） | 不寫 stops | — |
+
+**網頁（已完成）**：生成後、存本機與 Firestore 前，每一站給 `collabStopId`，演算法與 planner 的 `getStableCollabStopId` 完全一致；既有的 `collabStopId`／`stopId` 一律沿用、不覆蓋。
+
+**App 要做的（v1 必要）**：
+1. **建立行程**時就幫每一站寫入 `collabStopId`（建議 UUID，或沿用自己的 `stopId` 值）。
+2. **讀取**優先用 `collabStopId`，沒有才用 `stopId`；**不要**再用 `web_{order}_{站名}` 現算。
+3. **存檔**時把 `collabStopId` 原樣寫回，絕對不能丟掉；新增的站自己產生新的 id。
+
+**舊資料**：不刪除、不做大量遷移。送出 T4 請求前，用戶端發現有站缺 id 就先用 transaction 補寫進 Firestore 再送；後端收到缺 `id` 的站會回 400，不會產生套不回去的提案。
 
 ## 6. 套用提案（兩端同一套）
 
@@ -108,6 +121,6 @@ Authorization: Bearer <Firebase ID token>
 
 ## 8. 範圍
 
-**v1（這次做）**：第 2 節的必填欄位、`anchor`、`businessHours`、`returnTrain`／`lastFerry`、只改時間的提案、`scenario.delay`、第 5 節的 id 補齊、第 6 節的套用流程。
+**v1（這次做）**：第 2 節的必填欄位、`anchor`、`businessHours`、`returnTrain`／`lastFerry`、只改時間的提案、`scenario.delay`、第 5 節的 id 規則（網頁已完成、App 待做）、第 6 節的套用流程。
 
 **v2（之後）**：`appConflicts` 的比對報表、依帳號限流、多日行程跨天順延。
