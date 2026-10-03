@@ -248,7 +248,7 @@ const STORM_ALL = { sea: [
     else console.log(JSON.stringify(noSafe).slice(0, 300));
     console.log('   ' + noSafe.usage.llmCalls + ' 次 LLM、' + (noSafe.ms / 1000).toFixed(1) + 's');
     ok('live A2：沒有安全日 → 向使用者提問（不是錯誤）', noSafe.type === 'question' && noSafe.options.length >= 2);
-    ok('live A2：問題裡沒有內部代號', noSafe.type === 'question' && !/gd+|stopId|move_ferry/.test(noSafe.question + noSafe.options.join('')));
+    ok('live A2：問題裡沒有內部代號', noSafe.type === 'question' && !/\bg\d+\b|stopId|move_ferry/.test(noSafe.question + noSafe.options.join('')));
     if (storm.type === 'proposal') {
       const after = I.normalizeTrip(storm.draft);
       const v = I.validate(after, null, await seaOf(after, SEA_SCENARIO));
