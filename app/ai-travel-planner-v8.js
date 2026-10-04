@@ -10887,7 +10887,7 @@
         // 否則會用本機過期副本 merge 蓋掉擁有者剛改的角色/成員（#10 加入者權限狀態）。
         const { __saving, members: _m, memberEmails: _me, ownerEmail: _oe, ownerUid: _ou, ownerName: _on,
           role: _role, guestReadable: _gr, shareToken: _stk, inviteCode: _ivc, maxMembers: _mmx,
-          collabCreatedAt: _ccat, userEmail: _ue, ...cleanLocal } = localTrip || {};
+          collabCreatedAt: _ccat, userEmail: _ue, cloudSyncedFor: _csf, ...cleanLocal } = localTrip || {};
         // 共編文件必須使用明確白名單。不能展開 localTrip：本機卡片含 createdAt、tripMode、cc，
         // 也可能仍保留舊 title/titleVersion；整包 merge 不只會被 editor Rules 拒絕，還會把別人
         // 剛完成的改名覆蓋回舊值。名稱只能走專用的 transaction 改名流程。
