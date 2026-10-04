@@ -8756,3 +8756,42 @@ button.notif-item { cursor: pointer; }
 /* ── AI 隨行管家：聊天建議的確認卡（套用前不改行程）── */
 .chat-action-confirm .agent-notice { margin-top: 10px; }
 .chat-action-confirm .agent-chg-tag { background: #e0ecff; color: #1d4ed8; }
+
+/* ── 照片九宮格：調整裁切（焦點）── */
+.memory-crop-toggle.on { border-color: var(--accent); background: var(--accent-light); color: var(--accent-dark); }
+.memory-layout-overlay.crop-mode .memory-card-handle.crop { cursor: move; border-style: solid; border-color: rgba(255,255,255,.95); background: rgba(255,255,255,.08); }
+.memory-layout-overlay.crop-mode .memory-card-handle.crop.dragging { background: rgba(255,255,255,.16); }
+.memory-card-handle.crop .memory-card-grip { display: none; }
+.memory-card-handle.crop::after {
+  content: '✥'; position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%);
+  width: 32px; height: 32px; border-radius: 50%; display: grid; place-items: center;
+  background: rgba(0,0,0,.45); color: #fff; font-size: 16px; pointer-events: none;
+}
+.memory-hero-pan {
+  position: absolute; inset: 0; pointer-events: auto; touch-action: none; cursor: move;
+  outline: 2px dashed rgba(255,255,255,.75); outline-offset: -6px; border-radius: 6px;
+}
+.memory-hero-pan.dragging { background: rgba(255,255,255,.06); }
+.memory-hero-pan-label {
+  position: absolute; left: 10px; bottom: 10px; padding: 4px 10px; border-radius: 999px;
+  background: rgba(0,0,0,.55); color: #fff; font-size: 12px; font-weight: 700; white-space: nowrap; pointer-events: none;
+}
+
+/* ── 照片九宮格：📱 IG 個人頁預覽（用實際輸出的 9 張切圖）── */
+.memory-ig-preview { margin: 16px 0 4px; }
+.memory-ig-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; margin-bottom: 8px; }
+.memory-ig-head strong { font-size: 15px; white-space: nowrap; }
+.memory-ig-toggle { display: inline-flex; align-items: center; gap: 6px; min-height: 44px; font-size: 13px; color: var(--ink2); white-space: nowrap; cursor: pointer; }
+.memory-ig-phone { width: min(100%, 420px); margin: 0 auto; background: #fff; border: 1px solid var(--border); border-radius: 16px; overflow: hidden; }
+.memory-ig-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 2px; background: #fff; }
+.memory-ig-cell { position: relative; margin: 0; aspect-ratio: 4 / 5; background: #efefef; overflow: hidden; }
+.memory-ig-cell img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.memory-ig-cell.is-missing { display: grid; place-items: center; font-size: 12px; color: var(--ink3); }
+.memory-ig-no {
+  position: absolute; right: 4px; bottom: 4px; min-width: 22px; height: 22px; padding: 0 6px; border-radius: 999px;
+  display: grid; place-items: center; background: rgba(0,0,0,.6); color: #fff; font-size: 12px; font-weight: 800;
+}
+.memory-ig-preview.hide-no .memory-ig-no { display: none; }
+.memory-ig-note { margin-top: 8px; font-size: 13px; line-height: 1.6; color: var(--ink2); text-wrap: pretty; }
+
+.memory-edit-hint { text-wrap: pretty; }   /* 調整裁切的說明較長：避免句尾孤字 */
