@@ -4797,7 +4797,17 @@
       if (!exists) photos.push(stored);
       place.photos = sortStoredTripPhotos(photos);
     }, tripId);
-    if (document.getElementById('travellog-list')) renderTravelLog();
+    scheduleTravelLogRender();
+  }
+
+  // 批次上傳時每張照片完成都會要求重繪旅記（發布一次、synced 事件一次）；
+  // 旅記是整段 innerHTML 重建，連續重繪會讓縮圖一直閃。合併成短時間內只畫一次。
+  let travelLogRenderTimer = null;
+  function scheduleTravelLogRender() {
+    clearTimeout(travelLogRenderTimer);
+    travelLogRenderTimer = setTimeout(() => {
+      if (document.getElementById('travellog-list')) renderTravelLog();
+    }, 300);
   }
 
   function ensureTripPhotoManager() {
@@ -4822,7 +4832,7 @@
       });
       if (!tripPhotoManagerEventUnsubscribe) {
         tripPhotoManagerEventUnsubscribe = manager.subscribe((event) => {
-          if (event.type === 'synced' && document.getElementById('travellog-list')) renderTravelLog();
+          if (event.type === 'synced') scheduleTravelLogRender();
           // 別人新增／刪除照片（即時快照）→ 旅記開著就重新對齊本機紀錄再重繪
           const travelLogView = document.getElementById('view-travellog');
           if ((event.type === 'remote-removed' || event.type === 'remote-changed') && travelLogView && travelLogView.classList.contains('active')) {
@@ -4878,8 +4888,12 @@
       const actor = currentPhotoOwner();
       const mountKey = `${tripId}:${actor.uid}:${actor.role}`;
       let lastRemoteSignature = '';
+      // 即時快照還活著就直接用最近一份，不必每次重整都再查一次 Firestore
+      // （批次上傳時每張照片都會觸發好幾次重整）。快照中斷時退回查詢。
+      let latestRemote = null;
       const mergeLocalAndRemote = async (remotePhotos = null) => {
-        const remote = remotePhotos || await sync.list(tripId);
+        if (remotePhotos) latestRemote = remotePhotos;
+        const remote = remotePhotos || latestRemote || await sync.list(tripId);
         const signature = remote.map((photo) => `${photo.id}:${photo.updatedAt || photo.uploadedAt || ''}`).sort().join('|');
         if (signature !== lastRemoteSignature) {
           lastRemoteSignature = signature;
@@ -4906,7 +4920,10 @@
           listPhotos: () => mergeLocalAndRemote(),
           subscribe: (_tripId, onPhotos, onError) => sync.subscribe(tripId, async (remote) => {
             try { onPhotos(await mergeLocalAndRemote(remote)); } catch (error) { if (onError) onError(error); }
-          }, onError),
+          }, (error, details) => {
+            latestRemote = null;
+            if (onError) onError(error, details);
+          }),
           updateClassification: (id, patch, currentActor) => manager.updateClassification(id, patch, currentActor),
           retry: (query) => manager.retryPending(query),
           remove: (id, currentActor) => manager.remove(id, currentActor),

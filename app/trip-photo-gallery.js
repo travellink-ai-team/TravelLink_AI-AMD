@@ -360,7 +360,7 @@
     var members = memberOptions(state.photos);
     var selectedCount = state.selected.size;
     var title = text(state.options.title || '共同行程相簿');
-    state.container.innerHTML = '<section class="tpg" aria-label="' + escapeHtml(title) + '">' +
+    var html = '<section class="tpg" aria-label="' + escapeHtml(title) + '">' +
       '<header class="tpg-header"><div class="tpg-heading"><h2>' + escapeHtml(title) + '</h2><p>依日期與景點整理所有旅伴的照片。</p></div>' +
       '<button type="button" class="tpg-refresh" data-action="refresh">重新整理</button></header>' +
       '<div class="tpg-filters" role="group" aria-label="照片篩選">' +
@@ -376,6 +376,10 @@
       '<div class="tpg-content" aria-busy="' + state.loading + '">' +
         (state.loading ? '<div class="tpg-empty">正在載入共同行程照片…</div>' : groups.length ? groups.map(groupMarkup).join('') : '<div class="tpg-empty">目前沒有符合條件的照片。</div>') +
       '</div></section>';
+    // 內容沒變就不重設 innerHTML：重設會把所有 <img> 換成新節點，畫面會整片閃一下。
+    if (html === state.lastHtml && state.container.firstChild) return;
+    state.lastHtml = html;
+    state.container.innerHTML = html;
   }
   function findPhoto(id) { return state && state.photos.find(function (photo) { return photo.id === id; }); }
   async function classifySelected() {
@@ -444,17 +448,39 @@
     var payload = await state.adapter.listPhotos({ tripId: state.options.tripId });
     return flattenSources(payload, { tripId: state.options.tripId, stops: state.options.stops });
   }
-  async function refresh() {
-    if (!state) return [];
+  // 批次上傳時每張照片會連發好幾個事件；同時間只跑一次 refresh，
+  // 期間再來的要求合併成跑完後的下一次。
+  function refresh() {
+    if (!state) return Promise.resolve([]);
     var current = state;
-    current.loading = true;
-    render();
+    if (current.refreshing) {
+      if (!current.refreshQueued) {
+        current.refreshQueued = current.refreshing.then(function () {
+          current.refreshQueued = null;
+          return state === current ? refresh() : [];
+        });
+      }
+      return current.refreshQueued;
+    }
+    current.refreshing = loadAndRender(current).then(function (photos) {
+      current.refreshing = null;
+      return photos;
+    });
+    return current.refreshing;
+  }
+  async function loadAndRender(current) {
+    // 只有第一次（還沒有任何照片）才顯示「載入中」；之後在背景更新，不把整個相簿清掉。
+    if (!current.loaded) {
+      current.loading = true;
+      render();
+    }
     try {
       var photos = await loadPhotos();
       if (state !== current) return [];
       current.photos = photos;
       current.selected.forEach(function (id) { if (!findPhoto(id)) current.selected.delete(id); });
       current.loading = false;
+      current.loaded = true;
       render();
       return photos.slice();
     } catch (error) {

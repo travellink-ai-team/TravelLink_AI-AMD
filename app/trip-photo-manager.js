@@ -168,9 +168,21 @@ window.TripPhotoManager = (function () {
     });
   }
 
+  // 依索引取資料。整個 store 的 getAll 會把所有待上傳照片的 Blob 一起讀出來，
+  // 批次上傳時每個事件都這樣讀，張數一多就越來越慢。
+  async function getAllBy(indexName, value) {
+    var db = await openDb();
+    return new Promise(function (resolve, reject) {
+      var tx = db.transaction(STORE, 'readonly');
+      var request = tx.objectStore(STORE).index(indexName).getAll(value);
+      request.onsuccess = function () { resolve(request.result || []); };
+      request.onerror = function () { reject(request.error); };
+    });
+  }
+
   async function list(query) {
     query = query || {};
-    var photos = await getAll();
+    var photos = query.tripId != null ? await getAllBy('tripId', String(query.tripId)) : await getAll();
     photos = photos.filter(function (photo) {
       if (query.tripId != null && String(photo.tripId) !== String(query.tripId)) return false;
       if (query.dayKey != null && String(photo.dayKey || '') !== String(query.dayKey)) return false;
@@ -612,7 +624,7 @@ window.TripPhotoManager = (function () {
 
   async function findDuplicateHints(hash, tripId, excludeId) {
     if (!hash) return [];
-    var photos = await getAll();
+    var photos = await getAllBy('hash', hash);
     return photos.filter(function (photo) {
       return photo.hash === hash
         && String(photo.tripId || '') === String(tripId || '')
@@ -756,23 +768,74 @@ window.TripPhotoManager = (function () {
     }
   }
 
+  // 同時上傳張數：2 張可以把等待網路的空檔補滿，又不至於讓手機同時解碼太多大圖。
+  var UPLOAD_CONCURRENCY = 2;
+  var retryRerun = null;
+
+  function mergeRetryOptions(a, b) {
+    if (!a) return Object.assign({}, b);
+    return {
+      // 兩次要求的行程不同就整個佇列都掃，寧可多掃不要漏。
+      tripId: a.tripId != null && b.tripId != null && String(a.tripId) === String(b.tripId) ? a.tripId : undefined,
+      force: !!(a.force || b.force)
+    };
+  }
+
+  async function pendingPhotos(options) {
+    var now = Date.now();
+    var photos = await list({ status: [STATUS.QUEUED, STATUS.FAILED, STATUS.UPLOADING, STATUS.PUBLISHING] });
+    return photos.filter(function (photo) {
+      if (options.tripId != null && String(photo.tripId) !== String(options.tripId)) return false;
+      if (!options.force && Number(photo.nextRetryAt || 0) > now) return false;
+      return Number(photo.attempts || 0) < Number(config.maxAttempts || 8) || options.force;
+    });
+  }
+
+  async function runPool(items, worker, limit) {
+    var next = 0;
+    var out = new Array(items.length);
+    async function lane() {
+      while (next < items.length) {
+        var index = next++;
+        out[index] = await worker(items[index]);
+      }
+    }
+    var lanes = [];
+    for (var i = 0; i < Math.min(limit, items.length); i++) lanes.push(lane());
+    await Promise.all(lanes);
+    return out;
+  }
+
   async function retryPending(options) {
     options = options || {};
-    if (retryPromise) return retryPromise;
+    if (retryPromise) {
+      // 上傳進行中又有照片排入（例如批次分類逐張把 local-only 轉成 queued）：
+      // 記下來在這一輪結束前再撈一次，不要讓後面的照片等到下次 online／回前景才傳。
+      retryRerun = mergeRetryOptions(retryRerun, options);
+      return retryPromise;
+    }
     retryPromise = (async function () {
-      var now = Date.now();
-      var photos = await list({ status: [STATUS.QUEUED, STATUS.FAILED, STATUS.UPLOADING, STATUS.PUBLISHING] });
-      photos = photos.filter(function (photo) {
-        if (options.tripId != null && String(photo.tripId) !== String(options.tripId)) return false;
-        if (!options.force && Number(photo.nextRetryAt || 0) > now) return false;
-        return Number(photo.attempts || 0) < Number(config.maxAttempts || 8) || options.force;
-      });
       var results = [];
-      // 依序上傳，避免手機一次解碼／上傳多張造成記憶體尖峰。
-      for (var i = 0; i < photos.length; i++) results.push(await syncOne(photos[i]));
+      // 本輪處理過的照片與當時的 updatedAt；之後若被改過（重新分類）才會再處理，
+      // 失敗的則留給 backoff，避免 force 模式在同一輪無限重試。
+      var handled = Object.create(null);
+      var current = options;
+      while (current) {
+        retryRerun = null;
+        var photos = (await pendingPhotos(current)).filter(function (photo) {
+          return !(photo.id in handled) || Number(photo.updatedAt || 0) > handled[photo.id];
+        });
+        var batch = await runPool(photos, syncOne, UPLOAD_CONCURRENCY);
+        batch.forEach(function (photo, index) {
+          var id = photos[index].id;
+          handled[id] = Number(photo && photo.updatedAt || Date.now());
+          results.push(photo);
+        });
+        current = retryRerun;
+      }
       return results.map(publicPhoto);
     })();
-    try { return await retryPromise; } finally { retryPromise = null; }
+    try { return await retryPromise; } finally { retryPromise = null; retryRerun = null; }
   }
 
   async function updateClassification(id, patch, actor) {
@@ -881,6 +944,10 @@ window.TripPhotoManager = (function () {
     return Number(now) - Number(photo.syncedAt || 0) >= LOCAL_PRUNE_GRACE_MS;
   }
 
+  function remoteSignature(remote) {
+    try { return JSON.stringify(remote); } catch (_e) { return ''; }
+  }
+
   async function ingestRemote(photos, options) {
     options = options || {};
     var incoming = Array.isArray(photos) ? photos : photos ? [photos] : [];
@@ -891,12 +958,17 @@ window.TripPhotoManager = (function () {
       var local = await get(remote.id);
       // 本機尚未完成上傳／發布時，不讓舊 snapshot 蓋掉 Blob 與重試狀態。
       if (local && local.status !== STATUS.SYNCED && local.source !== 'remote') continue;
+      // 每份快照都是整趟行程的完整清單；內容沒變的照片不要重寫、也不要發 remote-changed，
+      // 否則每傳完一張，所有舊照片都會被重寫一次並觸發整個相簿重繪。
+      var signature = remoteSignature(remote);
+      if (signature && local && local.source === 'remote' && local.status === STATUS.SYNCED && local.remoteSignature === signature) continue;
       var merged = Object.assign({}, local || {}, remote, {
         id: String(remote.id),
         tripId: String(remote.tripId || options.tripId || ''),
         blob: null,
         status: STATUS.SYNCED,
         source: 'remote',
+        remoteSignature: signature,
         updatedAt: Number(remote.updatedAt) || Date.now()
       });
       await put(merged);
