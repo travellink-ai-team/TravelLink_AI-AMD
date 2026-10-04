@@ -96,7 +96,11 @@ function normalizeTrip(raw) {
       id: String(s.id || 's' + (i + 1)).replace(/[\u0000-\u001f"\\]/g, '').trim().slice(0, 80) || 's' + (i + 1),
       day: Math.min(14, Math.max(1, Number(s.day) || 1)),
       time: clock(s.time, '09:00'),
-      stayMin: Math.min(600, Math.max(5, Number(s.stayMin) || (place && place.duration) || 60)),
+      // 有送就照送的（0 也算有送：回程車站、港口停 0 分是正常的）；沒送才用本地資料的建議停留。
+      // 原本用 ||，0 會被當成沒填，台東車站變成停 60 分、當天結束時間被推晚一小時。
+      stayMin: Math.min(600, Number.isFinite(Number(s.stayMin)) && s.stayMin !== null && s.stayMin !== ''
+        ? Math.max(anchor || stopType === 'transit' ? 0 : 5, Math.round(Number(s.stayMin)))
+        : Math.max(5, (place && place.duration) || 60)),
       name: String(s.name).slice(0, 80),
       lat: Number.isFinite(lat) ? lat : null,
       lng: Number.isFinite(lng) ? lng : null,

@@ -16,7 +16,9 @@ let pass = 0, fail = 0;
 const ok = (name, cond, extra) => { if (cond) { pass++; console.log('PASS  ' + name); } else { fail++; console.log('FAIL  ' + name + (extra ? '\n      ' + extra : '')); } };
 
 // 明天（台灣時間），落在 CWA 一週預報內
-const tomorrow = (() => { const d = new Date(Date.now() + 8 * 3600e3); d.setUTCDate(d.getUTCDate() + 1); return d.toISOString().slice(0, 10); })();
+// 行程日：明天起第一個不是週一、週二的日子。測試行程有鐵花村（週一二公休）、史前館（週二休），
+// 碰到公休日「沒有降雨」那幾項會走到別的分支（星期天跑測試就會失敗）
+const tomorrow = (() => { const d = new Date(Date.now() + 8 * 3600e3); d.setUTCDate(d.getUTCDate() + 1); while ([1, 2].includes(d.getUTCDay())) d.setUTCDate(d.getUTCDate() + 1); return d.toISOString().slice(0, 10); })();
 
 // 情境 B：台東市區一日遊，下午兩個戶外景點碰上大雨（模擬 13:00–17:00、80%）
 const TRIP = {
