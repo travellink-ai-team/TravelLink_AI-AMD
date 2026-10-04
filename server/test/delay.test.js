@@ -118,7 +118,7 @@ const run = (trip, trig, scenario) => runAgent({ trip, trigger: trig, scenario, 
   // ── stayMin: 0 是有送（回程車站停 0 分），不能當成沒填改成本地資料的 60 分 ──
   const zero = I.normalizeTrip({ ...clone(TRIP), stops: [...clone(TRIP).stops.slice(0, 3), { id: 'cstop-d4', day: 1, time: '19:20', stayMin: 0, name: '台東車站', anchor: 'station', stopType: 'transit' }] });
   ok('錨點車站 stayMin 0 保留 0', zero.stops[3].stayMin === 0, String(zero.stops[3].stayMin));
-  ok('一般景點 stayMin 0 至少 5 分、沒送才用本地建議停留', I.normalizeTrip({ stops: [{ name: '加路蘭', stayMin: 0 }, { name: '加路蘭' }] }).stops.map((x) => x.stayMin).join(',') === '5,40');
+  ok('一般景點 stayMin 0 至少 5 分、沒送才用本地建議停留', I.normalizeTrip({ stops: [{ id: 'x1', day: 1, time: '10:00', name: '加路蘭', stayMin: 0 }, { id: 'x2', day: 1, time: '11:00', name: '加路蘭' }] }).stops.map((x) => x.stayMin).join(',') === '5,40');
 
   // ── 車程：用戶端送的實際車程（Google 路線）優先，新路段用比例校正 ──
   const withLegs = clone(TRIP);
