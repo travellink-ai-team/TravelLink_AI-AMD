@@ -6117,13 +6117,32 @@
     return loaded.filter((item) => item.img);
   }
 
-  function drawCover(ctx, img, x, y, width, height) {
+  // 裁切焦點：{ x, y } 皆 0～1，代表「這個點盡量放在裁切框中央」；沒給就是正中央。
+  function memoryFocusPoint(focus) {
+    const c = (v) => (Number.isFinite(Number(v)) ? Math.max(0, Math.min(1, Number(v))) : 0.5);
+    return focus ? { x: c(focus.x), y: c(focus.y) } : { x: 0.5, y: 0.5 };
+  }
+
+  /* 卡片／底圖的焦點只對「設定時的那張照片」有效：換了照片（換底圖、選片順序變了）就回到置中。
+     focusPhotoId 沒記錄（例如自動排版直接寫入 focus）時一律採用。 */
+  function memoryEffectiveFocus(focus, focusPhotoId, photoId) {
+    if (!focus) return null;
+    if (focusPhotoId && photoId && focusPhotoId !== photoId) return null;
+    return focus;
+  }
+
+  // 依焦點裁切：先算出 cover 需要的來源範圍，再把它移到焦點附近，夾在照片範圍內（不露空白）。
+  // 預覽與 1080×1350 輸出都走這裡，所以兩邊的裁切一定一致。
+  function drawCover(ctx, img, x, y, width, height, focus) {
     const iw = img.naturalWidth || img.width;
     const ih = img.naturalHeight || img.height;
     const scale = Math.max(width / iw, height / ih);
     const sw = width / scale;
     const sh = height / scale;
-    ctx.drawImage(img, (iw - sw) / 2, (ih - sh) / 2, sw, sh, x, y, width, height);
+    const f = memoryFocusPoint(focus);
+    const sx = Math.max(0, Math.min(iw - sw, f.x * iw - sw / 2));
+    const sy = Math.max(0, Math.min(ih - sh, f.y * ih - sh / 2));
+    ctx.drawImage(img, sx, sy, sw, sh, x, y, width, height);
   }
 
   function fitCanvasText(ctx, text, maxWidth) {
@@ -6164,7 +6183,7 @@
   }
 
   // 一張傾斜的照片卡（白框＋陰影），中心點與角度由版面表給
-  function drawMemoryCard(ctx, img, cx, cy, cardW, cardH, angleDeg, scale) {
+  function drawMemoryCard(ctx, img, cx, cy, cardW, cardH, angleDeg, scale, focus) {
     const border = Math.max(2, 14 * scale);
     ctx.save();
     ctx.translate(cx, cy);
@@ -6180,7 +6199,7 @@
     ctx.save();
     memoryRoundRect(ctx, -cardW / 2, -cardH / 2, cardW, cardH, 10 * scale);
     ctx.clip();
-    drawCover(ctx, img, -cardW / 2, -cardH / 2, cardW, cardH);
+    drawCover(ctx, img, -cardW / 2, -cardH / 2, cardW, cardH, focus);
     ctx.restore();
     ctx.restore();
   }
@@ -6232,7 +6251,10 @@
     const hero = resolved.hero;
     ctx.fillStyle = '#1A1814';
     ctx.fillRect(0, 0, width, height);
-    drawCover(ctx, hero.img, 0, 0, width, height);
+    drawCover(ctx, hero.img, 0, 0, width, height,
+      memoryEffectiveFocus(layout.heroFocus, layout.heroFocusPhotoId, hero.photo.id));
+    // 調整裁切時要知道每張照片的原始尺寸（拖曳距離換算成焦點位移）
+    if (memoryStudioState) memoryStudioState.lastResolved = resolved;
 
     // ② 壓暗：讓疊在上面的卡片與標題浮得出來，順便統一整張的色調
     ctx.fillStyle = 'rgba(20,17,14,0.34)';
@@ -6250,7 +6272,8 @@
       const spec = layout.cards[i];
       const cardW = spec.w * width;
       const cardH = cardW * (MEMORY_TILE.h / MEMORY_TILE.w);
-      drawMemoryCard(ctx, item.img, spec.cx * width, spec.cy * height, cardW, cardH, spec.angle, scale);
+      drawMemoryCard(ctx, item.img, spec.cx * width, spec.cy * height, cardW, cardH, spec.angle, scale,
+        memoryEffectiveFocus(spec.focus, spec.focusPhotoId, item.photo.id));
     });
 
     // ④ 標題：整張只有一組，位置由 cx/cy 決定（可左右也可上下移動）。
@@ -6320,9 +6343,10 @@
             <span>顯示切線</span>
           </label>
           <button type="button" class="memory-secondary-btn" onclick="memoryAddCard()">＋ 加入圖片</button>
+          <button type="button" class="memory-secondary-btn memory-crop-toggle${memoryStudioState.cropMode ? ' on' : ''}" aria-pressed="${memoryStudioState.cropMode ? 'true' : 'false'}" onclick="memoryToggleCropMode()">${memoryStudioState.cropMode ? '✓ 完成裁切' : '✂️ 調整裁切'}</button>
           <button type="button" class="memory-secondary-btn memory-edit-reset" onclick="memoryResetLayout()">↺ 重設版面</button>
         </div>
-        <span class="memory-edit-hint">拖小卡可移動、拉角可縮放、雙擊小卡可換照片；點標題可改字</span>
+        <span class="memory-edit-hint" id="memoryEditHint">${memoryEditHintText()}</span>
         <div class="memory-ai-box">
           <input type="text" id="memoryAiInput" class="memory-ai-input" placeholder="✨ 也能打字叫 AI 調，例如「卡片放大一點」「標題往上」「移除標題」"
             onkeydown="if(event.key==='Enter'){event.preventDefault();memoryAiEdit();}">
@@ -6399,6 +6423,16 @@
     const state = memoryStudioState;
     if (!overlay || !state) return;
     overlay.innerHTML = '';
+    overlay.classList.toggle('crop-mode', !!state.cropMode);
+    // 調整裁切模式：最底下鋪一層拖曳底圖用的面（卡片把手疊在它上面，拖卡片＝移動卡片內的照片）
+    if (state.cropMode) {
+      const pan = document.createElement('div');
+      pan.className = 'memory-hero-pan';
+      pan.title = '拖曳可調整底圖要保留的部分';
+      pan.innerHTML = '<span class="memory-hero-pan-label">拖曳底圖</span>';
+      bindMemoryFocusDrag(pan, null);
+      overlay.appendChild(pan);
+    }
     const usedCards = Math.max(0, Math.min(state.layout.cards.length, selectedMemoryPhotos().length - 1));
     for (let i = 0; i < usedCards; i += 1) {
       const spec = state.layout.cards[i];
@@ -6414,10 +6448,130 @@
       handle.innerHTML = `<span class="memory-card-handle-no">${i + 2}</span>`
         + `<span class="memory-card-grip memory-card-rotate" data-role="rotate" title="旋轉" aria-hidden="true"></span>`
         + `<span class="memory-card-grip" data-role="resize" title="縮放" aria-hidden="true"></span>`;
-      bindMemoryCardHandle(handle, i);
+      if (state.cropMode) {
+        handle.classList.add('crop');
+        handle.title = '拖曳照片調整要保留的部分；雙擊回到置中';
+        bindMemoryFocusDrag(handle, i);
+      } else {
+        bindMemoryCardHandle(handle, i);
+      }
       overlay.appendChild(handle);
     }
-    renderMemoryTitleHandle(overlay);
+    // 裁切模式不放標題框：它會擋住底圖的拖曳，而且這時也不是在編輯標題
+    if (!state.cropMode) renderMemoryTitleHandle(overlay);
+  }
+
+  function memoryEditHintText() {
+    return memoryStudioState && memoryStudioState.cropMode
+      ? '拖曳小卡裡的照片、或拖曳底圖空白處，調整要保留的部分；雙擊回到置中。'
+      : '拖小卡可移動、拉角可縮放、雙擊小卡可換照片；點標題可改字；「調整裁切」可移動照片取景';
+  }
+
+  // 切換「調整裁切」模式：與移動／縮放／旋轉卡片分開，避免拖曳時搞混是在移卡片還是移照片
+  function memoryToggleCropMode() {
+    const state = memoryStudioState;
+    if (!state) return;
+    state.cropMode = !state.cropMode;
+    const btn = document.querySelector('.memory-crop-toggle');
+    if (btn) {
+      btn.classList.toggle('on', state.cropMode);
+      btn.setAttribute('aria-pressed', state.cropMode ? 'true' : 'false');
+      btn.textContent = state.cropMode ? '✓ 完成裁切' : '✂️ 調整裁切';
+    }
+    const hint = document.getElementById('memoryEditHint');
+    if (hint) hint.textContent = memoryEditHintText();
+    renderMemoryLayoutHandles();
+  }
+
+  /* 在卡片（index）或底圖（index=null）上拖曳 → 移動裁切焦點。
+     往右拖＝照片跟著手指往右，所以焦點往左；卡片有旋轉時把位移轉回卡片自己的座標。
+     焦點夾在「還看得到變化」的範圍，避免拖過頭後要拖很久才有反應。 */
+  function bindMemoryFocusDrag(el, index) {
+    let dragging = false, startX = 0, startY = 0, startFx = 0.5, startFy = 0.5, moved = false;
+    let ctxInfo = null, lastTapAt = 0;
+    const isHero = index == null;
+    const resetFocus = () => {
+      const layout = memoryStudioState && memoryStudioState.layout;
+      if (!layout) return;
+      if (isHero) { delete layout.heroFocus; delete layout.heroFocusPhotoId; }
+      else if (layout.cards[index]) { delete layout.cards[index].focus; delete layout.cards[index].focusPhotoId; }
+      paintMemoryEditorCanvas(false);
+    };
+
+    const info = () => {
+      const state = memoryStudioState;
+      const overlay = el.parentElement;
+      if (!state || !overlay || !state.lastResolved) return null;
+      const rect = overlay.getBoundingClientRect();
+      const item = isHero ? state.lastResolved.hero : state.lastResolved.cards[index];
+      if (!item || !item.img || !item.photo) return null;
+      const spec = isHero ? null : state.layout.cards[index];
+      if (!isHero && !spec) return null;
+      const W = isHero ? rect.width : spec.w * rect.width;
+      const H = isHero ? rect.height : W * (MEMORY_TILE.h / MEMORY_TILE.w);
+      const iw = item.img.naturalWidth || item.img.width;
+      const ih = item.img.naturalHeight || item.img.height;
+      const s = Math.max(W / iw, H / ih);   // 螢幕像素／原圖像素
+      const half = (vis, full) => Math.min(0.5, vis / full / 2);
+      return {
+        photoId: item.photo.id, iw, ih, s,
+        minX: half(W / s, iw), minY: half(H / s, ih),
+        angle: isHero ? 0 : (Number(spec.angle) || 0) * Math.PI / 180
+      };
+    };
+    const readFocus = () => {
+      const layout = memoryStudioState.layout;
+      const f = isHero
+        ? memoryEffectiveFocus(layout.heroFocus, layout.heroFocusPhotoId, ctxInfo.photoId)
+        : memoryEffectiveFocus(layout.cards[index].focus, layout.cards[index].focusPhotoId, ctxInfo.photoId);
+      return memoryFocusPoint(f);
+    };
+    const writeFocus = (fx, fy) => {
+      const layout = memoryStudioState.layout;
+      const focus = { x: Math.round(fx * 1000) / 1000, y: Math.round(fy * 1000) / 1000 };
+      if (isHero) { layout.heroFocus = focus; layout.heroFocusPhotoId = ctxInfo.photoId; }
+      else { layout.cards[index].focus = focus; layout.cards[index].focusPhotoId = ctxInfo.photoId; }
+    };
+
+    el.addEventListener('pointerdown', (e) => {
+      if (!memoryStudioState || !memoryStudioState.cropMode) return;
+      ctxInfo = info();
+      if (!ctxInfo) return;
+      e.preventDefault();
+      e.stopPropagation();
+      const f = readFocus();
+      startFx = f.x; startFy = f.y;
+      startX = e.clientX; startY = e.clientY;
+      dragging = true; moved = false;
+      el.setPointerCapture(e.pointerId);
+      el.classList.add('dragging');
+    });
+    el.addEventListener('pointermove', (e) => {
+      if (!dragging || !memoryStudioState) return;
+      const dx = e.clientX - startX;
+      const dy = e.clientY - startY;
+      if (Math.abs(dx) > 2 || Math.abs(dy) > 2) moved = true;
+      const a = ctxInfo.angle;
+      const lx = dx * Math.cos(a) + dy * Math.sin(a);
+      const ly = -dx * Math.sin(a) + dy * Math.cos(a);
+      const clamp = (v, lo) => Math.max(lo, Math.min(1 - lo, v));
+      writeFocus(clamp(startFx - lx / ctxInfo.s / ctxInfo.iw, ctxInfo.minX),
+        clamp(startFy - ly / ctxInfo.s / ctxInfo.ih, ctxInfo.minY));
+      scheduleMemoryEditorRepaint();
+    });
+    const end = (e) => {
+      if (!dragging) return;
+      dragging = false;
+      el.classList.remove('dragging');
+      try { el.releasePointerCapture(e.pointerId); } catch (_e) {}
+      if (moved) { paintMemoryEditorCanvas(false); lastTapAt = 0; return; }
+      // 雙擊／雙點回到置中。自己判斷兩次點擊的間隔：手機在 touch-action:none 的元素上不一定會送 dblclick
+      const now = Date.now();
+      if (e.type === 'pointerup' && now - lastTapAt < 350) { lastTapAt = 0; resetFocus(); }
+      else lastTapAt = now;
+    };
+    el.addEventListener('pointerup', end);
+    el.addEventListener('pointercancel', end);
   }
 
   const memoryTitleCx = (t) => (typeof t.cx === 'number' ? t.cx : 0.5);
@@ -6692,7 +6846,11 @@
     overlay.querySelectorAll('.memory-pick-item').forEach((btn) => {
       btn.onclick = () => {
         const card = state.layout.cards[cardIndex];
-        if (card) card.photoId = btn.dataset.pid;
+        if (card) {
+          card.photoId = btn.dataset.pid;
+          delete card.focus;          // 換了照片，焦點回到置中
+          delete card.focusPhotoId;
+        }
         closeMemoryCardPicker();
         paintMemoryEditorCanvas(true);
       };
@@ -6979,6 +7137,7 @@
         <p>${failed.length ? `失敗序號：${failed.join('、')}。已完成的圖片仍可下載。` : '手機可用「分享全部九張」一次送出（省去逐張下載）；桌機請逐張下載。'}</p>
         <p class="memory-download-note">檔名已包含發布順序與九宮格位置；請由第 1 張開始依序發布。</p>
       </div>
+      ${renderMemoryIgPreview(state)}
       <div class="memory-studio-actions memory-share-all-row">
         <button type="button" class="memory-primary-btn" onclick="memoryShareAll()">↗ 分享全部九張</button>
       </div>
@@ -6994,6 +7153,32 @@
         ${failed.length ? `<button type="button" class="memory-primary-btn" onclick="memoryRetryFailed()">只重試失敗圖片</button>` : '<button type="button" class="memory-primary-btn" onclick="memoryOpenGuide()">查看發布順序</button>'}
         <button type="button" class="memory-secondary-btn" onclick="closeMemoryStudio()">稍後再說</button>
       </div>`;
+  }
+
+  /* 📱 IG 個人頁預覽：直接用要下載的那 9 張切圖，排成個人頁的樣子。
+     個人頁最新的貼文在左上，所以最後發的第 9 張在左上、第 1 張在右下（與 MEMORY_GRID_ORDER、檔名一致）。 */
+  function renderMemoryIgPreview(state) {
+    const cells = [];
+    for (let row = 1; row <= 3; row += 1) {
+      for (let col = 1; col <= 3; col += 1) {
+        const meta = MEMORY_GRID_ORDER.find((m) => m.row === row && m.col === col);
+        const slice = meta && state.slices.get(meta.order);
+        const label = `第 ${meta.order} 張・${meta.position}`;
+        cells.push(slice
+          ? `<figure class="memory-ig-cell" title="${escapeHtml(slice.filename)}"><img src="${escapeHtml(slice.url)}" alt="${escapeHtml(label)}"><span class="memory-ig-no" aria-hidden="true">${meta.order}</span></figure>`
+          : `<figure class="memory-ig-cell is-missing" title="${escapeHtml(label)}"><span>產生失敗</span><span class="memory-ig-no" aria-hidden="true">${meta.order}</span></figure>`);
+      }
+    }
+    return `<section class="memory-ig-preview" aria-label="IG 個人頁預覽">
+        <div class="memory-ig-head">
+          <strong>📱 IG 個人頁預覽</strong>
+          <label class="memory-ig-toggle"><input type="checkbox" checked onchange="this.closest('.memory-ig-preview').classList.toggle('hide-no', !this.checked)"> <span>顯示發布順序</span></label>
+        </div>
+        <div class="memory-ig-phone">
+          <div class="memory-ig-grid">${cells.join('')}</div>
+        </div>
+        <p class="memory-ig-note">數字是發布順序：第 1 張先發，會在右下角；最後發的第 9 張在左上角。下載前先看看切線有沒有切到臉或重要的字。</p>
+      </section>`;
   }
 
   function memoryDownloadSlice(order) {
