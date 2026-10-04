@@ -6296,6 +6296,10 @@ button.notif-item { cursor: pointer; }
 .memory-tpl-btn.on { background: var(--accent2, #2f6f4f); color: #fff; border-color: var(--accent2, #2f6f4f); }
 
 .memory-edit-bar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin: 8px 0 6px; }
+/* 一鍵排版／復原／想標題：放在編輯畫面最上面，最常用的入口 */
+.memory-auto-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: 12px 0 4px; }
+.memory-auto-hint { margin: 0 0 6px; font-size: 12px; color: var(--ink3); text-wrap: pretty; }
+#memoryTitleIdeaBox { margin: 4px 0 8px; }
 .memory-edit-hint { font-size: 12px; color: var(--ink3); flex: 1 1 auto; }
 .memory-edit-reset { padding: 6px 12px; font-size: 13px; }
 

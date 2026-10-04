@@ -6334,6 +6334,13 @@
           <canvas id="memoryMasterCanvas" class="memory-master-canvas" width="${MEMORY_PREVIEW.w}" height="${MEMORY_PREVIEW.h}"></canvas>
           <div id="memoryLayoutOverlay" class="memory-layout-overlay" aria-hidden="true"></div>
         </div>
+        <div class="memory-auto-row">
+          <button type="button" id="memoryAutoBtn" class="memory-primary-btn" onclick="memoryAutoLayout()">✨ 一鍵排版</button>
+          ${memoryStudioState.autoUndo ? '<button type="button" class="memory-secondary-btn" onclick="memoryAutoUndo()">↩ 復原排版</button>' : ''}
+          <button type="button" id="memoryTitleIdeaBtn" class="memory-secondary-btn" onclick="memorySuggestTitles()">✨ 想標題</button>
+        </div>
+        <p class="memory-auto-hint">一鍵排版會挑清楚、不重複、來自不同景點的照片，自動選底圖和範本；之後都還能手動調。</p>
+        <div id="memoryTitleIdeaBox" class="recap-idea-box"></div>
         <div class="memory-template-row" role="group" aria-label="版面範本">
           ${MEMORY_TEMPLATES.map((t) => `<button type="button" class="memory-tpl-btn${memoryStudioState.layout.templateKey === t.key ? ' on' : ''}" onclick="memorySetTemplate('${t.key}')">${escapeHtml(t.name)}</button>`).join('')}
         </div>
@@ -6379,6 +6386,7 @@
           <button type="button" class="memory-primary-btn" onclick="memoryGoPreview()" ${selected.size ? '' : 'disabled'}>保存九張並下載</button>
         </div>
       </div>`;
+    renderMemoryTitleIdeas();
     paintMemoryEditorCanvas();
   }
 
@@ -6888,6 +6896,260 @@
     renderMemoryGridEditor(document.getElementById('memoryStudioBody'));
   }
 
+  /* ── 一鍵自動排版 ──────────────────────────────────────────
+     原本開工具時直接拿「最後 7 張」、範本隨機挑，使用者還得自己選底圖、換照片。改成：
+     1. 每張照片在縮圖上算畫質（解析度、清晰度、亮度）與 8×8 指紋（dHash，用來抓連拍的重複畫面）
+     2. 底圖＝畫質好、比例最接近 4:5 的那張（鋪滿整張大圖時裁得最少）
+     3. 小卡：先從「不同景點」各挑最好的一張（內容多樣），不夠再補不重複的；
+        依拍攝時間排，卡片由左上到右下照旅程順序
+     4. 範本依張數挑，不留空卡；使用者打過的標題文字、字體不動
+     純程式評分，不用 AI。挑選邏輯在 pickMemoryAutoLayout（純函式，可在 Node 測）。 */
+  const MEMORY_AUTO_MAX_ANALYZE = 36;   // 照片太多時先依時間平均抽樣再分析（每張都要下載原圖）
+  const MEMORY_AUTO_DUP_BITS = 10;      // dHash 漢明距離 ≤ 這個值＝同一個畫面（連拍）
+
+  // 在 64×64 縮圖上量畫質；跨網域讀不到像素時只回尺寸，評分退回只看解析度與比例
+  function memoryPhotoMetrics(img) {
+    const w = img.naturalWidth || img.width;
+    const h = img.naturalHeight || img.height;
+    const out = { w, h, sharp: null, bright: null, hash: null };
+    try {
+      const S = 64;
+      const c = document.createElement('canvas');
+      c.width = S; c.height = S;
+      const ctx = c.getContext('2d', { willReadFrequently: true });
+      ctx.drawImage(img, 0, 0, S, S);
+      const px = ctx.getImageData(0, 0, S, S).data;
+      const g = new Float32Array(S * S);
+      let sum = 0;
+      for (let i = 0; i < S * S; i += 1) {
+        g[i] = (px[i * 4] * 0.299 + px[i * 4 + 1] * 0.587 + px[i * 4 + 2] * 0.114) / 255;
+        sum += g[i];
+      }
+      out.bright = sum / (S * S);
+      // 清晰度＝拉普拉斯變異數：模糊、晃到的照片邊緣弱，變異數小
+      let lsum = 0, lsq = 0, n = 0;
+      for (let y = 1; y < S - 1; y += 1) {
+        for (let x = 1; x < S - 1; x += 1) {
+          const i = y * S + x;
+          const l = 4 * g[i] - g[i - 1] - g[i + 1] - g[i - S] - g[i + S];
+          lsum += l; lsq += l * l; n += 1;
+        }
+      }
+      out.sharp = lsq / n - (lsum / n) * (lsum / n);
+      // dHash：縮成 9×8，比較左右相鄰像素的明暗，得到 64 位元指紋
+      const hc = document.createElement('canvas');
+      hc.width = 9; hc.height = 8;
+      const hctx = hc.getContext('2d', { willReadFrequently: true });
+      hctx.drawImage(img, 0, 0, 9, 8);
+      const hp = hctx.getImageData(0, 0, 9, 8).data;
+      let bits = '';
+      for (let y = 0; y < 8; y += 1) {
+        for (let x = 0; x < 8; x += 1) {
+          const a = (y * 9 + x) * 4;
+          bits += (hp[a] + hp[a + 1] + hp[a + 2]) > (hp[a + 4] + hp[a + 5] + hp[a + 6]) ? '1' : '0';
+        }
+      }
+      out.hash = bits;
+    } catch (_e) { /* canvas 被跨網域圖污染：保留尺寸就好 */ }
+    return out;
+  }
+
+  /* 挑底圖、小卡與範本（純函式）。
+     items：[{ id, spotName, ts, m: { w, h, sharp, bright, hash } }]
+     回傳：{ heroId, cardIds（已依版面閱讀順序排好）, templateKey, spotCount } */
+  function pickMemoryAutoLayout(items, maxCards = MEMORY_MAX_CARDS) {
+    const list = (Array.isArray(items) ? items : []).filter((x) => x && x.id && x.m);
+    if (!list.length) return null;
+    const maxSharp = Math.max(0, ...list.map((x) => Number(x.m.sharp) || 0));
+    const quality = (x) => {
+      const m = x.m;
+      const res = m.w && m.h ? Math.min(1, Math.min(m.w, m.h) / 1080) : 0.5;
+      const sharp = m.sharp == null || !maxSharp ? 0.5 : Math.min(1, m.sharp / maxSharp);
+      let bright = 0;
+      if (m.bright != null) {
+        if (m.bright < 0.15) bright = -0.4;           // 太暗（夜拍糊成一片）
+        else if (m.bright < 0.25) bright = -0.15;
+        else if (m.bright > 0.88) bright = -0.3;      // 過曝
+        else if (m.bright > 0.8) bright = -0.1;
+      }
+      return 0.2 + 0.35 * res + 0.45 * sharp + bright;
+    };
+    // 底圖鋪滿 4:5 畫布：比例越接近 4:5 裁掉越少
+    const heroFit = (x) => {
+      const r = x.m.w && x.m.h ? x.m.w / x.m.h : 0.8;
+      return 1 - Math.min(1, Math.abs(Math.log(r / 0.8)) / 0.8);
+    };
+    const ham = (a, b) => {
+      if (!a || !b) return 64;
+      let d = 0;
+      for (let i = 0; i < a.length; i += 1) if (a[i] !== b[i]) d += 1;
+      return d;
+    };
+    const isDup = (x, picked) => picked.some((p) => ham(x.m.hash, p.m.hash) <= MEMORY_AUTO_DUP_BITS);
+    list.forEach((x) => { x.q = quality(x); });
+
+    const hero = list.slice().sort((a, b) => (b.q + 0.25 * heroFit(b)) - (a.q + 0.25 * heroFit(a)))[0];
+    const picked = [hero];
+    const cards = [];
+    // 第一輪：每個景點挑最好的一張；底圖那個景點放最後，讓小卡優先放別的景點
+    const bySpot = new Map();
+    list.filter((x) => x !== hero).forEach((x) => {
+      const k = String(x.spotName || '');
+      if (!bySpot.has(k)) bySpot.set(k, []);
+      bySpot.get(k).push(x);
+    });
+    const spotBest = Array.from(bySpot.entries())
+      .map(([spot, xs]) => ({ spot, xs: xs.sort((a, b) => b.q - a.q) }))
+      .sort((a, b) => (a.spot === hero.spotName) - (b.spot === hero.spotName) || b.xs[0].q - a.xs[0].q);
+    spotBest.forEach(({ xs }) => {
+      if (cards.length >= maxCards) return;
+      const best = xs.find((x) => !isDup(x, picked));
+      if (best) { cards.push(best); picked.push(best); }
+    });
+    // 第二輪：景點不夠時，用剩下畫質好、又不是重複畫面的補滿
+    list.filter((x) => !picked.includes(x)).sort((a, b) => b.q - a.q).forEach((x) => {
+      if (cards.length >= maxCards || isDup(x, picked)) return;
+      cards.push(x); picked.push(x);
+    });
+
+    const k = cards.length;
+    let templateKey = 'classic';
+    if (k >= 6) templateKey = 'grid6';
+    else if (k === 5) {
+      const qs = cards.map((x) => x.q).sort((a, b) => b - a);
+      templateKey = qs[0] - qs[1] > 0.15 ? 'feature5' : 'collage5';   // 有一張特別好就做「主打」
+    }
+    // 依拍攝時間排，對應到版面的閱讀順序（由上到下、由左到右）
+    const chrono = cards.slice().sort((a, b) => (a.ts || 0) - (b.ts || 0));
+    return {
+      heroId: hero.id,
+      cardIds: chrono.map((x) => x.id),
+      templateKey,
+      spotCount: new Set(picked.map((x) => String(x.spotName || ''))).size
+    };
+  }
+
+  // 範本卡片依閱讀順序（上到下、左到右）排好，只取需要的張數
+  function memoryTemplateSlotsInReadingOrder(templateKey, count) {
+    return defaultMemoryLayout(templateKey).cards
+      .slice()
+      .sort((a, b) => Math.round(a.cy * 3) - Math.round(b.cy * 3) || a.cx - b.cx)
+      .slice(0, count);
+  }
+
+  // 照片太多時依時間平均抽樣（material.photos 已依拍攝時間排序）
+  function memorySampleForAuto(photos, max) {
+    if (photos.length <= max) return photos.slice();
+    const out = [];
+    for (let i = 0; i < max; i += 1) out.push(photos[Math.round(i * (photos.length - 1) / (max - 1))]);
+    return Array.from(new Set(out));
+  }
+
+  async function memoryAutoLayout() {
+    const state = memoryStudioState;
+    if (!state || state.autoBusy) return;
+    const pool = state.material.photos;
+    if (!pool.length) { feedbackToast('這趟還沒有照片，先到旅記加照片', 'orange'); return; }
+    state.autoBusy = true;
+    const btn = document.getElementById('memoryAutoBtn');
+    if (btn) { btn.disabled = true; btn.textContent = '分析照片中…'; }
+    try {
+      const sample = memorySampleForAuto(pool, MEMORY_AUTO_MAX_ANALYZE);
+      const loaded = await Promise.all(sample.map(async (p) => ({ p, img: await loadMemoryImage(p) })));
+      if (memoryStudioState !== state) return;   // 分析期間關掉工具就放棄
+      const items = loaded.filter((x) => x.img)
+        .map(({ p, img }) => ({ id: p.id, spotName: p.spotName, ts: p.ts, m: memoryPhotoMetrics(img) }));
+      const pick = pickMemoryAutoLayout(items);
+      if (!pick) { feedbackToast('照片載入失敗，請確認網路後再試', 'orange'); return; }
+      // 留一份可以復原的狀態
+      state.autoUndo = { selected: Array.from(state.selectedPhotoIds), layout: JSON.parse(JSON.stringify(state.layout)) };
+      const oldTitle = state.layout.title;
+      const layout = defaultMemoryLayout(pick.templateKey);
+      layout.cards = memoryTemplateSlotsInReadingOrder(pick.templateKey, pick.cardIds.length);
+      layout.title.text = oldTitle.text;
+      layout.title.font = oldTitle.font;
+      layout.title.visible = oldTitle.visible;
+      state.layout = layout;
+      // 小卡照「選取順序」對應卡片（第 i 張卡＝第 i+1 張），不寫死 photoId：
+      // 之後使用者取消勾選某張，版面會照舊規則自動遞補
+      state.selectedPhotoIds = new Set([pick.heroId, ...pick.cardIds]);
+      state.masterCanvas = null;
+      revokeMemorySlices(state);
+      state.photoLoadFailures = [];
+      renderMemoryGridEditor(document.getElementById('memoryStudioBody'));
+      const tplName = memoryTemplateByKey(pick.templateKey).name;
+      feedbackToast(`已挑出 ${1 + pick.cardIds.length} 張照片（${pick.spotCount} 個景點）、套用「${tplName}」`, 'green');
+    } catch (e) {
+      console.warn('[memory] 自動排版失敗', e);
+      feedbackToast('自動排版失敗，請再試一次', 'orange');
+    } finally {
+      if (memoryStudioState === state) state.autoBusy = false;
+      const b = document.getElementById('memoryAutoBtn');
+      if (b) { b.disabled = false; b.textContent = '✨ 一鍵排版'; }
+    }
+  }
+
+  function memoryAutoUndo() {
+    const state = memoryStudioState;
+    if (!state || !state.autoUndo) return;
+    state.selectedPhotoIds = new Set(state.autoUndo.selected);
+    // 只復原「照片與版面」：排版之後才改的標題文字、字體、顯示與否要保留
+    const title = state.layout.title;
+    state.layout = state.autoUndo.layout;
+    state.layout.title.text = title.text;
+    state.layout.title.font = title.font;
+    state.layout.title.visible = title.visible;
+    state.autoUndo = null;
+    state.masterCanvas = null;
+    revokeMemorySlices(state);
+    renderMemoryGridEditor(document.getElementById('memoryStudioBody'));
+    feedbackToast('已復原成排版前的樣子', 'green');
+  }
+
+  /* ── 標題建議 ──
+     沿用回顧短片的 generateRecapIdeas（AI 失敗或沒設定就退回離線範本），點一下套到標題帶；
+     hashtag 存起來，一次分享九張時帶進說明文字。 */
+  async function memorySuggestTitles() {
+    const state = memoryStudioState;
+    if (!state || state.titleIdeasBusy) return;
+    state.titleIdeasBusy = true;
+    const btn = document.getElementById('memoryTitleIdeaBtn');
+    if (btn) { btn.disabled = true; btn.textContent = '想中…'; }
+    try {
+      const ideas = await generateRecapIdeas('grid');
+      if (memoryStudioState !== state) return;
+      state.memoryHashtags = ideas.hashtags || [];
+      state.titleIdeas = ideas;
+      renderMemoryTitleIdeas();
+    } catch (_e) {
+      feedbackToast('想標題失敗，請再試一次', 'orange');
+    } finally {
+      if (memoryStudioState === state) state.titleIdeasBusy = false;
+      const b = document.getElementById('memoryTitleIdeaBtn');
+      if (b) { b.disabled = false; b.textContent = '✨ 想標題'; }
+    }
+  }
+
+  function renderMemoryTitleIdeas() {
+    const box = document.getElementById('memoryTitleIdeaBox');
+    const ideas = memoryStudioState && memoryStudioState.titleIdeas;
+    if (!box) return;
+    if (!ideas || !(ideas.titles || []).length) { box.innerHTML = ''; return; }
+    box.innerHTML = `<div class="recap-idea-row">${ideas.titles.map((t, i) =>
+      `<button type="button" class="recap-idea-chip" onclick="memoryUseTitleIdea(${i})">${escapeHtml(t)}</button>`).join('')}</div>
+      <p class="recap-idea-hint">${ideas.source === 'ai' ? 'AI 建議' : '離線建議'}：點一下套到標題帶，套用後還能再點標題修改；hashtag 會在「一次分享」時帶上。</p>`;
+  }
+
+  function memoryUseTitleIdea(index) {
+    const state = memoryStudioState;
+    const t = state && state.titleIdeas && state.titleIdeas.titles[index];
+    if (!t) return;
+    state.layout.title.text = String(t).slice(0, 40);
+    state.layout.title.visible = true;
+    paintMemoryEditorCanvas(true);
+    feedbackToast(`已套用標題「${t}」`, 'green');
+  }
+
   /* #3 方向A：打字叫 AI 調「版面參數」，不碰影像內容——照片還是使用者的真實照片，
      AI 只回傳位置/大小/角度/標題帶的數字。零影像生成成本。 */
   function buildMemoryAiPrompt(payload, instruction, usedCards) {
@@ -7199,7 +7461,8 @@
     if (!files.length) { feedbackToast('圖片尚未產生，請先重試', 'orange'); return; }
     if (navigator.canShare && navigator.canShare({ files })) {
       try {
-        await navigator.share({ files, title: '我的旅程九宮格', text: '旅程九宮格——依檔名順序發布（右下角第 1 張先發）' });
+        const tags = (state.memoryHashtags || []).join(' ');   // 「想標題」產生的 hashtag
+        await navigator.share({ files, title: '我的旅程九宮格', text: ['旅程九宮格——依檔名順序發布（右下角第 1 張先發）', tags].filter(Boolean).join('\n\n') });
       } catch (e) {
         if (e && e.name === 'AbortError') return;   // 使用者自己取消
         feedbackToast('分享失敗，可改用逐張下載', 'orange');
@@ -7315,16 +7578,19 @@
     raw.forEach(function (t) { var s = '#' + String(t).replace(/\s+/g, ''); if (!seen[s]) { seen[s] = 1; tags.push(s); } });
     return { titles: titles, hashtags: tags.slice(0, 12), source: 'template' };
   }
-  async function generateRecapIdeas() {
+  // kind='grid'：九宮格大圖的標題帶（比影片標題短）；不給就是回顧短片
+  async function generateRecapIdeas(kind) {
     var trip = collectRecapTrip();
     var vertex = (typeof getVertexConfig === 'function') ? getVertexConfig() : { ready: false };
     if (!vertex.ready) return recapTemplateIdeas(trip);
     try {
       var names = (trip.stops || []).map(function (s) { return s.name; }).filter(Boolean);
-      var prompt = '你是社群小編。根據以下旅程，產生吸睛的中文短影片標題與 hashtag。\n'
+      var what = kind === 'grid' ? 'IG 九宮格大圖中間標題帶的標題（要短、好讀）' : '短影片標題';
+      var maxLen = kind === 'grid' ? 12 : 14;
+      var prompt = '你是社群小編。根據以下旅程，產生吸睛的中文' + what + '與 hashtag。\n'
         + '地區：' + (trip.region || '') + '\n天數：' + recapDayCount(trip) + '\n季節/日期：' + (trip.dateLabel || '')
         + '\n交通：' + (trip.transportMode || '') + '\n景點：' + names.join('、') + '\n'
-        + '只回 JSON（不要多餘文字）：{"titles":["三個各不超過14字的標題"],"hashtags":["8到12個含#的標籤，中英混合，貼近地區與景點"]}';
+        + '只回 JSON（不要多餘文字）：{"titles":["三個各不超過' + maxLen + '字的標題"],"hashtags":["8到12個含#的標籤，中英混合，貼近地區與景點"]}';
       var endpoint = VERTEX_API_BASE + '/publishers/google/models/' + GEMINI_MODEL + ':generateContent?key=' + encodeURIComponent(vertex.apiKey);
       var res = await fetch(endpoint, {
         method: 'POST', headers: await vertexAuthHeaders(),
@@ -7883,6 +8149,10 @@
     memoryAddCard,
     memoryAddUploadedPhoto,
     memoryAiEdit,
+    memoryAutoLayout,
+    memoryAutoUndo,
+    memorySuggestTitles,
+    memoryUseTitleIdea,
     exportTripCollage,
     startRecapVideo
   });
