@@ -20979,7 +20979,17 @@
     const demo = document.getElementById('agentDemoPanel');
     if (demo) demo.hidden = !(AGENT_DEMO_MODE && a.show);
     const dateEl = document.getElementById('agentRainDate');
-    if (dateEl && !dateEl.value) dateEl.value = agentIsoDate(currentTripDepartureDate || (currentTripPreferences || {}).departureDate);
+    // 這裡在行程載入前就會跑一次，那時只拿得到今天；自動帶入的日期要跟著行程日期更新，
+    // 否則模擬的雨下在今天、行程在別天，管家查不到雨。使用者手動改過就不再覆蓋。
+    if (dateEl && (!dateEl.value || dateEl.dataset.auto === '1')) {
+      const prefs = currentTripPreferences || {};
+      dateEl.value = agentIsoDate(currentTripDepartureDate || prefs.departureDate || prefs.startDate);
+      dateEl.dataset.auto = '1';
+      if (!dateEl.dataset.autoBound) {
+        dateEl.dataset.autoBound = '1';
+        dateEl.addEventListener('input', () => { dateEl.dataset.auto = '0'; });
+      }
+    }
   }
 
   // 「幫我調整行程」：下一則訊息一定交給行程調整（不靠關鍵字）
