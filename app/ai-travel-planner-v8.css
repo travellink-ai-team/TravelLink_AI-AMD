@@ -8350,6 +8350,12 @@ button.notif-item { cursor: pointer; }
   text-align: right;
   white-space: nowrap;
 }
+/* 收合後是一顆可拖曳的懸浮膠囊按鈕 */
+#tripSimulationPanel .sim-toolbar-toggle { cursor: grab; touch-action: none; user-select: none; }
+#tripSimulationPanel.dragging .sim-toolbar-toggle { cursor: grabbing; }
+#tripSimulationPanel.dragging { opacity: .92; }
+#tripSimulationPanel.collapsed { width: max-content; padding: 5px; border-radius: 999px; }
+#tripSimulationPanel.collapsed .sim-toolbar-toggle { border-radius: 999px; padding: 7px 14px; }
 #tripSimulationPanel .sim-control-body { padding-top: 8px; }
 #tripSimulationPanel.collapsed .sim-control-body,
 #tripSimulationPanel.collapsed .sim-toolbar-status { display: none; }
