@@ -15396,6 +15396,11 @@
         ? `\n🚫 以下景點已在行程中，禁止重複推薦（除非使用者明確要求替換）：${existingStops.join('、')}`
         : '',
       livePoiHint ? livePoiHint : '',
+      // 清單只抓行程地區的前幾十筆（例如「台東市」抓不到成功鎮的三仙台）；模型會把「只能從清單挑」
+      // 誤讀成「清單外的地方都不能談」，回「不在即時景點清單中」。這裡把限制的範圍講清楚。
+      livePoiHint
+        ? '（上面清單的限制只適用於「主動推薦新景點、加入或替換行程站點」。使用者問某個具名地點的資訊——適合的時段、門票、交通、特色、注意事項——即使該地點不在清單中，也要直接用你的知識回答，不可回答「不在清單中」或請使用者自己去查。）'
+        : '',
       weatherHint ? weatherHint : ''
     ].filter(Boolean).join('\n');
     const payload = {
@@ -16985,7 +16990,7 @@
     panel.setAttribute('aria-label', '行程展示模擬控制');
     panel.innerHTML = `
       <div class="sim-toolbar">
-        <button type="button" class="sim-toolbar-toggle" data-sim-toggle aria-controls="simControlBody" aria-expanded="true" aria-label="收合展示模擬工具列">🧪 展示模擬 <span data-sim-chevron>⌄</span></button>
+        <button type="button" class="sim-toolbar-toggle" data-sim-toggle aria-controls="simControlBody" aria-expanded="true" aria-label="收合展示模擬工具列" title="點一下展開／收合，按住可拖曳">🧪 展示模擬 <span data-sim-chevron>⌄</span></button>
         <span data-sim-status class="sim-toolbar-status"></span>
       </div>
       <div class="sim-control-body" id="simControlBody">
@@ -17058,8 +17063,48 @@
     joystick.addEventListener('lostpointercapture', releaseJoystick);
     tripSimulation.abortController = new AbortController();
     window.addEventListener('blur', releaseJoystick, { signal: tripSimulation.abortController.signal });
-    panel.querySelector('[data-sim-toggle]').addEventListener('click', () => {
+    // 懸浮按鈕可拖曳：按住工具列按鈕移動超過 6px 算拖曳（不觸發展開／收合），輕點照舊切換。
+    // 拖過的位置記在本機，展開、收合、視窗縮放後都夾回畫面內。
+    const toggleBtn = panel.querySelector('[data-sim-toggle]');
+    let drag = null;
+    let suppressToggleClick = false;
+    toggleBtn.addEventListener('pointerdown', (event) => {
+      if (event.button !== 0) return;
+      const rect = panel.getBoundingClientRect();
+      drag = { id: event.pointerId, x: event.clientX, y: event.clientY, left: rect.left, top: rect.top, moved: false };
+      toggleBtn.setPointerCapture(event.pointerId);
+    });
+    toggleBtn.addEventListener('pointermove', (event) => {
+      if (!drag || event.pointerId !== drag.id) return;
+      const dx = event.clientX - drag.x;
+      const dy = event.clientY - drag.y;
+      if (!drag.moved && Math.hypot(dx, dy) < 6) return;
+      drag.moved = true;
+      panel.classList.add('dragging');
+      placeSimulationPanel(panel, { left: drag.left + dx, top: drag.top + dy });
+    });
+    const endDrag = (event) => {
+      if (!drag || event.pointerId !== drag.id) return;
+      if (drag.moved) {
+        suppressToggleClick = true;
+        panel.dataset.dragged = '1';
+        const rect = panel.getBoundingClientRect();
+        try { localStorage.setItem(SIM_PANEL_POS_KEY, JSON.stringify({ left: rect.left, top: rect.top })); } catch (_e) { /* 只是方便用的位置記憶 */ }
+      }
+      panel.classList.remove('dragging');
+      drag = null;
+    };
+    toggleBtn.addEventListener('pointerup', endDrag);
+    toggleBtn.addEventListener('pointercancel', endDrag);
+    toggleBtn.addEventListener('click', (event) => {
+      if (!suppressToggleClick) return;
+      suppressToggleClick = false;
+      event.stopImmediatePropagation();
+    }, true);
+    window.addEventListener('resize', () => clampSimulationPanel(panel), { signal: tripSimulation.abortController.signal });
+    toggleBtn.addEventListener('click', () => {
       const collapsed = panel.classList.toggle('collapsed');
+      clampSimulationPanel(panel);   // 讀 rect 會同步排版，不必等下一幀
       if (!collapsed && isMobileLayout() && mobileRouteSheetState !== 'collapsed') toggleMobileRouteSheet(false);
       panel.querySelector('[data-sim-toggle]').setAttribute('aria-expanded', String(!collapsed));
       panel.querySelector('[data-sim-toggle]').setAttribute('aria-label', collapsed ? '展開展示模擬工具列' : '收合展示模擬工具列');
@@ -17069,6 +17114,29 @@
     document.body.appendChild(panel);
     tripSimulation.panel = panel;
     updateSimulationPanel();
+    let saved = null;
+    try { saved = JSON.parse(localStorage.getItem(SIM_PANEL_POS_KEY) || 'null'); } catch (_e) { saved = null; }
+    if (saved && Number.isFinite(saved.left) && Number.isFinite(saved.top)) {
+      panel.dataset.dragged = '1';
+      placeSimulationPanel(panel, saved);
+    }
+  }
+
+  const SIM_PANEL_POS_KEY = 'wai_sim_panel_pos';
+  // 依 left/top（視窗座標）擺放並夾在視窗內（留 8px 邊）；沒拖過的面板維持 CSS 預設位置。
+  // body 有 CSS zoom（例如 1.03），寫進 style 的 px 會再被放大，所以要除回去。
+  function placeSimulationPanel(panel, pos) {
+    const rect = panel.getBoundingClientRect();
+    const margin = 8;
+    const zoom = parseFloat(getComputedStyle(document.body).zoom) || 1;
+    const left = Math.min(Math.max(margin, pos.left), Math.max(margin, window.innerWidth - rect.width - margin));
+    const top = Math.min(Math.max(margin, pos.top), Math.max(margin, window.innerHeight - rect.height - margin));
+    Object.assign(panel.style, { left: `${left / zoom}px`, top: `${top / zoom}px`, right: 'auto', bottom: 'auto' });
+  }
+  function clampSimulationPanel(panel) {
+    if (!panel || panel.dataset.dragged !== '1' || !panel.isConnected) return;
+    const rect = panel.getBoundingClientRect();
+    placeSimulationPanel(panel, { left: rect.left, top: rect.top });
   }
 
   function resetSimulation() {
@@ -17115,6 +17183,9 @@
     tripSimulation.snapshot = {
       status: currentTripStatus, stopIndex: currentStopIndex, startedAt: currentTripStartedAt,
       lastUserLocation: lastUserLocation ? { ...lastUserLocation } : null,
+      // 模擬中套用的管家提案只改記憶體；結束時要還原，否則下一次正式編輯會把模擬的站一起存上雲端
+      stops: replanStops.map((stop) => ({ ...stop })),
+      stopsSignature: agentTripSignature(),
       virtualNow: Number(options.startTime) || defaultVirtualNow,
       virtualDateBase: Number(options.startTime) || defaultVirtualNow
     };
@@ -17147,11 +17218,16 @@
     tripSimulation.joystick = { x: 0, y: 0 };
     if (tripSimulation.panel) tripSimulation.panel.remove();
     tripSimulation.panel = null;
+    let stopsRestored = false;
     if (snapshot) {
       currentTripStatus = snapshot.status;
       currentStopIndex = snapshot.stopIndex;
       currentTripStartedAt = snapshot.startedAt;
       lastUserLocation = snapshot.lastUserLocation;
+      if (Array.isArray(snapshot.stops) && agentTripSignature() !== snapshot.stopsSignature) {
+        replanStops = snapshot.stops;
+        stopsRestored = true;
+      }
     }
     tripSimulation.snapshot = null;
     routeStageCache.forEach((stage) => { if (stage) stage.maxProgress = 0; });
@@ -17162,7 +17238,12 @@
     if (lastUserLocation) updateUserLocationMarker(lastUserLocation);
     else if (userLocMarker) { userLocMarker.setMap(null); if (userLocCircle) userLocCircle.setMap(null); }
     syncUserLocationWatch();
-    feedbackToast('已離開展示模擬，正式行程記錄未變更', 'blue');
+    if (stopsRestored) {
+      removeStaleStopMarkers();
+      refreshRouteDirections();
+      if (agentState.proposal) { agentState.proposal = null; refreshAgentEntryUI(); }
+    }
+    feedbackToast(stopsRestored ? '已離開展示模擬，模擬中的行程調整已還原' : '已離開展示模擬，正式行程記錄未變更', 'blue');
     return true;
   }
 
@@ -21819,11 +21900,11 @@
   async function agentVerifyRemoteIds(ids) {
     const remote = await agentReadRemoteTrip();
     if (!remote) return null;   // 沒登入／沒 Firebase（mock 開發）：無從比對，後端會自己擋未登入
-    const missing = remote.exists ? ids.filter((id) => !remote.ids.has(id)) : ids;
+    // 展示模擬中不存檔：在模擬裡套用過的提案（例如先模擬下雨換掉兩站、再模擬延誤）新站只在這個分頁，
+    // 套用也只改本機，不需要雲端有這些 id；後端只要求每站有 id。雲端 updatedAt 照樣回傳給套用時比對。
+    const missing = tripSimulation.enabled ? [] : (remote.exists ? ids.filter((id) => !remote.ids.has(id)) : ids);
     if (missing.length) {
-      throw new Error(tripSimulation.enabled
-        ? `有 ${missing.length} 站還沒存到雲端，展示模擬中不會存檔。請先關閉展示模擬，在行程中改任何一處讓它存檔，再試一次。`
-        : `有 ${missing.length} 站還沒存到雲端（可能是網路問題），請稍後再試一次。`);
+      throw new Error(`有 ${missing.length} 站還沒存到雲端（可能是網路問題），請稍後再試一次。`);
     }
     return Number.isFinite(remote.updatedAt) ? remote.updatedAt : null;
   }
