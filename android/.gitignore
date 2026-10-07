@@ -1,0 +1,40 @@
+*.iml
+.gradle
+/local.properties
+/.idea/caches
+/.idea/libraries
+/.idea/modules.xml
+/.idea/workspace.xml
+/.idea/navEditor.xml
+/.idea/assetWizardSettings.xml
+.DS_Store
+/build
+/captures
+.externalNativeBuild
+.cxx
+local.properties
+
+# Firebase 服務帳戶金鑰（含管理員權限，絕對不能上傳）
+scripts/serviceAccount.json
+**/serviceAccount.json
+
+# 環境變數（含 API Key，絕對不能上傳）
+.env
+scripts/.env
+
+# Python
+__pycache__/
+*.pyc
+
+# Demo 影片與螢幕錄影：檔案大（單支數十 MB）且會反覆重錄，
+# 進了版本庫就永久留在歷史裡、每個 clone 都得拉。放雲端硬碟，文件裡留連結。
+*.mp4
+*.mov
+*.webm
+
+# IDE 與 Claude Code 本機設定（含裝置資訊、本機指令紀錄，公開 repo 不收）
+/.idea/
+/.claude/
+
+# 內部文件（工作總結、會報、計畫）留在私人 repo，不公開
+/docs/
