@@ -1,0 +1,132 @@
+{
+  "_comment": "台東本島↔離島客船資料。TDX 沒有船班資料（A7 已實測），航港局的班表是動態頁且明載『僅供參考請洽業者』，也沒有開放資料集，所以只能人工抄表。刻意不做爬蟲：班表是動態頁、旺季常改，爬了更容易給錯資料。",
+  "dataAsOf": "2026-09-18",
+  "staleAfterDays": 90,
+  "disclaimer": "時刻與票價僅供參考，實際以船公司公告與候船室現場為準。天候不佳可能停航。",
+  "routes": [
+    {
+      "code": "fugang_ludao",
+      "islandCode": "ludao",
+      "mainlandPort": "富岡漁港",
+      "islandPort": "南寮漁港",
+      "sailingMins": 50,
+      "sailingMinsSource": "https://www.eastcoast-nsa.gov.tw/zh-tw/service/ferry/",
+      "note": "由凱旋、天王星、綠島之星三家聯營共同排班，班次共用，因此時刻記在航線層而非各業者底下。例假日人潮多時會機動加開班次，加開的班次不會出現在這張表裡。",
+      "sharedSeasons": [
+        {
+          "name": "每日固定班次",
+          "dateRange": "全年",
+          "sourceType": "third_party",
+          "source": "https://ferry.tw/time-table/lyudao",
+          "checkedAt": "2026-09-18",
+          "sourceNote": "飛魚船票網（代訂平台）之班次匯總，非船公司官方公告。官方端（航港局、東管處、各船公司官網）皆未提供可抄的逐班時刻，此為目前唯一有完整班表的來源，僅供估算，實際以船公司公佈與候船室現場為準。",
+          "departures": [
+            { "from": "mainland", "time": "07:30" },
+            { "from": "mainland", "time": "09:30" },
+            { "from": "mainland", "time": "11:30" },
+            { "from": "mainland", "time": "13:30" },
+            { "from": "mainland", "time": "15:30" },
+            { "from": "island", "time": "08:30" },
+            { "from": "island", "time": "10:30" },
+            { "from": "island", "time": "12:30" },
+            { "from": "island", "time": "14:30" },
+            { "from": "island", "time": "16:30" }
+          ]
+        }
+      ],
+      "operators": [
+        {
+          "name": "凱旋海運",
+          "phone": "089-281047",
+          "phoneSource": "https://www.eastcoast-nsa.gov.tw/zh-tw/service/ferry/",
+          "bookingUrl": "https://www.farnlin.com.tw/route-main.html?routestand=25",
+          "fares": {
+            "currency": "TWD",
+            "oneWayFull": 660,
+            "roundTripFull": 1320,
+            "roundTripBooking": 1120,
+            "oneWayChild": 330,
+            "oneWayElder": 330,
+            "oneWayDisabledCompanion": 330,
+            "source": "https://www.farnlin.com.tw/route-main.html?routestand=25",
+            "checkedAt": "2026-08-11"
+          },
+          "seasons": [],
+          "todo": "凱旋自家的逐班時刻未公開在官網票價頁（只導向行事曆）。綠島線的班次已改記在航線層的 sharedSeasons（三家聯營、班次共用）。"
+        },
+        {
+          "name": "綠島之星",
+          "phone": "089-280226",
+          "phoneSource": "https://www.eastcoast-nsa.gov.tw/zh-tw/service/ferry/",
+          "bookingUrl": "",
+          "fares": null,
+          "seasons": [],
+          "todo": "票價與逐班時刻皆未取得，待補。"
+        },
+        {
+          "name": "天王星",
+          "phone": "",
+          "bookingUrl": "",
+          "fares": null,
+          "seasons": [],
+          "todo": "業者名稱來自航線共同排班說明，電話／票價／時刻皆未取得，待補。"
+        }
+      ]
+    },
+    {
+      "code": "fugang_lanyu",
+      "islandCode": "lanyu",
+      "mainlandPort": "富岡漁港",
+      "islandPort": "開元港",
+      "sailingMins": 120,
+      "sailingMinsSource": "https://ferry.tw/line",
+      "note": "由金星（金星八號）、綠島之星、凱旋（凱旋1號）三家聯營共同排班、班次共用，時刻記在航線層而非各業者底下。屬預訂制：訂票人數達標才開航，旺季幾乎天天開；約 10 月中後轉冬季班表（政府補助、約每週一、三、五及雙週日），實際日期以船公司公告為準。回程 15:00 班次常經綠島，航程約多 40 分。另有後壁湖（墾丁）出發航線，超出台東範圍，本表不收。",
+      "sharedSeasons": [
+        {
+          "name": "旺季每日班次",
+          "dateRange": "旺季每日（約 3 月中～10 月中）；冬季轉減班，請洽船公司",
+          "sourceType": "third_party",
+          "source": "https://ferry.tw/time-table/lanyu",
+          "checkedAt": "2026-09-18",
+          "sourceNote": "飛魚船票網（代訂平台）之班次匯總，非船公司官方公告。航港局固定航班頁為動態頁、明載僅供參考，且蘭嶼線受天候影響大、班表變動比綠島頻繁。此為目前唯一有完整班表的來源，僅供估算，實際以船公司公佈與候船室現場為準。",
+          "departures": [
+            { "from": "mainland", "time": "07:00" },
+            { "from": "mainland", "time": "12:30" },
+            { "from": "island", "time": "09:30" },
+            { "from": "island", "time": "15:00" }
+          ]
+        }
+      ],
+      "operators": [
+        {
+          "name": "凱旋海運",
+          "phone": "089-281047",
+          "phoneSource": "https://www.eastcoast-nsa.gov.tw/zh-tw/service/ferry/",
+          "bookingUrl": "https://www.farnlin.com.tw/route-main.html",
+          "fares": {
+            "currency": "TWD",
+            "oneWayFull": 1200,
+            "roundTripFull": 0,
+            "roundTripBooking": 2400,
+            "source": "https://ferry.tw/line",
+            "checkedAt": "2026-09-18",
+            "sourceNote": "飛魚網優惠價（金星八號／綠島之星／凱旋1號同價，單程 1200／來回 2400），非船公司官方全票；oneWayFull 暫以此優惠價估算船票，官方全票與各優待票（兒童／敬老／愛心）尚未取得。"
+          },
+          "seasons": [],
+          "todo": "官方全票與各優待票價未取得（farnlin 票價頁未列數字、導向 LINE 客服）；目前 fares 以飛魚網優惠價（單程 1200／來回 2400）暫填。逐班時刻已改記於航線層 sharedSeasons。"
+        }
+      ]
+    }
+  ],
+  "seasonsFormat": {
+    "_comment": "seasons 填入時的格式，供之後補資料參考",
+    "example": {
+      "name": "旺季",
+      "dateRange": "07-01~08-31",
+      "departures": [
+        { "from": "mainland", "time": "07:30" },
+        { "from": "island", "time": "15:30" }
+      ]
+    }
+  }
+}

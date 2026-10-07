@@ -1,0 +1,5 @@
+<resources>
+    <string name="app_name">TravelLinkAI</string>
+    <!-- 從 Firebase Console > Authentication > Google > 網頁用戶端 ID 取得（啟用 Google 登入後）-->
+    <string name="web_client_id">621019870351-32v1m7n9ql1vthvhq0vat1is5t3h85f0.apps.googleusercontent.com</string>
+</resources>

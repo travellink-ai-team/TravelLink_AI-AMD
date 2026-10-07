@@ -1,0 +1,198 @@
+[
+  {
+    "name": "三仙台",
+    "region": "成功鎮",
+    "category": "自然景觀",
+    "visitDurationMins": 90,
+    "priceLevel": 0
+  },
+  {
+    "name": "三仙台跨海步橋",
+    "region": "成功鎮",
+    "category": "自然景觀",
+    "visitDurationMins": 60,
+    "priceLevel": 0
+  },
+  {
+    "name": "水往上流遊憩區",
+    "region": "東河鄉",
+    "category": "自然景觀",
+    "visitDurationMins": 30,
+    "priceLevel": 0
+  },
+  {
+    "name": "都蘭新東糖廠文化園區",
+    "region": "東河鄉",
+    "category": "文化體驗",
+    "visitDurationMins": 60,
+    "priceLevel": 0
+  },
+  {
+    "name": "比西里岸部落",
+    "region": "成功鎮",
+    "category": "文化體驗",
+    "visitDurationMins": 60,
+    "priceLevel": 0
+  },
+  {
+    "name": "金樽遊憩區",
+    "region": "東河鄉",
+    "category": "自然景觀",
+    "visitDurationMins": 45,
+    "priceLevel": 0
+  },
+  {
+    "name": "金樽陸連島",
+    "region": "東河鄉",
+    "category": "自然景觀",
+    "visitDurationMins": 45,
+    "priceLevel": 0
+  },
+  {
+    "name": "東河橋遊憩區",
+    "region": "東河鄉",
+    "category": "自然景觀",
+    "visitDurationMins": 30,
+    "priceLevel": 0
+  },
+  {
+    "name": "舊東河橋",
+    "region": "東河鄉",
+    "category": "自然景觀",
+    "visitDurationMins": 20,
+    "priceLevel": 0
+  },
+  {
+    "name": "登仙橋遊憩區",
+    "region": "東河鄉",
+    "category": "自然景觀",
+    "visitDurationMins": 30,
+    "priceLevel": 0
+  },
+  {
+    "name": "臺東森林公園",
+    "region": "台東市",
+    "category": "公園步道",
+    "visitDurationMins": 60,
+    "priceLevel": 0
+  },
+  {
+    "name": "活水湖",
+    "region": "台東市",
+    "category": "自然景觀",
+    "visitDurationMins": 45,
+    "priceLevel": 0
+  },
+  {
+    "name": "台東海濱公園",
+    "region": "台東市",
+    "category": "公園步道",
+    "visitDurationMins": 45,
+    "priceLevel": 0
+  },
+  {
+    "name": "臺東美術館",
+    "region": "台東市",
+    "category": "文化體驗",
+    "visitDurationMins": 60,
+    "priceLevel": 0
+  },
+  {
+    "name": "臺東天后宮",
+    "region": "台東市",
+    "category": "宗教場所",
+    "visitDurationMins": 30,
+    "priceLevel": 0
+  },
+  {
+    "name": "臺東縣自然史教育館",
+    "region": "台東市",
+    "category": "文化體驗",
+    "visitDurationMins": 60,
+    "priceLevel": 0
+  },
+  {
+    "name": "阿美族民俗中心",
+    "region": "台東市",
+    "category": "文化體驗",
+    "visitDurationMins": 60,
+    "priceLevel": 1
+  },
+  {
+    "name": "臺東縣成功鎮原住民文物館",
+    "region": "成功鎮",
+    "category": "文化體驗",
+    "visitDurationMins": 60,
+    "priceLevel": 0
+  },
+  {
+    "name": "杉原灣沙灘",
+    "region": "卑南鄉",
+    "category": "自然景觀",
+    "visitDurationMins": 60,
+    "priceLevel": 0
+  },
+  {
+    "name": "礫石灘",
+    "region": "成功鎮",
+    "category": "自然景觀",
+    "visitDurationMins": 30,
+    "priceLevel": 0
+  },
+  {
+    "name": "鉛橋海灘",
+    "region": "東河鄉",
+    "category": "自然景觀",
+    "visitDurationMins": 45,
+    "priceLevel": 0
+  },
+  {
+    "name": "八嗡嗡海岸",
+    "region": "成功鎮",
+    "category": "自然景觀",
+    "visitDurationMins": 45,
+    "priceLevel": 0
+  },
+  {
+    "name": "成功鎮海濱公園",
+    "region": "成功鎮",
+    "category": "公園步道",
+    "visitDurationMins": 30,
+    "priceLevel": 0
+  },
+  {
+    "name": "交通部觀光署東部海岸國家風景區",
+    "region": "成功鎮",
+    "category": "自然景觀",
+    "visitDurationMins": 30,
+    "priceLevel": 0
+  },
+  {
+    "name": "郡界休息區",
+    "region": "長濱鄉",
+    "category": "自然景觀",
+    "visitDurationMins": 20,
+    "priceLevel": 0
+  },
+  {
+    "name": "和平鹽濱海岸公路",
+    "region": "東河鄉",
+    "category": "自然景觀",
+    "visitDurationMins": 30,
+    "priceLevel": 0
+  },
+  {
+    "name": "都蘭海角咖啡",
+    "region": "東河鄉",
+    "category": "餐廳",
+    "visitDurationMins": 60,
+    "priceLevel": 2
+  },
+  {
+    "name": "海洋環境教室",
+    "region": "成功鎮",
+    "category": "文化體驗",
+    "visitDurationMins": 60,
+    "priceLevel": 0
+  }
+]

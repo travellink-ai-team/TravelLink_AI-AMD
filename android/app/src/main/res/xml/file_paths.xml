@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<paths>
+    <!-- filesDir：行程插圖本地儲存路徑（itinerary_*.jpg） -->
+    <files-path name="images" path="." />
+    <!-- cacheDir：分享時的暫存路徑（travellink_share.jpg） -->
+    <cache-path name="cache" path="." />
+</paths>
