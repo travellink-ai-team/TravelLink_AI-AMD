@@ -4503,7 +4503,8 @@
         throw new Error(errBody.error?.message || `HTTP ${res.status}`);
       }
       const data = await res.json();
-      const part = data.candidates?.[0]?.content?.parts?.[0];
+      // 不能取 parts[0]：回應有時會在圖片前夾一段文字（或 Pro 的思考 part），要找真正的成品圖
+      const part = (data.candidates?.[0]?.content?.parts || []).find(p => p.inlineData?.data && !p.thought);
       if (!part?.inlineData?.data) { throw new Error('未收到圖片資料。回應：' + JSON.stringify(data).slice(0, 200)); }
       posterGeneratedImageBase64 = `data:${part.inlineData.mimeType || 'image/png'};base64,${part.inlineData.data}`;
       if (firebaseStorage) {
