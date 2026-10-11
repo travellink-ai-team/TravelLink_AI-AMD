@@ -678,7 +678,7 @@
           <div style="text-align:center;font-size:13px;color:#9a9590;">或</div>
           <div style="display:flex;gap:9px;">
             <button onclick="doSocial('Google')" style="flex:1;padding:10px;border:1.5px solid #e2ddd6;border-radius:9px;background:transparent;font-size:13px;font-family:inherit;cursor:pointer;">🌐 Google</button>
-            <button onclick="doSocial('Facebook')" style="flex:1;padding:10px;border:1.5px solid #e2ddd6;border-radius:9px;background:transparent;font-size:13px;font-family:inherit;cursor:pointer;">📘 Facebook</button>
+            <button data-auth-provider="facebook" onclick="doSocial('Facebook')" style="display:none;flex:1;padding:10px;border:1.5px solid #e2ddd6;border-radius:9px;background:transparent;font-size:13px;font-family:inherit;cursor:pointer;">📘 Facebook</button>
           </div>
           <div style="text-align:center;font-size:13px;color:#9a9590;margin-top:4px;">
             <span onclick="doGuest()" style="color:#2a6b5e;cursor:pointer;font-weight:500;">以訪客身份繼續</span>
@@ -698,7 +698,7 @@
         <button onclick="doRegister()" style="width:100%;padding:12px;background:#2a6b5e;color:#fff;border:none;border-radius:9px;font-size:14px;font-family:inherit;cursor:pointer;font-weight:500;margin-top:4px;">建立帳號並繼續</button>
         <div style="display:flex;gap:9px;">
           <button onclick="doSocial('Google')" style="flex:1;padding:10px;border:1.5px solid #e2ddd6;border-radius:9px;background:transparent;font-size:13px;font-family:inherit;cursor:pointer;">🌐 Google</button>
-          <button onclick="doSocial('Facebook')" style="flex:1;padding:10px;border:1.5px solid #e2ddd6;border-radius:9px;background:transparent;font-size:13px;font-family:inherit;cursor:pointer;">📘 Facebook</button>
+          <button data-auth-provider="facebook" onclick="doSocial('Facebook')" style="display:none;flex:1;padding:10px;border:1.5px solid #e2ddd6;border-radius:9px;background:transparent;font-size:13px;font-family:inherit;cursor:pointer;">📘 Facebook</button>
         </div>
       </div>
       <button onclick="closeStartModal()" style="width:100%;padding:9px;background:transparent;border:1.5px solid #e2ddd6;border-radius:9px;font-size:13px;font-family:inherit;cursor:pointer;color:#9a9590;margin-top:-4px;">取消</button>
@@ -817,8 +817,21 @@ async function doRegister() {
   }
 }
 
+// Facebook 登入在 Firebase/Meta 端尚未驗證完成，按鈕預設隱藏（markup 已 display:none）。
+// 驗證通過後在 weather.env.js 的 TRAVEL_APP_CONFIG 設 ENABLE_FACEBOOK_LOGIN: true 即可開啟。
+function isFacebookLoginEnabled() {
+  return window.TRAVEL_APP_CONFIG?.ENABLE_FACEBOOK_LOGIN === true;
+}
+function applyAuthProviderFlags() {
+  if (!isFacebookLoginEnabled()) return;
+  document.querySelectorAll('[data-auth-provider="facebook"]').forEach(btn => { btn.style.display = ''; });
+}
+if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', applyAuthProviderFlags);
+else applyAuthProviderFlags();
+
 async function doSocial(providerName) {
   if (!firebaseEnabled || !firebaseAuth) { showToast('Firebase 尚未初始化', 'orange'); return; }
+  if (providerName === 'Facebook' && !isFacebookLoginEnabled()) { showToast('Facebook 登入暫未開放，請改用 Google 或 Email', 'orange'); return; }
   try {
     let provider = null;
     if (providerName === 'Google') provider = new firebase.auth.GoogleAuthProvider();
