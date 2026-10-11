@@ -4447,6 +4447,7 @@
       stopList,
       '',
       '請根據我的行程規劃，加入適當的細節插圖。',
+      '圖中只標示上述行程提到的地點名稱，不要自行加入行程以外的店名、餐廳或景點名稱。',
       '根據行程依序畫成一張日式雜誌插畫的旅遊行程圖，我提到的地點、環境、景觀、食物、餐廳，都要在圖中提到，且儘可能的擬真。插圖的比例為 16:9。',
       '整體要給人可愛、清新的氛圍，字體清晰容易閱讀、並確保內容都是「繁體中文」無錯字。'
     ];
@@ -4478,7 +4479,8 @@
 
     const prompt = buildImagePrompt(character);
     console.log('[行程圖 Prompt]', prompt);
-    const imageModel = 'gemini-3.1-flash-image';
+    // 2026-10 實測：Pro 的繁中字與景點標籤明顯比 3.1 Flash 正確（Flash 會重複標籤、出現錯字），代價是出圖約慢一倍
+    const imageModel = 'gemini-3-pro-image';
     try {
       // 代理模式沒有前端金鑰 → 不要掛空的 ?key=（金鑰由後端注入），與其他 Vertex 呼叫一致
       const endpoint = vertex.ready

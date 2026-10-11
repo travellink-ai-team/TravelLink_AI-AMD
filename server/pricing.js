@@ -33,7 +33,7 @@ const GEMINI_RATES = {
     outputPerMillion: 0
   }
 
-  // gemini-3.1-flash-image（行程圖生成，planner 使用）：
+  // gemini-3-pro-image（行程圖生成，planner 使用）：
   //   刻意不填。圖片模型不是按 token 計價，套用上面的公式會得到錯誤數字。
   //   在取得官方單價前，它會走 priceGeminiUsage 的 unpriced 分支——
   //   用量照實記錄、金額不計入，而不是靜默當成 0 元。

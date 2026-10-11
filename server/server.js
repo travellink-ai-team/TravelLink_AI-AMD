@@ -289,8 +289,8 @@ app.post('/api/generation-runs/:runId/finish', genRunLimiter, requireFirebaseUse
 // 只放行實際用到的 model 與端點（過度寬鬆的白名單＝幫全網代付其他 model 的費用）
 const VERTEX_ALLOWED_PATH = new RegExp(
   '^/(?:' +
-  'v1/publishers/google/models/(?:gemini-3-flash-preview|gemini-3\\.1-flash-image):(?:generateContent|streamGenerateContent)' +
-  '|v1beta1/projects/[^/]+/locations/global/publishers/google/models/(?:gemini-3-flash-preview|gemini-3\\.1-flash-image):generateContent' +
+  'v1/publishers/google/models/(?:gemini-3-flash-preview|gemini-3-pro-image):(?:generateContent|streamGenerateContent)' +
+  '|v1beta1/projects/[^/]+/locations/global/publishers/google/models/(?:gemini-3-flash-preview|gemini-3-pro-image):generateContent' +
   ')$'
 );
 

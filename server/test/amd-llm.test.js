@@ -16,7 +16,7 @@ const ok = (name, cond) => { if (cond) { pass++; console.log('PASS  ' + name); }
 
 // ── 路由：只有文字模型改走 AMD ──
 ok('文字模型改走 AMD', amd.shouldRoute('gemini-3-flash-preview'));
-ok('圖片模型仍走 Vertex', !amd.shouldRoute('gemini-3.1-flash-image'));
+ok('圖片模型仍走 Vertex', !amd.shouldRoute('gemini-3-pro-image'));
 
 // ── 請求轉換 ──
 const geminiReq = {
