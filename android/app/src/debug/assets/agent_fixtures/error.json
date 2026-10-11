@@ -1,0 +1,11 @@
+{
+  "synthetic": true,
+  "note": "App 端合成（非 gpt-oss 錄製）：Agent 執行失敗的 error 結尾，用來測畫面",
+  "request": { "trigger": { "type": "user", "message": "下午想去室內的地方" } },
+  "events": [
+    { "type": "start", "trigger": "user", "simulated": false, "stops": 5, "ms": 9 },
+    { "type": "tool_call", "tool": "get_trip_state", "label": "讀取目前行程", "ms": 600 },
+    { "type": "tool_result", "tool": "get_trip_state", "ok": true, "detail": "1 天、5 站", "ms": 602 },
+    { "type": "error", "message": "AI 代理人暫時無法回應，請稍後再試一次。", "usage": { "promptTokens": 3100, "completionTokens": 0, "llmCalls": 1 }, "steps": 1, "model": "gpt-oss-120b", "upstreamModels": [], "ms": 1500 }
+  ]
+}

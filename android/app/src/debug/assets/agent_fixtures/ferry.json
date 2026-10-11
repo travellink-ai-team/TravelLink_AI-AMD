@@ -1,0 +1,548 @@
+{
+  "recordedAt": "2026-10-02T11:46:41.038Z",
+  "note": "情境 A：綠島回程船班停航風險（模擬第 3 天浪高 3.5 公尺）。真實 gpt-oss-120b 執行錄下的 SSE 事件。",
+  "request": {
+    "trip": {
+      "title": "綠島三天兩夜",
+      "region": "綠島",
+      "startDate": "2026-10-03",
+      "endTime": "21:00",
+      "people": 2,
+      "stops": [
+        {
+          "id": "g1",
+          "day": 1,
+          "time": "08:00",
+          "stayMin": 30,
+          "name": "富岡漁港"
+        },
+        {
+          "id": "g2",
+          "day": 1,
+          "time": "09:30",
+          "stayMin": 20,
+          "name": "南寮漁港"
+        },
+        {
+          "id": "g3",
+          "day": 1,
+          "time": "10:00",
+          "stayMin": 40,
+          "name": "綠島遊客中心"
+        },
+        {
+          "id": "g4",
+          "day": 1,
+          "time": "11:00",
+          "stayMin": 60,
+          "name": "綠島大街"
+        },
+        {
+          "id": "g5",
+          "day": 1,
+          "time": "12:30",
+          "stayMin": 60,
+          "name": "綠島竹屋餐廳"
+        },
+        {
+          "id": "g6",
+          "day": 1,
+          "time": "14:00",
+          "stayMin": 55,
+          "name": "小長城"
+        },
+        {
+          "id": "g7",
+          "day": 1,
+          "time": "15:30",
+          "stayMin": 90,
+          "name": "帆船鼻大草原"
+        },
+        {
+          "id": "g8",
+          "day": 1,
+          "time": "19:30",
+          "stayMin": 90,
+          "name": "朝日溫泉"
+        },
+        {
+          "id": "g9",
+          "day": 2,
+          "time": "09:00",
+          "stayMin": 65,
+          "name": "綠島梅花鹿生態園區"
+        },
+        {
+          "id": "g10",
+          "day": 2,
+          "time": "10:30",
+          "stayMin": 35,
+          "name": "柴口浮潛區"
+        },
+        {
+          "id": "g11",
+          "day": 2,
+          "time": "12:00",
+          "stayMin": 50,
+          "name": "綠島 非炒不可海鮮食堂"
+        },
+        {
+          "id": "g12",
+          "day": 2,
+          "time": "14:00",
+          "stayMin": 90,
+          "name": "過山古道"
+        },
+        {
+          "id": "g13",
+          "day": 2,
+          "time": "16:00",
+          "stayMin": 40,
+          "name": "牛頭山"
+        },
+        {
+          "id": "g14",
+          "day": 2,
+          "time": "17:30",
+          "stayMin": 60,
+          "name": "小島太太Mrs.Kojima(店休時間請看IG主頁)"
+        },
+        {
+          "id": "g15",
+          "day": 3,
+          "time": "09:00",
+          "stayMin": 35,
+          "name": "大白沙"
+        },
+        {
+          "id": "g16",
+          "day": 3,
+          "time": "10:00",
+          "stayMin": 35,
+          "name": "睡美人岩"
+        },
+        {
+          "id": "g17",
+          "day": 3,
+          "time": "11:00",
+          "stayMin": 60,
+          "name": "綠島監獄"
+        },
+        {
+          "id": "g18",
+          "day": 3,
+          "time": "12:30",
+          "stayMin": 60,
+          "name": "超難吃牛肉麵"
+        },
+        {
+          "id": "g19",
+          "day": 3,
+          "time": "14:30",
+          "stayMin": 60,
+          "name": "南寮漁港"
+        },
+        {
+          "id": "g20",
+          "day": 3,
+          "time": "16:30",
+          "stayMin": 20,
+          "name": "富岡漁港"
+        },
+        {
+          "id": "g21",
+          "day": 3,
+          "time": "17:30",
+          "stayMin": 60,
+          "name": "榕樹下米苔目(中華路創始老店-別無分店)"
+        }
+      ]
+    },
+    "trigger": {
+      "type": "weather"
+    },
+    "scenario": {
+      "sea": {
+        "date": "2026-10-05",
+        "waveMaxM": 3.5,
+        "gustMax": 9
+      }
+    }
+  },
+  "events": [
+    {
+      "type": "start",
+      "trigger": "weather",
+      "simulated": true,
+      "stops": 21,
+      "ms": 11
+    },
+    {
+      "type": "check",
+      "label": "程式檢查天氣、營業時間與海象（不呼叫 AI）",
+      "ms": 11
+    },
+    {
+      "type": "check_result",
+      "label": "發現 1 個問題，啟動 AI 代理人",
+      "issues": [
+        "第 3 天 15:30 回程船班停航風險高：浪高最高 3.5 公尺（≥ 3）（模擬）"
+      ],
+      "ms": 557
+    },
+    {
+      "type": "tool_call",
+      "tool": "get_trip_state",
+      "label": "讀取目前行程",
+      "ms": 677
+    },
+    {
+      "type": "tool_result",
+      "tool": "get_trip_state",
+      "ok": true,
+      "detail": "3 天、21 站",
+      "ms": 679
+    },
+    {
+      "type": "tool_call",
+      "tool": "get_weather_forecast",
+      "label": "查詢天氣預報",
+      "ms": 797
+    },
+    {
+      "type": "tool_result",
+      "tool": "get_weather_forecast",
+      "ok": true,
+      "detail": "行程時段沒有明顯降雨",
+      "ms": 798
+    },
+    {
+      "type": "tool_call",
+      "tool": "get_sea_conditions",
+      "label": "查詢綠島蘭嶼海面浪況",
+      "ms": 940
+    },
+    {
+      "type": "tool_result",
+      "tool": "get_sea_conditions",
+      "ok": true,
+      "detail": "10-03 中（1轉2再轉1公尺）、10-04 低（約1公尺）、10-05 高（2.5轉3.5公尺）、10-06 高（2轉3再轉4公尺）",
+      "ms": 941
+    },
+    {
+      "type": "tool_call",
+      "tool": "search_local_poi",
+      "label": "搜尋附近室內景點",
+      "ms": 2286
+    },
+    {
+      "type": "tool_result",
+      "tool": "search_local_poi",
+      "ok": true,
+      "detail": "找到 2 個：離海五分鐘 1.4km、綠島人權文化園區 3km",
+      "ms": 2290
+    },
+    {
+      "type": "tool_call",
+      "tool": "propose_patch",
+      "label": "組合修改草稿並驗證",
+      "ms": 3792
+    },
+    {
+      "type": "tool_result",
+      "tool": "propose_patch",
+      "ok": true,
+      "detail": "✅ 驗證通過",
+      "ms": 3798
+    },
+    {
+      "type": "tool_call",
+      "tool": "present_proposal",
+      "label": "提出方案",
+      "ms": 4493
+    },
+    {
+      "type": "tool_result",
+      "tool": "present_proposal",
+      "ok": true,
+      "detail": "",
+      "ms": 4493
+    },
+    {
+      "type": "proposal",
+      "summary": "將回程船班提前至 10/04，取消第3天的島上行程，改在本島結束行程",
+      "reasons": [
+        "10/05 回程船班風險高（浪高 3.5 公尺），提前至風險低的 10/04",
+        "第3天全部島上景點因船班提前而無法安排行程，已移除",
+        "保留本島最後的餐廳「榕樹下米苔目」作為結束，符合每日結束時間 19:00"
+      ],
+      "fallback": false,
+      "simulated": true,
+      "changes": [
+        {
+          "type": "move",
+          "name": "南寮漁港",
+          "fromDay": 3,
+          "day": 2,
+          "from": "14:30",
+          "to": "15:00"
+        },
+        {
+          "type": "move",
+          "name": "富岡漁港",
+          "fromDay": 3,
+          "day": 2,
+          "from": "16:30",
+          "to": "17:00"
+        },
+        {
+          "type": "move",
+          "name": "榕樹下米苔目(中華路創始老店-別無分店)",
+          "fromDay": 3,
+          "day": 2,
+          "from": "17:30",
+          "to": "18:00"
+        },
+        {
+          "type": "remove",
+          "day": 2,
+          "time": "14:00",
+          "from": "過山古道"
+        },
+        {
+          "type": "remove",
+          "day": 2,
+          "time": "16:00",
+          "from": "牛頭山"
+        },
+        {
+          "type": "remove",
+          "day": 2,
+          "time": "17:30",
+          "from": "小島太太Mrs.Kojima(店休時間請看IG主頁)"
+        },
+        {
+          "type": "remove",
+          "day": 3,
+          "time": "09:00",
+          "from": "大白沙"
+        },
+        {
+          "type": "remove",
+          "day": 3,
+          "time": "10:00",
+          "from": "睡美人岩"
+        },
+        {
+          "type": "remove",
+          "day": 3,
+          "time": "11:00",
+          "from": "綠島監獄"
+        },
+        {
+          "type": "remove",
+          "day": 3,
+          "time": "12:30",
+          "from": "超難吃牛肉麵"
+        }
+      ],
+      "costDelta": {
+        "perPersonBefore": 1901,
+        "perPersonAfter": 1301,
+        "diff": -600,
+        "note": "門票加餐費估算，不含交通"
+      },
+      "ferry": {
+        "before": [
+          {
+            "direction": "去程",
+            "day": 1,
+            "depart": "08:30"
+          },
+          {
+            "direction": "回程",
+            "day": 3,
+            "depart": "15:30"
+          }
+        ],
+        "after": [
+          {
+            "direction": "去程",
+            "day": 1,
+            "depart": "08:30"
+          },
+          {
+            "direction": "回程",
+            "day": 2,
+            "depart": "16:00"
+          }
+        ],
+        "note": "依海面預報推估，實際班次與是否停航以船公司公告為準"
+      },
+      "warnings": [
+        "第 1 天 08:30 去程船班停航風險中：浪高最高 2 公尺（≥ 2）、陣風 8 級（≥ 8）"
+      ],
+      "draft": {
+        "title": "綠島三天兩夜",
+        "region": "綠島",
+        "startDate": "2026-10-03",
+        "endTime": "21:00",
+        "people": 2,
+        "budgetPerPerson": null,
+        "stops": [
+          {
+            "id": "g1",
+            "day": 1,
+            "time": "08:00",
+            "stayMin": 30,
+            "name": "富岡漁港",
+            "lat": 22.7910653,
+            "lng": 121.192804,
+            "kind": "scenic"
+          },
+          {
+            "id": "g2",
+            "day": 1,
+            "time": "09:30",
+            "stayMin": 20,
+            "name": "南寮漁港",
+            "lat": 22.659485,
+            "lng": 121.473767,
+            "kind": "scenic"
+          },
+          {
+            "id": "g3",
+            "day": 1,
+            "time": "10:00",
+            "stayMin": 40,
+            "name": "綠島遊客中心",
+            "lat": 22.67219,
+            "lng": 121.46861,
+            "kind": "scenic"
+          },
+          {
+            "id": "g4",
+            "day": 1,
+            "time": "11:00",
+            "stayMin": 60,
+            "name": "綠島大街",
+            "lat": 22.6667293,
+            "lng": 121.46989639999998,
+            "kind": "scenic"
+          },
+          {
+            "id": "g5",
+            "day": 1,
+            "time": "12:30",
+            "stayMin": 60,
+            "name": "綠島竹屋餐廳",
+            "lat": 22.670993499999998,
+            "lng": 121.46779389999999,
+            "kind": "food"
+          },
+          {
+            "id": "g6",
+            "day": 1,
+            "time": "14:00",
+            "stayMin": 55,
+            "name": "小長城",
+            "lat": 22.660833,
+            "lng": 121.506816,
+            "kind": "scenic"
+          },
+          {
+            "id": "g7",
+            "day": 1,
+            "time": "15:30",
+            "stayMin": 90,
+            "name": "帆船鼻大草原",
+            "lat": 22.635381,
+            "lng": 121.506938,
+            "kind": "scenic"
+          },
+          {
+            "id": "g8",
+            "day": 1,
+            "time": "19:30",
+            "stayMin": 90,
+            "name": "朝日溫泉",
+            "lat": 22.6370465,
+            "lng": 121.50417530000001,
+            "kind": "scenic"
+          },
+          {
+            "id": "g9",
+            "day": 2,
+            "time": "09:00",
+            "stayMin": 65,
+            "name": "綠島梅花鹿生態園區",
+            "lat": 22.6346217,
+            "lng": 121.49926629999999,
+            "kind": "scenic"
+          },
+          {
+            "id": "g10",
+            "day": 2,
+            "time": "10:30",
+            "stayMin": 35,
+            "name": "柴口浮潛區",
+            "lat": 22.67739,
+            "lng": 121.48268,
+            "kind": "scenic"
+          },
+          {
+            "id": "g11",
+            "day": 2,
+            "time": "12:00",
+            "stayMin": 50,
+            "name": "綠島 非炒不可海鮮食堂",
+            "lat": 22.6666261,
+            "lng": 121.46995869999999,
+            "kind": "food"
+          },
+          {
+            "id": "g19",
+            "day": 2,
+            "time": "15:00",
+            "stayMin": 60,
+            "name": "南寮漁港",
+            "lat": 22.659485,
+            "lng": 121.473767,
+            "kind": "scenic"
+          },
+          {
+            "id": "g20",
+            "day": 2,
+            "time": "17:00",
+            "stayMin": 20,
+            "name": "富岡漁港",
+            "lat": 22.7910653,
+            "lng": 121.192804,
+            "kind": "scenic"
+          },
+          {
+            "id": "g21",
+            "day": 2,
+            "time": "18:00",
+            "stayMin": 60,
+            "name": "榕樹下米苔目(中華路創始老店-別無分店)",
+            "lat": 22.7547249,
+            "lng": 121.1533815,
+            "kind": "food"
+          }
+        ],
+        "days": 2,
+        "island": "綠島",
+        "extraNights": 0
+      },
+      "usage": {
+        "promptTokens": 22677,
+        "completionTokens": 1169,
+        "llmCalls": 6
+      },
+      "steps": 6,
+      "model": "gpt-oss-120b",
+      "ms": 4497
+    }
+  ]
+}

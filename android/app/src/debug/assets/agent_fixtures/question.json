@@ -1,0 +1,14 @@
+{
+  "synthetic": true,
+  "note": "App 端合成（非 gpt-oss 錄製）：Agent 有取捨要使用者決定時的 question 結尾，用來測畫面",
+  "request": { "trigger": { "type": "weather" }, "scenario": { "sea": { "date": "2026-10-05", "waveMaxM": 3.5, "gustMax": 9 } } },
+  "events": [
+    { "type": "start", "trigger": "weather", "simulated": true, "stops": 18, "ms": 8 },
+    { "type": "check", "label": "程式檢查天氣、營業時間與海象（不呼叫 AI）", "ms": 9 },
+    { "type": "check_result", "label": "發現 1 個問題，啟動 AI 代理人", "issues": ["第 3 天 15:30 回程船班停航風險高：浪高最高 3.5 公尺"], "ms": 420 },
+    { "type": "tool_call", "tool": "get_sea_conditions", "label": "查詢綠島海象", "ms": 780 },
+    { "type": "tool_result", "tool": "get_sea_conditions", "ok": true, "detail": "第 3 天風險高（浪高 3.5 公尺）、第 2 天風險低", "ms": 1210 },
+    { "type": "tool_call", "tool": "ask_user", "label": "詢問你的選擇", "ms": 1900 },
+    { "type": "question", "question": "第 3 天下午的回程船很可能停駛，你想怎麼處理？", "options": ["提前到第 2 天下午搭船回台東", "多住一晚，第 4 天再回本島"], "usage": { "promptTokens": 6100, "completionTokens": 240, "llmCalls": 2 }, "steps": 2, "model": "gpt-oss-120b", "upstreamModels": [], "ms": 2300 }
+  ]
+}

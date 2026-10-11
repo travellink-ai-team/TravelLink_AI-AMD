@@ -7,7 +7,7 @@
    再把回應轉回 Gemini 格式。前端與 usage-tap 都不用改。
 
    範圍：只有文字生成（generateContent / streamGenerateContent）。
-   圖片生成（gemini-3.1-flash-image）沒有對應模型，維持走 Vertex。
+   圖片生成（gemini-3-pro-image）沒有對應模型，維持走 Vertex。
 
    ⚠ 端點是 http——只能由後端呼叫（正式站是 https，瀏覽器會擋 mixed content）。
      工研院說會開通登記的 IP，但 2026-10-02 實測未登記的 IP 也連得上；日後收緊的話，

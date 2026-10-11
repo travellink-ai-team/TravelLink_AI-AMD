@@ -1,0 +1,80 @@
+{
+  "recordedAt": "2026-10-02T11:18:05.731Z",
+  "note": "真實 gpt-oss-120b 執行錄下的 SSE 事件，前端 mock 用。ms 是事件發生的相對時間，重播時照這個間隔送出。",
+  "request": {
+    "trip": {
+      "title": "台東市區一日遊",
+      "region": "台東",
+      "startDate": "2026-10-03",
+      "endTime": "20:00",
+      "people": 2,
+      "stops": [
+        {
+          "id": "s1",
+          "day": 1,
+          "time": "09:00",
+          "stayMin": 120,
+          "name": "國立臺灣史前文化博物館"
+        },
+        {
+          "id": "s2",
+          "day": 1,
+          "time": "11:30",
+          "stayMin": 60,
+          "name": "榕樹下米苔目(中華路創始老店-別無分店)"
+        },
+        {
+          "id": "s3",
+          "day": 1,
+          "time": "13:30",
+          "stayMin": 90,
+          "name": "臺東森林公園"
+        },
+        {
+          "id": "s4",
+          "day": 1,
+          "time": "15:30",
+          "stayMin": 60,
+          "name": "加路蘭"
+        },
+        {
+          "id": "s5",
+          "day": 1,
+          "time": "17:30",
+          "stayMin": 90,
+          "name": "鐵花村音樂聚落"
+        }
+      ]
+    },
+    "trigger": {
+      "type": "weather"
+    }
+  },
+  "events": [
+    {
+      "type": "start",
+      "trigger": "weather",
+      "simulated": false,
+      "stops": 5,
+      "ms": 0
+    },
+    {
+      "type": "check",
+      "label": "程式檢查天氣與營業時間（不呼叫 AI）",
+      "ms": 0
+    },
+    {
+      "type": "no_change",
+      "reason": "行程時段沒有降雨或公休問題",
+      "llmSkipped": true,
+      "usage": {
+        "promptTokens": 0,
+        "completionTokens": 0,
+        "llmCalls": 0
+      },
+      "steps": 0,
+      "model": "gpt-oss-120b",
+      "ms": 1
+    }
+  ]
+}

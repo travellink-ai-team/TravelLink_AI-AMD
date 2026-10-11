@@ -1,0 +1,47 @@
+{
+  "project_info": {
+    "project_number": "621019870351",
+    "project_id": "project-720a680b-3ad1-40d1-b07",
+    "storage_bucket": "project-720a680b-3ad1-40d1-b07.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:621019870351:android:ff499fa440af2d2edf2cfa",
+        "android_client_info": {
+          "package_name": "com.example.travellink_ai"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "621019870351-gqhhnala5mbro28qcgoaf4ijqjuo9cl8.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.example.travellink_ai",
+            "certificate_hash": "f3d75e3a9f50ca28a421634bf0878d8dc76e6f85"
+          }
+        },
+        {
+          "client_id": "621019870351-32v1m7n9ql1vthvhq0vat1is5t3h85f0.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyAfjLqZcDzTEn2FkEKad8SFTHrwUQZmFFQ"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "621019870351-32v1m7n9ql1vthvhq0vat1is5t3h85f0.apps.googleusercontent.com",
+              "client_type": 3
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
