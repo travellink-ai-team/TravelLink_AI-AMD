@@ -17,7 +17,7 @@ const ok = (name, cond, detail) => {
   else { fail++; console.log('FAIL  ' + name + (detail ? '\n      ' + detail : '')); }
 };
 const TEXT = 'gemini-3-flash-preview';
-const IMAGE = 'gemini-3.1-flash-image';
+const IMAGE = 'gemini-3-pro-image';
 const userText = (t) => ({ contents: [{ role: 'user', parts: [{ text: t }] }] });
 
 // ── 離線：請求清理 ──
