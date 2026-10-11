@@ -86,7 +86,7 @@
     </div>
     <div class="lm-divider">或</div>
     <button class="lm-social-btn" onclick="doSocialLogin('Google')">🌐 以 Google 帳號登入</button>
-    <button class="lm-social-btn" style="margin-top:8px" onclick="doSocialLogin('Facebook')">📘 以 Facebook 帳號登入</button>
+    <button class="lm-social-btn" data-auth-provider="facebook" style="margin-top:8px;display:none" onclick="doSocialLogin('Facebook')">📘 以 Facebook 帳號登入</button>
   </div>
 </div>
 
@@ -449,7 +449,7 @@
   <button class="mbn-item" id="mbnFriends" onclick="showMainView('friends')"><span class="mbn-ico" aria-hidden="true"><svg class="wai-icon lg" aria-hidden="true"><use href="#wai-users"></use></svg></span>好友</button>
 </nav>
 
-<script src="./ai-travel-explore-final.js?v=20261005-tripdel1"></script>
+<script src="./ai-travel-explore-final.js?v=20261011-fbflag1"></script>
 <!-- 浮動小進度卡：建立行程視窗關閉後仍可看進度並點回 -->
 <div id="genMiniBar" hidden onclick="reopenWizGen()">
   <button class="gmb-close" onclick="event.stopPropagation();hideGenMiniBar()" aria-label="關閉">✕</button>

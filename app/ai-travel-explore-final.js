@@ -5069,8 +5069,21 @@ async function doChangePassword() {
   }
 }
 
+// Facebook 登入在 Firebase/Meta 端尚未驗證完成，按鈕預設隱藏（markup 已 display:none）。
+// 驗證通過後在 weather.env.js 的 TRAVEL_APP_CONFIG 設 ENABLE_FACEBOOK_LOGIN: true 即可開啟。
+function isFacebookLoginEnabled() {
+  return window.TRAVEL_APP_CONFIG?.ENABLE_FACEBOOK_LOGIN === true;
+}
+function applyAuthProviderFlags() {
+  if (!isFacebookLoginEnabled()) return;
+  document.querySelectorAll('[data-auth-provider="facebook"]').forEach(btn => { btn.style.display = ''; });
+}
+if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', applyAuthProviderFlags);
+else applyAuthProviderFlags();
+
 async function doSocialLogin(providerName) {
   if (!firebaseEnabled || !firebaseAuth) return showToast('Firebase 尚未初始化', 'orange');
+  if (providerName === 'Facebook' && !isFacebookLoginEnabled()) return showToast('Facebook 登入暫未開放，請改用 Google 或 Email', 'orange');
   try {
     let provider = null;
     if (providerName === 'Google') provider = new firebase.auth.GoogleAuthProvider();
