@@ -224,7 +224,7 @@ class RecapRepository @Inject constructor(
 
     private suspend fun loadRoomSpots(roomTripId: String): List<SpotMemory> = runCatching {
         val local = database.tripMemoryDao().getByTripId(roomTripId) ?: return emptyList()
-        val type = object : TypeToken<Map<String, SpotMemory>>() {}.type
+        val type = TypeToken.getParameterized(Map::class.java, String::class.java, SpotMemory::class.java).type
         val map: Map<String, SpotMemory> = gson.fromJson(local.spotsJson, type) ?: emptyMap()
         map.values.toList()
     }.onFailure { Log.w(tag, "本地照片讀取失敗（$roomTripId）", it) }.getOrDefault(emptyList())

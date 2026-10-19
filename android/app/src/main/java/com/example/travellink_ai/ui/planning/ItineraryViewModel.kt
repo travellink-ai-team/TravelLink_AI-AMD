@@ -42,6 +42,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.async
@@ -310,9 +311,6 @@ class ItineraryViewModel @javax.inject.Inject constructor(
     val previewReturnScreen: String get() = stateHolder.previewReturnScreen
     /** 旅遊回憶返回目的地（來源頁；預設 home） */
     val memoryReturnScreen: String get() = stateHolder.memoryReturnScreen
-    var resultInitialView: String
-        get() = stateHolder.resultInitialView
-        set(v) { stateHolder.resultInitialView = v }
     var pendingTemplateSeed: com.example.travellink_ai.data.model.TemplateSeed?
         get() = stateHolder.pendingTemplateSeed
         set(v) { stateHolder.pendingTemplateSeed = v }
@@ -327,13 +325,14 @@ class ItineraryViewModel @javax.inject.Inject constructor(
      * 開發者用：估算「這一次生成」的 Vertex AI 成本，只在 DEBUG build 印到 Logcat（tag=GenCost）。
      * release build 完全不輸出。生成開始時 reset()，文字（callGemini）與圖片（tryGeminiVertexAI）
      * 各自累加；每次呼叫都印「本次 + 累計」，開發者看最後一行「累計」即為該次生成總花費。
-     * 單價（美金牌價，2026-07 查證）：Gemini 2.5 Flash 文字 in=$0.30/1M、out=$2.50/1M（含 thinking）；
-     * gemini-3.1-flash-image-preview 圖片輸出約 $0.067/張（1K 解析度）。牌價變動時只改這裡。
+     * 單價（美金牌價）：gemini-3-flash-preview 文字 in=$0.50/1M、out=$3.00/1M（含 thinking）；
+     * gemini-3-pro-image 約 $0.134/張（1K～2K）。2026-10-11 換模型時依公開價目更新，
+     * 實際以 Google Cloud 帳單為準。牌價變動時只改這裡。
      */
     private object GenCost {
-        private const val TEXT_IN_PER_M  = 0.30
-        private const val TEXT_OUT_PER_M = 2.50   // candidates + thoughts 皆以 output 計價
-        private const val IMG_PER_IMAGE  = 0.067
+        private const val TEXT_IN_PER_M  = 0.50
+        private const val TEXT_OUT_PER_M = 3.00   // candidates + thoughts 皆以 output 計價
+        private const val IMG_PER_IMAGE  = 0.134
         private const val USD_TWD        = 32.0   // 顯示台幣用的固定匯率
 
         private var promptTok = 0L
@@ -371,17 +370,24 @@ class ItineraryViewModel @javax.inject.Inject constructor(
         }
     }
 
+    private companion object {
+        /** 文字生成（行程、補站、換景點、隨行管家）。與網頁 GEMINI_MODEL 同一個；後端 ALLOWED_MODELS 要放行 */
+        const val TEXT_MODEL = "gemini-3-flash-preview"
+        /** AI 行程插圖。gemini-3-pro-image 實測一張 30 秒以上，client 逾時要放寬 */
+        const val IMAGE_MODEL = "gemini-3-pro-image"
+    }
+
     /**
      * 透過 Cloud Functions `generate_content` 代理呼叫 Vertex AI Gemini，
      * 避免在 App 端攜帶 Vertex AI 金鑰（會被反編譯取出）。
      */
     private suspend fun callGemini(
         prompt: String,
-        model: String = "gemini-2.5-flash",
+        model: String = TEXT_MODEL,
         temperature: Double = 0.4,
         responseMimeType: String? = "application/json",
         responseModalities: List<String>? = null,
-        // 0＝關閉 Gemini 2.5 思考模式（大幅降低生成延遲）；null＝維持模型預設動態思考。
+        // 0＝關閉思考（大幅降低生成延遲；網頁對 gemini-3-flash-preview 也用 thinkingBudget 0）；null＝模型預設動態思考。
         thinkingBudget: Int? = null,
         // AMD 代理判定非旅遊請求時直接回這段（不退回 Gemini）；null＝照舊退回 Gemini
         amdRefusalResult: String? = null
@@ -479,8 +485,9 @@ class ItineraryViewModel @javax.inject.Inject constructor(
         lastAiWarmUpAt = now
         viewModelScope.launch(Dispatchers.IO) {
             try {
+                // rest＝文字走 REST（gemini-3）：後端只叫醒實例、取權杖，不再預載 22 秒的 vertexai
                 val r = functions.getHttpsCallable("generate_content")
-                    .call(hashMapOf("warmup" to true)).await()
+                    .call(hashMapOf("warmup" to true, "rest" to true)).await()
                 val t = ((r.data as? Map<*, *>)?.get("timing") as? Map<*, *>)
                 Log.d(tag, "🔥 AI 後端預熱完成：${System.currentTimeMillis() - now}ms" +
                     "（import ${t?.get("importMs")}ms，冷啟動=${t?.get("coldStart")}）")
@@ -696,6 +703,8 @@ class ItineraryViewModel @javax.inject.Inject constructor(
     // 查不到的段沿用這份。來源包含 Room 地圖快取（loadMapData 讀進來的也是完整折線）。
     private var lastGoodSegments: List<List<LatLng>> = emptyList()
     private var lastGoodSegmentsSig: String? = null
+    /** fetchDirections 上次算完整路線時的交通方式（換交通方式要重算） */
+    private var lastRouteMode: String? = null
 
     private fun setRoadSegments(segments: List<List<LatLng>>, stops: List<Stop>) {
         val sig = stopsSig(stops)
@@ -732,7 +741,15 @@ class ItineraryViewModel @javax.inject.Inject constructor(
         stateHolder.walkingLegs.value = emptyList()
         isParkingLoading.set(false)
     }
+    /**
+     * 從歷史打開行程時，路線由下面的 loadMapData 用 Room 快取算；在它跑完之前，行程頁看到「還沒有車程」
+     * 不要自己 fetchDirections。兩邊的車程來源不同（例 [9,7,3,4,…] 對 [8,7,3,3,…]），
+     * 過去一打開就重排兩次景點時間、寫兩次 Firestore（2026-10-19 實測）。
+     */
+    @Volatile private var historyMapPending = false
+
     fun loadFromHistory(localItem: LocalItinerary) {
+        historyMapPending = true
         viewModelScope.launch(Dispatchers.Main) {
             clearMapState()
 
@@ -752,6 +769,7 @@ class ItineraryViewModel @javax.inject.Inject constructor(
 
             // Firebase-only 項目（id = -1L）直接用雲端 URL，不查本地檔案
             val context = getApplication<Application>().applicationContext
+            clearStopBoxes()   // 站框跟著行程文件走，由 CollabViewModel 的 listener 重新讀進來
             _backgroundUrl.value = if (localItem.id >= 0) {
                 val localFile = File(context.filesDir, "itinerary_${localItem.id}.jpg")
                 if (localFile.exists()) {
@@ -774,14 +792,8 @@ class ItineraryViewModel @javax.inject.Inject constructor(
             }
             lastGeneratedLocalId = localItem.id
             stateHolder.transportMode.value = if (localItem.transportMode == "driving") "car" else localItem.transportMode
-            // joinPin / presence 由 CollabViewModel.loadItinerary() 在 result 頁啟動時處理
-            // 若已有真實圖片 URL（file:// 或 https://），直接進入 result 頁並預設顯示插圖
-            // 否則進入 preview 頁讓使用者確認行程
-            val hasRealImage = _backgroundUrl.value?.let {
-                it.startsWith("file://") || it.startsWith("http")
-            } == true
-            resultInitialView = if (hasRealImage) "image" else "map"
-            currentScreen    = if (hasRealImage) "result" else "preview"
+            // 一律進行程頁：插圖改成行程頁上的插圖卡（點開全螢幕），不再先跳插圖展示頁
+            currentScreen    = "preview"
 
             // 🌟 v8：資料新鮮度提醒 —— 超過半年才提示，不主動強制重查
             val ageMs = System.currentTimeMillis() - localItem.createdAt
@@ -877,7 +889,7 @@ class ItineraryViewModel @javax.inject.Inject constructor(
                         persistTargetId     = localItem.id
                     )
                 }
-            }
+            }.invokeOnCompletion { if (it != null) historyMapPending = false }
         }
     }
 
@@ -1118,6 +1130,7 @@ class ItineraryViewModel @javax.inject.Inject constructor(
             withContext(Dispatchers.Main) {
                 _itinerary.value = null
                 _backgroundUrl.value = null
+                clearStopBoxes()
                 _visualState.value = VisualData()
                 clearMapState()
                 lastGeneratedLocalId = -1
@@ -1170,6 +1183,7 @@ class ItineraryViewModel @javax.inject.Inject constructor(
             _visualState.value = VisualData(isLoading = true, loadingPhase = "🔍 定位目的地…")
             _generationError.value = null
             _backgroundUrl.value = null
+            clearStopBoxes()
             clearMapState()
             try {
                 // ── ① 起訖錨點 ─────────────────────────────────────────
@@ -1375,7 +1389,7 @@ class ItineraryViewModel @javax.inject.Inject constructor(
                 // ── ④ AI Pass 1：挑景點 + 排順序（不排時間）──────────
                 phaseMs("② 候選池建構（走廊採樣＋Nearby＋enrich）")
                 _visualState.value = _visualState.value.copy(loadingPhase = aiPhase("🤖 AI 分析景點組合…"))
-                Log.d(tag, "🤖🌐 [外部 API] AI Pass 1：呼叫 Vertex AI Gemini 2.5 Flash，從 ${enrichedPOIs.size} 個 POI 挑選景點順序")
+                Log.d(tag, "🤖🌐 [外部 API] AI Pass 1：呼叫 ${TEXT_MODEL}，從 ${enrichedPOIs.size} 個 POI 挑選景點順序")
 
                 val pass1Prompt = buildPass1Prompt(
                     destination, startDateTime, endDateTime, people,
@@ -1399,10 +1413,11 @@ class ItineraryViewModel @javax.inject.Inject constructor(
                     }
                 )
                 val pass1Raw = try {
-                    // thinkingBudget = 512：Pass 1 是「從候選清單挑點＋排序」的約束型任務。
-                    // 完全關閉思考(0)雖最快，但對 duration 細則/風格匹配等需要一點推理的規則遵守度較低；
-                    // 給 512 的小額思考預算兼顧速度與品質（仍遠快於預設動態全開）。
-                    callGemini(pass1Prompt, temperature = 0.4, thinkingBudget = 512)
+                    // thinkingBudget = 0：Pass 1 是「從候選清單挑點＋排序」的約束型任務。
+                    // 2.5 Flash 時代給 512 兼顧規則遵守度；換成 gemini-3-flash-preview 後 512 實測 17.3 秒
+                    // （2026-10-11），網頁對同一模型的行程 JSON 呼叫一律 0（實測 9.6s→3.5s）。
+                    // 品質防線在後面：景點只能從候選清單挑、站名會對回清單、排程與營業時間由程式重算。
+                    callGemini(pass1Prompt, temperature = 0.4, thinkingBudget = 0)
                 } catch (e: Exception) {
                     // 保留 cause，外層才能判斷是不是網路問題
                     throw Exception("AI Pass 1 失敗: ${e.message}", e)
@@ -3565,6 +3580,9 @@ class ItineraryViewModel @javax.inject.Inject constructor(
     // （2026-07-16 實測每裝置多 4 次）。在最底層以座標攔截，同時進行中的相同請求直接合流等結果。
     private val segmentCoordCache =
         java.util.concurrent.ConcurrentHashMap<String, Pair<List<LatLng>, Long>>()
+    private val directionsDiskCache by lazy {
+        com.example.travellink_ai.data.local.DirectionsDiskCache(getApplication<Application>())
+    }
     private val segmentInFlight =
         java.util.concurrent.ConcurrentHashMap<String, kotlinx.coroutines.CompletableDeferred<Pair<List<LatLng>, Long>>>()
 
@@ -3588,6 +3606,12 @@ class ItineraryViewModel @javax.inject.Inject constructor(
             Log.d(tag, "📦 [本地資料] 單段座標快取命中（省 Directions API）：$key")
             return Triple(pts, mins, actualMode)
         }
+        // App 重開後記憶體快取是空的：停車場→景點的步行段不在 Room 地圖快取裡，過去每次重開都要重查
+        directionsDiskCache.get(key)?.let { hit ->
+            segmentCoordCache[key] = hit
+            Log.d(tag, "📦 [本地資料] 單段磁碟快取命中（省 Directions API）：$key")
+            return Triple(hit.first, hit.second, actualMode)
+        }
         val myDeferred = kotlinx.coroutines.CompletableDeferred<Pair<List<LatLng>, Long>>()
         val inFlight = segmentInFlight.putIfAbsent(key, myDeferred)
         if (inFlight != null) {
@@ -3597,7 +3621,12 @@ class ItineraryViewModel @javax.inject.Inject constructor(
         }
         return try {
             val result = directionsSegmentUncached(origin, destination, apiMode)
-            if (result.second > 0) segmentCoordCache[key] = result
+            // 用「有沒有折線」判斷查到沒有（同 RouteValidity）：不到 1 分鐘的步行段本來就是 0 分，
+            // 過去用 mins > 0 判斷，這種段永遠不進快取、每次開行程都重打 Directions
+            if (result.first.isNotEmpty()) {
+                segmentCoordCache[key] = result
+                directionsDiskCache.put(key, result)
+            }
             myDeferred.complete(result)
             Triple(result.first, result.second, actualMode)
         } catch (e: Exception) {
@@ -4513,7 +4542,7 @@ $hoursLines
                     val key = "${stops[i].name}→${stops[i + 1].name}:${if (stops[i].walkNext) "walking" else transportMode}"
                     val seg = segments[i]; val mins = transitMins[i]
                     val modeForCache = fetchedSegModes.getOrElse(i) { transportMode }
-                    if (seg.isNotEmpty() && mins > 0) segmentCache[key] = Triple(seg, mins, modeForCache)
+                    if (seg.isNotEmpty()) segmentCache[key] = Triple(seg, mins, modeForCache)
                 }
                 Log.d(tag, "📦 路段快取已預填：${stops.size - 1} 段（後續編輯排序可省 Directions API）")
             }
@@ -4571,7 +4600,7 @@ $hoursLines
                 }
                 recalculateStopTimes(transitMins)
             }
-        }
+        }.invokeOnCompletion { historyMapPending = false }
     }
     // 台東縣中心，作為 Places 搜尋的偏移基準與最終 fallback 中心
     private val taitungCenter = LatLng(22.9, 121.1)
@@ -4625,12 +4654,24 @@ $hoursLines
 
     // 對目的地名稱做一次 Geocoding，取得該地區的中心座標
     // 作為後續景點 Places 搜尋的偏移基準，提升小範圍目的地的座標準確率
+    private val geocodePrefs by lazy {
+        getApplication<Application>().getSharedPreferences("geocode_destinations", android.content.Context.MODE_PRIVATE)
+    }
+
     private suspend fun geocodeDestination(destination: String): LatLng {
         // 快取命中直接回傳，省去重複 API 呼叫（同地名結果固定）
         geocodeCache[destination]?.let {
             Log.d(tag, "📦 [本地資料] Geocoding 快取命中：「$destination」→ ${it.latitude}, ${it.longitude}")
             return it
         }
+        // 記憶體快取 App 重開就沒了：目的地中心點幾乎不會變，存在本機（過去每次重開打開歷史行程都要查一次）
+        geocodePrefs.getString(destination, null)?.split(",")?.mapNotNull { it.toDoubleOrNull() }
+            ?.takeIf { it.size == 2 }?.let { (lat, lng) ->
+                val hit = LatLng(lat, lng)
+                geocodeCache[destination] = hit
+                Log.d(tag, "📦 [本地資料] Geocoding 磁碟快取命中：「$destination」→ $lat, $lng")
+                return hit
+            }
         // 依序嘗試多個查詢變形，直到 Geocoding 成功為止
         val queries = buildList {
             add("$destination 台東縣 台灣")
@@ -4664,6 +4705,7 @@ $hoursLines
                     val result = LatLng(loc.getDouble("lat"), loc.getDouble("lng"))
                     android.util.Log.d(tag, "📍 目的地「$destination」(查詢:「$query」) 中心座標：${result.latitude}, ${result.longitude}")
                     geocodeCache[destination] = result  // 寫入快取
+                    geocodePrefs.edit().putString(destination, "${result.latitude},${result.longitude}").apply()
                     return result
                 } else {
                     android.util.Log.d(tag, "🔍 目的地 Geocoding 嘗試失敗「$query」: ${json.optString("status")}")
@@ -6334,7 +6376,7 @@ $hoursLines
                             cached
                         } else if (from != null && to != null) {
                             val result = directionsSegment(from, to, if (stops[i].walkNext) "walking" else mode)
-                            if (result.second > 0) segmentCache[cacheKey] = result
+                            if (result.first.isNotEmpty()) segmentCache[cacheKey] = result
                             result
                         } else {
                             Triple(emptyList<LatLng>(), 0L, actualMode)
@@ -6391,11 +6433,9 @@ $hoursLines
     }
     // --- 2. 確認行程：跳轉並處理圖片 ---
     fun confirmAndGenerateVisuals(
-        feedbackViewModel: com.example.travellink_ai.ui.feedback.FeedbackViewModel? = null,
-        openExport: Boolean = false   // 預覽頁「⋯ 更多 → 匯出行程圖」：結果頁直接進插圖
+        feedbackViewModel: com.example.travellink_ai.ui.feedback.FeedbackViewModel? = null
     ) {
         val currentItinerary = _itinerary.value ?: return
-        resultInitialView = if (openExport) "export" else "map"
         currentScreen = "result"
         // Collab listener 由 switch.kt 內的 CollabViewModel.loadItinerary() 啟動
 
@@ -6444,14 +6484,27 @@ $hoursLines
                 lastReloadedIds   = stops.map { it.stopId }
                 lastReloadedTimes = stops.map { it.stopId + it.time }
             }
-            // ⬆ 圖片生成已移除：改由使用者在地圖頁點擊「生成插圖」主動觸發
+            // ⬆ 圖片生成已移除：改由使用者在行程頁的插圖卡主動觸發
         }
     }
 
     /**
-     * 使用者主動點擊「生成插圖」時才呼叫，避免預覽頁就開始消耗 API。
+     * 使用者在行程頁插圖卡按「生成」時才呼叫，避免一打開行程就開始消耗 API。
      * @param character 卡通人物名稱（使用者在確認 Dialog 輸入），會以嚮導角色畫進行程圖
      */
+    /**
+     * 重新繪製：已有插圖也重畫（行程改過、或想換角色）。畫好前照舊顯示原本那張。
+     * @param onlyDay 多日行程只重畫這一天（其他天保留）；null＝全部重畫
+     */
+    fun regenerateImage(character: String = "", onlyDay: Int? = null) {
+        if (isWorkflowRunning.get()) return
+        val currentItinerary = _itinerary.value ?: return
+        val docId = currentFirestoreDocId ?: return
+        viewModelScope.launch(Dispatchers.IO) {
+            startAiVisualWorkflow(docId, currentItinerary, character, onlyDay)
+        }
+    }
+
     fun generateImageIfNeeded(character: String = "") {
         if (_backgroundUrl.value != null || isWorkflowRunning.get()) return
         val currentItinerary = _itinerary.value ?: return
@@ -6466,7 +6519,8 @@ $hoursLines
     // ────────────────────────────────────────────────────────────
 
     /** 景點時間與營業時間衝突的資訊 */
-    enum class ConflictType { OUTSIDE_HOURS, CLOSES_DURING_VISIT, BEFORE_OPENING, LONG_DETOUR }
+    /** CLOSED_TODAY：那一站所在的那天公休（手動新增、管家加入、舊行程；生成時已先剔除） */
+    enum class ConflictType { OUTSIDE_HOURS, CLOSES_DURING_VISIT, BEFORE_OPENING, LONG_DETOUR, CLOSED_TODAY }
 
     data class BusinessHourConflict(
         val stopIndex: Int,
@@ -6513,6 +6567,50 @@ $hoursLines
         return ranges.ifEmpty { null }
     }
 
+    /**
+     * 這一站在它所在的那天是不是公休；是的話回顯示用的說明（例如「週一公休」），否則 null。
+     *
+     * 生成時已經依日期剔除公休的店，這裡抓的是之後才進來的：手動新增、隨行管家加入的景點，
+     * 以及修正前生成的舊行程（第 2 天以後的站用第 1 天的星期取營業時間）。依據的順序：
+     * 站上存的整週營業時間 → 單日字串本身就是公休 → 本地景點資料的整週營業時間（名稱完全相同才算，
+     * 不用座標最近的點，避免套到隔壁店的公休日）。
+     */
+    private fun closedOnTripDay(stop: Stop): String? {
+        if (stop.isStation) return null
+        val date = LocalAlternatives.dateOfDay(_itinerary.value?.days, stop.dayIndex)
+        val weekday = runCatching {
+            "一二三四五六日"[java.time.LocalDate.parse(date.replace('/', '-')).dayOfWeek.value - 1]
+        }.getOrNull()
+        val label = weekday?.let { "週${it}公休" } ?: "這天公休"
+        val own = stop.businessHours
+        if (own.contains("星期")) {
+            if (date.isNotBlank() && BusinessHours.isClosed(BusinessHours.resolve(own, date))) return label
+        } else if (own.isNotBlank() && own != "未提供" && BusinessHours.isClosed(own)) {
+            return label
+        }
+        if (date.isBlank()) return null
+        val local = runCatching {
+            val key = CostReference.normKey(stop.name)
+            CostReference.get(getApplication<Application>()).places
+                .firstOrNull { key.isNotEmpty() && CostReference.normKey(it.name) == key }
+        }.getOrNull()
+        val week = local?.businessHours?.takeIf { it.contains("星期") } ?: return null
+        return if (BusinessHours.isClosed(BusinessHours.resolve(week, date))) label else null
+    }
+
+    /**
+     * 手動新增／管家加入的站帶的是整週營業時間：依它實際落在的那一天取單日時段（同生成路徑）。
+     * 過去用「查詢當天」的星期，週二公休的店排在週二也看不出來。
+     */
+    private fun resolveAddedStopHours(stops: List<Stop>, idx: Int?): List<Stop> {
+        val i = idx ?: return stops
+        val s = stops.getOrNull(i) ?: return stops
+        if (!s.businessHours.contains("星期")) return stops
+        val date = LocalAlternatives.dateOfDay(_itinerary.value?.days, s.dayIndex)
+        if (date.isBlank()) return stops
+        return stops.toMutableList().also { it[i] = s.copy(businessHours = BusinessHours.resolve(s.businessHours, date)) }
+    }
+
     /** 判斷某時間是否落在任一營業時段內 */
     private fun isWithinAnyRange(timeMins: Int, ranges: List<Pair<Int, Int>>): Boolean =
         ranges.any { (open, close) ->
@@ -6527,6 +6625,12 @@ $hoursLines
     private fun checkBusinessHourConflicts(stops: List<Stop>) {
         val hourConflicts = run {
             stops.mapIndexedNotNull { index, stop ->
+                closedOnTripDay(stop)?.let { label ->
+                    Log.w(tag, "⚠️ 公休：${stop.name} 第 ${stop.dayIndex} 天（$label）")
+                    return@mapIndexedNotNull BusinessHourConflict(
+                        index, stop.name, stop.time, stop.time, label, ConflictType.CLOSED_TODAY
+                    )
+                }
                 val scheduledMins = parseTimeToMinutes(stop.time) ?: return@mapIndexedNotNull null
                 val ranges = parseAllBusinessHoursRanges(stop.businessHours)
                     ?: return@mapIndexedNotNull null  // 全天開放或無資料 → 跳過
@@ -6982,8 +7086,9 @@ $hoursLines
                     _addPoiError.value = "「${verified.name}」已在行程中"
                     return@launch
                 }
+                // 取整週，插入後再依那一站實際所在的日期取當天時段（resolveAddedStopHours）
                 val hours = if (verified.placeId.isNotBlank())
-                    fetchBusinessHours(verified.placeId) else "未提供"
+                    fetchWeekHours(verified.placeId) else "未提供"
                 val emoji = when (verified.typeName) {
                     "餐廳"        -> "🍽️"
                     "咖啡廳"      -> "☕"
@@ -7017,7 +7122,7 @@ $hoursLines
                     val coordsNow = _stopLocations.value
                     val replaceIdx = replaceStopId
                         ?.let { id -> latest.stops.indexOfFirst { it.stopId == id } }?.takeIf { it >= 0 }
-                    val (newStops, bestIdx, targetDay) = if (replaceIdx != null) {
+                    val (placed, bestIdx, targetDay) = if (replaceIdx != null) {
                         // 原地取代：沿用被換掉那站的日別與位置
                         val old = latest.stops[replaceIdx]
                         val list = latest.stops.toMutableList()
@@ -7027,6 +7132,7 @@ $hoursLines
                         // 多日行程：優先塞進自由時間最多那天，並在該天內以繞路最少的位置插入
                         insertStopByProximity(latest.stops, newStop, verified.latLng, coordsNow)
                     }
+                    val newStops = resolveAddedStopHours(placed, bestIdx)
                     _stopLocations.value = coordsNow + (verified.name to verified.latLng)
                     _itinerary.value = latest.copy(stops = newStops)
                     persistStopsToRoom(newStops)
@@ -7305,8 +7411,11 @@ $hoursLines
                     _addResultMsg.value = "「${c.name}」已在行程中"
                     return@launch
                 }
-                val hours = c.businessHours.ifBlank {
-                    if (c.placeId.isNotBlank()) fetchBusinessHours(c.placeId) else "未提供"
+                // 候選自帶的若只是單日時段（不知道是哪一天的），有 placeId 就改取整週
+                val hours = when {
+                    c.businessHours.contains("星期") -> c.businessHours
+                    c.placeId.isNotBlank() -> fetchWeekHours(c.placeId)
+                    else -> c.businessHours.ifBlank { "未提供" }
                 }
                 val newStop = Stop(
                     name          = c.name,
@@ -7441,7 +7550,8 @@ $hoursLines
         val latest = _itinerary.value ?: return null
         noteUserAdd(newStop.name)
         val coordsNow = _stopLocations.value
-        val (newStops, bestIdx, _) = insertStopByProximity(latest.stops, newStop, latLng, coordsNow)
+        val (inserted, bestIdx, _) = insertStopByProximity(latest.stops, newStop, latLng, coordsNow)
+        val newStops = resolveAddedStopHours(inserted, bestIdx)
         _stopLocations.value = coordsNow + (newStop.name to latLng)
         _itinerary.value = latest.copy(stops = newStops)
         persistStopsToRoom(newStops)
@@ -7633,6 +7743,12 @@ $hoursLines
     ) {
         val current = _itinerary.value ?: return
         if (current.stops.isEmpty()) return
+        // 行程進行中：開地圖、載入路線這類背景重算不能改景點時間——那是大家正在照著走的排定時間，
+        // 打卡順延另由 deriveTripState 推估。使用者自己編輯（applyConstraints=false）照常重算
+        if (applyConstraints && stateHolder.tripOngoing.value) {
+            Log.d(tag, "⏸ 行程進行中，背景重算不改景點時間")
+            return
+        }
         // 網頁格式相容：web stops 沒有 time 字串，首站空白時以 09:00 起算（與網頁端預設一致）
         val startMins = parseTimeToMinutes(current.stops[0].time) ?: 540
 
@@ -7763,9 +7879,11 @@ $hoursLines
             stop.copy(time = "%02d:%02d".format(hh, mm))
         }
 
+        val timesChanged = newStops.map { it.time } != current.stops.map { it.time }
         _itinerary.value = current.copy(stops = newStops)
-        // 重算時間是背景動作，不算使用者修改（不更新 updatedAt）
-        if (persist) persistStopsToRoom(newStops, userEdit = false)
+        // 重算時間是背景動作，不算使用者修改（不更新 updatedAt）。
+        // 時間沒變就不寫：過去每開一次地圖就寫一次 Firestore，旅伴與網頁每次都收到一次更新
+        if (persist && timesChanged) persistStopsToRoom(newStops, userEdit = false)
         checkOverrunAfterAdd()
         Log.d(tag, "✅ 景點時間重算（constraints=$applyConstraints, persist=$persist）：${newStops.map { it.time }}")
 
@@ -7919,7 +8037,7 @@ $hoursLines
                                 } else {
                                     if (from != null && to != null) {
                                         val result = directionsSegment(from, to, if (stops[i].walkNext) "walking" else currentMode)
-                                        if (result.second > 0) segmentCache[cacheKey] = result
+                                        if (result.first.isNotEmpty()) segmentCache[cacheKey] = result
                                         result
                                     } else Triple(emptyList<LatLng>(), 0L, actualMode)
                                 }
@@ -8190,58 +8308,242 @@ $hoursLines
 
 
 
-    private fun startAiVisualWorkflow(firestoreId: String, itinerary: Itinerary, character: String = "") {
-        if (!isWorkflowRunning.compareAndSet(false, true)) return
-        viewModelScope.launch(Dispatchers.IO) {
-            try {
-                _visualState.value = _visualState.value.copy(isLoading = true)
+    // ── AI 行程插圖：背景生成，不擋畫面 ──
+    // 不借用 visualState.isLoading：那是「行程生成中」，會讓首頁跳出全螢幕生成卡、結果頁變黑轉圈。
+    // Pro 圖片模型要 30 秒以上，使用者應該能繼續看地圖、回去編輯行程，畫好再通知。
+    private val _imageGenerating = MutableStateFlow(false)
+    val imageGenerating: StateFlow<Boolean> = _imageGenerating.asStateFlow()
 
-                // Prompt 與網頁端 buildImagePrompt 完全一致（2026-07-12 對齊）：
-                // 日式雜誌插畫行程圖 16:9、站點全數畫入、卡通人物當嚮導
-                val title = itinerary.title.ifBlank { itinerary.aiTitle }.ifBlank { "我的旅遊行程" }
-                val dateRange = if (itinerary.days.isNotBlank()) "（行程時間：${itinerary.days}）" else ""
-                val stopList = itinerary.stops
-                    .joinToString("、") { "${it.emoji}${it.name}" }
-                    .ifBlank { "（尚未建立行程）" }
-                val effectiveCharacter = character.trim().ifBlank { "可愛的小旅人" }
-                val prompt = listOf(
-                    "請幫我繪製一張「$title」旅遊地圖插畫。$dateRange",
-                    "",
-                    "主角是「$effectiveCharacter」，以可愛卡通造型出現在旅途中，扮演嚮導或旅伴角色。",
-                    "",
-                    "行程如下：",
-                    stopList,
-                    "",
-                    "請根據我的行程規劃，加入適當的細節插圖。",
-                    "根據行程依序畫成一張日式雜誌插畫的旅遊行程圖，我提到的地點、環境、景觀、食物、餐廳，都要在圖中提到，且儘可能的擬真。插圖的比例為 9:16 直式。",
-                    "整體要給人可愛、清新的氛圍，字體清晰容易閱讀、並確保內容都是「繁體中文」無錯字。"
-                ).joinToString("\n")
+    enum class ImageResult { DONE, FAILED }
+    /** 插圖生成的結果通知（一次性）：畫面顯示完提示後呼叫 [consumeImageResult] */
+    private val _imageResult = MutableStateFlow<ImageResult?>(null)
+    val imageResult: StateFlow<ImageResult?> = _imageResult.asStateFlow()
+    fun consumeImageResult() { _imageResult.value = null }
 
-                val bitmap = tryGeminiVertexAI(prompt)
+    /** 上次生成用的卡通人物，失敗重試時沿用 */
+    private var lastImageCharacter = ""
+    fun retryImage() = generateImageIfNeeded(lastImageCharacter)
 
-                if (bitmap != null) {
-                    withContext(Dispatchers.Main) {
-                        _visualState.value = VisualData(bitmap = bitmap, isLoading = false)
-                    }
-                    val localUri = saveImageLocally(lastGeneratedLocalId, bitmap)
-                    if (localUri != null) _backgroundUrl.value = localUri
-                    uploadToFirebase(firestoreId, lastGeneratedLocalId, bitmap)
-                } else {
-                    Log.w(tag, "Vertex AI 圖片生成失敗")
-                    withContext(Dispatchers.Main) { _visualState.value = VisualData(isFailed = true) }
+    /** 多日插圖的進度（「已完成 1／3 天」）；單日或沒在畫時是空字串 */
+    private val _imageProgress = MutableStateFlow("")
+    val imageProgress: StateFlow<String> = _imageProgress.asStateFlow()
+    /** 這次開 App 剛畫好的每日插圖（上傳完之前先顯示這份） */
+    private val _dayBitmaps = MutableStateFlow<Map<Int, Bitmap>>(emptyMap())
+    val dayBitmaps: StateFlow<Map<Int, Bitmap>> = _dayBitmaps.asStateFlow()
+    /** 這次沒畫成的天（多日）：插圖頁顯示「重畫這一天」 */
+    private val _failedDays = MutableStateFlow<Set<Int>>(emptySet())
+    val failedDays: StateFlow<Set<Int>> = _failedDays.asStateFlow()
+    /** 上面兩份是哪一趟行程的：換到別趟行程就清掉，免得把上一趟的圖顯示在這趟 */
+    @Volatile private var dayBitmapsDocId: String? = null
+
+    init {
+        viewModelScope.launch {
+            stateHolder.currentFirestoreDocId.collect { id ->
+                if (id != dayBitmapsDocId) {
+                    _dayBitmaps.value = emptyMap()
+                    _failedDays.value = emptySet()
                 }
-            } catch (e: Exception) {
-                Log.e(tag, "影像生成異常: ${e.message}")
-                withContext(Dispatchers.Main) { _visualState.value = VisualData(isFailed = true) }
-            } finally {
-                isWorkflowRunning.set(false)
             }
         }
     }
-    private suspend fun tryGeminiVertexAI(prompt: String): Bitmap? {
+
+    private fun startAiVisualWorkflow(firestoreId: String, itinerary: Itinerary, character: String = "", onlyDay: Int? = null) {
+        if (!isWorkflowRunning.compareAndSet(false, true)) return
+        lastImageCharacter = character
+        _imageGenerating.value = true
+        _imageResult.value = null
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                // 上次失敗的狀態清掉，插圖頁改顯示「繪製中」
+                _visualState.value = _visualState.value.copy(isFailed = false)
+                val tripDays = itinerary.stops.map { it.dayIndex }.distinct().sorted()
+                if (tripDays.size > 1) drawIllustrationDays(firestoreId, itinerary, character, tripDays, onlyDay)
+                else drawIllustrationSingle(firestoreId, itinerary, character)
+            } catch (e: Exception) {
+                Log.e(tag, "影像生成異常: ${e.message}")
+                withContext(Dispatchers.Main) { _visualState.value = _visualState.value.copy(isFailed = true) }
+                _imageResult.value = ImageResult.FAILED
+            } finally {
+                isWorkflowRunning.set(false)
+                _imageGenerating.value = false
+                _imageProgress.value = ""
+            }
+        }
+    }
+
+    private fun illustrationTitle(itinerary: Itinerary) =
+        itinerary.title.ifBlank { itinerary.aiTitle }.ifBlank { "我的旅遊行程" }
+
+    private fun illustrationArea(itinerary: Itinerary) =
+        itinerary.region.ifBlank { itinerary.title.ifBlank { itinerary.aiTitle } }.ifBlank { "這趟旅程的目的地" }
+
+    /**
+     * 畫一張插圖（對齊網頁 2026-10-19 做法，見 PosterLayout）：程式排位置畫構圖草稿 → AI 畫無字底圖 → 程式疊編號與站名。
+     * 失敗回 null。
+     */
+    private suspend fun drawPoster(stops: List<Stop>, title: String, range: String, area: String, character: String): PosterLayout.Composed? {
+        val layout = PosterLayout.build(stops)
+        val sketchPng = java.io.ByteArrayOutputStream().also {
+            PosterLayout.sketch(layout).compress(Bitmap.CompressFormat.PNG, 100, it)
+        }.toByteArray()
+        // 先把站名轉成畫面描述：底圖指令裡只要有站名，模型就常把名字（還有錯字）寫進圖裡
+        val descriptions = try {
+            PosterLayout.parseDescriptions(
+                callGemini(PosterLayout.describePrompt(layout, area), temperature = 0.4, thinkingBudget = 0), layout)
+        } catch (e: Exception) {
+            Log.w(tag, "插圖畫面描述失敗，改用通用描述：${e.message}")
+            emptyMap()
+        }
+        Log.d(tag, "🎨 插圖畫面描述 ${descriptions.size}/${layout.places.size} 站")
+        val base = tryGeminiVertexAI(PosterLayout.basePrompt(layout, area, character, descriptions), sketchPng) ?: return null
+        return PosterLayout.compose(base, layout, title, range)
+    }
+
+    private suspend fun drawIllustrationSingle(firestoreId: String, itinerary: Itinerary, character: String) {
+        val composed = drawPoster(itinerary.stops, illustrationTitle(itinerary), PosterLayout.dateLabel(itinerary.days),
+            illustrationArea(itinerary), character)
+        val bitmap = composed?.bitmap
+        if (bitmap == null) {
+            Log.w(tag, "Vertex AI 圖片生成失敗")
+            withContext(Dispatchers.Main) { _visualState.value = VisualData(isFailed = true) }
+            _imageResult.value = ImageResult.FAILED
+            return
+        }
+        withContext(Dispatchers.Main) {
+            _visualState.value = VisualData(bitmap = bitmap, isLoading = false)
+            // 舊插圖的站框不能套在新圖上；新圖上傳完會再找一次
+            clearStopBoxes()
+            _dayBitmaps.value = emptyMap()
+            _failedDays.value = emptySet()
+        }
+        val localUri = saveImageLocally(lastGeneratedLocalId, bitmap)
+        if (localUri != null) _backgroundUrl.value = localUri
+        _imageResult.value = ImageResult.DONE
+        uploadToFirebase(firestoreId, lastGeneratedLocalId, bitmap, composed.boxes)
+    }
+
+    /**
+     * 多日行程每天一張（與網頁 generatePosterDays／savePosterDaysToTrip 相同）：每天只畫當天的站、標題加「・第 N 天」，
+     * 一次畫兩天；沒畫成的天保留舊圖、可以之後「重畫這一天」。存回 imageDays，第 1 天同時寫 imageUrl／imageStopBoxes。
+     */
+    private suspend fun drawIllustrationDays(
+        firestoreId: String, itinerary: Itinerary, character: String, tripDays: List<Int>, onlyDay: Int?
+    ) {
+        val targets = onlyDay?.let { listOf(it) } ?: tripDays
+        if (dayBitmapsDocId != firestoreId) { _dayBitmaps.value = emptyMap(); _failedDays.value = emptySet() }
+        dayBitmapsDocId = firestoreId
+        val tripStart = itinerary.days.substringBefore(" ").takeIf { it.length == 10 }
+        val title = illustrationTitle(itinerary)
+        val area = illustrationArea(itinerary)
+        val drawn = java.util.concurrent.ConcurrentHashMap<Int, PosterLayout.Composed>()
+        val done = java.util.concurrent.atomic.AtomicInteger(0)
+        if (targets.size > 1) _imageProgress.value = "已完成 0／${targets.size} 天"
+        // 一次畫兩天：比逐張快，又不至於撞到後端的併發上限（與網頁相同）
+        targets.chunked(2).forEach { chunk ->
+            kotlinx.coroutines.coroutineScope {
+                chunk.map { day ->
+                    async {
+                        val dayStops = itinerary.stops.filter { it.dayIndex == day }
+                        val date = tripStart?.let { DayPlanner.addDays(it, day - 1) }
+                        drawPoster(dayStops, "$title・第 $day 天", PosterLayout.dayRange(date, dayStops),
+                            area, character)?.let { c ->
+                            drawn[day] = c
+                            // 畫好一天就先顯示，不用等全部畫完
+                            _dayBitmaps.update { it + (day to c.bitmap) }
+                        }
+                        val n = done.incrementAndGet()
+                        if (targets.size > 1) _imageProgress.value = "已完成 $n／${targets.size} 天"
+                    }
+                }.awaitAll()
+            }
+        }
+        _failedDays.value = (_failedDays.value - drawn.keys) + targets.filter { it !in drawn.keys }
+        if (drawn.isEmpty()) {
+            Log.w(tag, "多日插圖全部生成失敗：$targets")
+            withContext(Dispatchers.Main) { _visualState.value = _visualState.value.copy(isFailed = true) }
+            _imageResult.value = ImageResult.FAILED
+            return
+        }
+        Log.d(tag, "🎨 多日插圖完成 ${drawn.keys.sorted()}／$targets")
+        val firstDay = tripDays.first()
+        withContext(Dispatchers.Main) {
+            // 第 1 天也當作這趟行程的「代表插圖」：本機檔與 Room 照舊存第 1 天（歷史、舊版 App 都讀這張）
+            drawn[firstDay]?.let { _visualState.value = VisualData(bitmap = it.bitmap, isLoading = false) }
+        }
+        drawn[firstDay]?.let { first ->
+            saveImageLocally(lastGeneratedLocalId, first.bitmap)?.let { _backgroundUrl.value = it }
+        }
+        _imageResult.value = ImageResult.DONE
+
+        // 上傳每一天（第 1 天沿用原本的路徑，舊版 App 與網頁都認得）
+        val uploaded = mutableMapOf<Int, Map<String, Any?>>()
+        for ((day, c) in drawn.toSortedMap()) {
+            val path = if (day == firstDay) "itinerary_backgrounds/$firestoreId.jpg" else "itinerary_backgrounds/${firestoreId}_day$day.jpg"
+            val url = uploadIllustration(path, c.bitmap) ?: continue
+            uploaded[day] = mapOf(
+                "day" to day.toLong(), "imageUrl" to url,
+                // 陣列裡不能用 serverTimestamp，與網頁同樣存毫秒
+                "imageStopBoxes" to mapOf("imageUrl" to url, "model" to "web-layout", "at" to System.currentTimeMillis(), "boxes" to c.boxes)
+            )
+        }
+        if (uploaded.isEmpty()) { Log.w(tag, "多日插圖上傳失敗（本機已有圖片）"); return }
+
+        // 其他天（只重畫一天、或某天這次沒畫成）原封不動保留
+        val kept = stateHolder.imageDays.value.filter { it.day !in uploaded.keys && it.raw.isNotEmpty() }.associate { it.day to it.raw }
+        val imageDays = (kept + uploaded).toSortedMap().values.toList()
+        val firstUrl = uploaded[firstDay]?.get("imageUrl") as? String
+        val ref = db.collection("micro_trips").document(firestoreId)
+        val update = mutableMapOf<String, Any>("imageDays" to imageDays)
+        if (firstUrl != null) { update["imageUrl"] = firstUrl; layoutBoxesUrl = firstUrl }
+        try {
+            ref.update(update).await()
+        } catch (e: Exception) {
+            // 編輯者：規則還沒放行 imageDays 時至少把第 1 天的 imageUrl 寫回（與網頁相同）
+            Log.w(tag, "每日插圖寫不回（${e.message}），只寫第 1 天")
+            if (firstUrl == null) return
+            try { ref.update("imageUrl", firstUrl).await() } catch (_: Exception) { return }
+        }
+        val currentUrl = firstUrl ?: stateHolder.remoteImageUrl.value
+        withContext(Dispatchers.Main) {
+            stateHolder.imageDays.value = com.example.travellink_ai.data.model.parseImageDays(imageDays, currentUrl, firstDay)
+            if (firstUrl != null) stateHolder.remoteImageUrl.value = firstUrl
+        }
+        if (firstUrl != null) {
+            if (lastGeneratedLocalId != -1L) itineraryDao.updateImageUrl(lastGeneratedLocalId, firstUrl)
+            saveFirstDayBoxes(firestoreId, firstUrl, drawn.getValue(firstDay).boxes)
+        }
+    }
+
+    /** 上傳一張插圖，回下載網址；失敗回 null */
+    private suspend fun uploadIllustration(path: String, bitmap: Bitmap): String? = try {
+        val ref = storage.reference.child(path)
+        val baos = ByteArrayOutputStream()
+        bitmap.compress(Bitmap.CompressFormat.JPEG, 90, baos)
+        ref.putBytes(baos.toByteArray()).await()
+        ref.downloadUrl.await().toString()
+    } catch (e: Exception) {
+        Log.w(tag, "插圖上傳失敗 $path：${e.message}")
+        null
+    }
+
+    /** 第 1 天的站框寫回 imageStopBoxes（擁有者）；編輯者寫不進去就請後端找 */
+    private fun saveFirstDayBoxes(docId: String, url: String, boxes: List<Map<String, Any>>) {
+        val saved = mapOf("imageUrl" to url, "model" to "web-layout",
+            "at" to com.google.firebase.firestore.FieldValue.serverTimestamp(), "boxes" to boxes)
+        stateHolder.imageStopBoxes.value = com.example.travellink_ai.data.model.IllustrationStopBoxes.fromMap(saved)
+        db.collection("micro_trips").document(docId).update("imageStopBoxes", saved)
+            .addOnFailureListener { e ->
+                Log.d(tag, "站框寫不回（${e.message}），改請後端找")
+                layoutBoxesUrl = null
+                stateHolder.imageStopBoxes.value = null
+                ensureStopBoxes()
+            }
+    }
+
+    private suspend fun tryGeminiVertexAI(prompt: String, sketchPng: ByteArray? = null): Bitmap? {
         // 改走後端 generate_content 代理（服務帳戶驗證）：App 直打 Vertex REST 用 API Key 會 404
         //（該 preview 圖片模型 API Key 無存取權）。後端在 us-east5 以服務帳戶呼叫並回 imageBase64。
-        val modelName = "gemini-3.1-flash-image"   // 正式版；-preview 已失效(404)
+        val modelName = IMAGE_MODEL
         return try {
             Log.d(tag, "🎨 呼叫後端 generate_content 生成圖片，模型: $modelName")
             val payload = hashMapOf(
@@ -8252,8 +8554,14 @@ $hoursLines
                 "responseMimeType" to null,                        // 圖片輸出不可設 application/json
                 "imageConfig" to hashMapOf("aspectRatio" to "9:16")
             )
+            // 構圖草稿（紅色編號圓點＋虛線）：後端放在指令前面當參考圖
+            if (sketchPng != null) payload["images"] = listOf(hashMapOf(
+                "mimeType" to "image/png",
+                "data" to android.util.Base64.encodeToString(sketchPng, android.util.Base64.NO_WRAP)
+            ))
             val callable = functions.getHttpsCallable("generate_content")
-            callable.setTimeout(120, java.util.concurrent.TimeUnit.SECONDS)  // 圖片生成較久，放寬 client 逾時
+            // Pro 圖片模型實測一張 30 秒以上，整張行程插圖更久；後端函式逾時 300 秒，client 放到同樣長
+            callable.setTimeout(300, java.util.concurrent.TimeUnit.SECONDS)
             val result = callable.call(payload).await()
             @Suppress("UNCHECKED_CAST")
             val data = result.data as? Map<String, Any?>
@@ -8298,14 +8606,25 @@ $hoursLines
     }
 
     // Firebase 備份：上傳後把雲端 URL 回寫 Room，讓 Room 同時保有 file:// 優先與雲端備援
-    private fun uploadToFirebase(docId: String, localId: Long, bitmap: Bitmap) {
+    /** @param boxes 疊字時算好的站框（PosterLayout）；擁有者直接寫回，編輯者寫不了這個欄位就改請後端找 */
+    private fun uploadToFirebase(docId: String, localId: Long, bitmap: Bitmap, boxes: List<Map<String, Any>>? = null) {
         val ref = storage.reference.child("itinerary_backgrounds/$docId.jpg")
         val baos = ByteArrayOutputStream()
         bitmap.compress(Bitmap.CompressFormat.JPEG, 90, baos)
         ref.putBytes(baos.toByteArray()).addOnSuccessListener {
             ref.downloadUrl.addOnSuccessListener { uri ->
                 val firebaseUrl = uri.toString()
+                // 本機寫入當下 listener 就會帶回新網址（站框還是舊的），要在寫之前先標記
+                if (boxes != null) layoutBoxesUrl = firebaseUrl
                 db.collection("micro_trips").document(docId).update("imageUrl", firebaseUrl)
+                    .addOnSuccessListener {
+                        stateHolder.remoteImageUrl.value = firebaseUrl
+                        // 單張插圖蓋過了多日插圖：imageDays 第 1 天對不上 imageUrl，兩端都會改顯示單張
+                        stateHolder.imageDays.value = emptyList()
+                        if (boxes == null) { ensureStopBoxes(); return@addOnSuccessListener }
+                        // 與網頁相同：model＝web-layout，後端 detect_stop_boxes 遇到同一張圖會直接用這份
+                        saveFirstDayBoxes(docId, firebaseUrl, boxes)
+                    }
                 // 上傳成功後把 Firebase URL 也寫回 Room，作為本地檔案不存在時的 fallback
                 if (localId != -1L) {
                     viewModelScope.launch(Dispatchers.IO) {
@@ -8316,6 +8635,81 @@ $hoursLines
             }
         }.addOnFailureListener {
             Log.w(tag, "Firebase 備份失敗（本地已有圖片，不影響使用）: ${it.message}")
+        }
+    }
+
+    // ── 互動插圖：每一站在插圖上的框 ──
+    // 後端 detect_stop_boxes 看雲端插圖找站框、寫回 micro_trips/{id}.imageStopBoxes（網頁共用同一份），
+    // 畫面透過 CollabViewModel 的 listener 讀到。約 4 秒、每張圖約 US$0.001，同一張圖後端會直接回快取。
+    val imageStopBoxes: StateFlow<com.example.travellink_ai.data.model.IllustrationStopBoxes?> get() = stateHolder.imageStopBoxes
+    val remoteImageUrl: StateFlow<String?> get() = stateHolder.remoteImageUrl
+    val imageDays: StateFlow<List<com.example.travellink_ai.data.model.IllustrationDay>> get() = stateHolder.imageDays
+    private val _stopBoxesDetecting = MutableStateFlow(false)
+    val stopBoxesDetecting: StateFlow<Boolean> = _stopBoxesDetecting.asStateFlow()
+    /** 這次開 App 已經請後端找過（成功或失敗）的插圖網址：失敗不在同一次使用中一直重打 */
+    private val stopBoxesTried = java.util.Collections.synchronizedSet(mutableSetOf<String>())
+    /** 正在寫回疊字算好的站框的那張插圖：這段期間 listener 先帶回新網址、舊站框，不要誤判成要請後端找 */
+    @Volatile private var layoutBoxesUrl: String? = null
+
+    private fun clearStopBoxes() {
+        stateHolder.imageStopBoxes.value = null
+        stateHolder.remoteImageUrl.value = null
+        stateHolder.imageDays.value = emptyList()
+    }
+
+    /**
+     * 行程頁不掛完整的共編 listener（會觸發地圖重載與時間重算），插圖網址與站框在這裡單獨讀一次：
+     * 從歷史進來時只有本機的插圖檔，沒有雲端網址就對不上站框，插圖卡會點不了、也沒有小點。
+     */
+    fun loadIllustrationMeta() {
+        val docId = currentFirestoreDocId?.takeIf { it.isNotBlank() && it != "current" } ?: return
+        if (isWorkflowRunning.get()) return   // 正在畫新圖：畫好會自己更新
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val snap = db.collection("micro_trips").document(docId).get().await()
+                if (currentFirestoreDocId != docId || isWorkflowRunning.get()) return@launch
+                val url = snap.getString("imageUrl")?.takeIf { it.startsWith("http") }
+                stateHolder.remoteImageUrl.value = url
+                stateHolder.imageDays.value = com.example.travellink_ai.data.model.parseImageDays(snap.get("imageDays"), url)
+                stateHolder.imageStopBoxes.value =
+                    com.example.travellink_ai.data.model.IllustrationStopBoxes.fromMap(snap.get("imageStopBoxes"))
+                // 旅伴（或網頁）畫的圖：本機沒有檔案時直接用雲端那張
+                if (_backgroundUrl.value.isNullOrEmpty() && url != null) _backgroundUrl.value = url
+            } catch (e: Exception) {
+                Log.w(tag, "插圖資訊讀取失敗：${e.message}")
+            }
+        }
+    }
+
+    /** 雲端插圖還沒有站框（或站框是舊圖的）就請後端找；插圖頁打開時與新插圖上傳後呼叫 */
+    fun ensureStopBoxes() {
+        val url = stateHolder.remoteImageUrl.value ?: return
+        if (stateHolder.imageStopBoxes.value?.imageUrl == url || url == layoutBoxesUrl) return
+        val docId = currentFirestoreDocId?.takeIf { it.isNotBlank() && it != "current" } ?: return
+        val allStops = _itinerary.value?.stops.orEmpty()
+        val firstDay = allStops.minOfOrNull { it.dayIndex } ?: 1
+        // 多日行程：imageUrl 是第 1 天那張，只畫了第 1 天的站（編號也只到第 1 天）
+        val stops = if (stateHolder.imageDays.value.isNotEmpty()) allStops.filter { it.dayIndex == firstDay } else allStops
+        if (stops.isEmpty() || !stopBoxesTried.add(url)) return
+        _stopBoxesDetecting.value = true
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val callable = functions.getHttpsCallable("detect_stop_boxes")
+                callable.setTimeout(120, java.util.concurrent.TimeUnit.SECONDS)
+                val result = callable.call(hashMapOf(
+                    "tripId" to docId,
+                    "stops" to stops.map { hashMapOf("stopId" to it.stopId, "name" to it.name) }
+                )).await()
+                val parsed = com.example.travellink_ai.data.model.IllustrationStopBoxes.fromMap(result.data)
+                // listener 通常會先一步帶回來；這裡補上是為了後端判定「圖已換掉」沒寫入的情況也不卡住
+                if (parsed != null && parsed.imageUrl == stateHolder.remoteImageUrl.value)
+                    stateHolder.imageStopBoxes.value = parsed
+                Log.d(tag, "🗺 插圖站框：${parsed?.boxes?.size}/${stops.size} 站")
+            } catch (e: Exception) {
+                Log.w(tag, "插圖站框偵測失敗（插圖照常顯示，只是不能點）: ${e.message}")
+            } finally {
+                _stopBoxesDetecting.value = false
+            }
         }
     }
 
@@ -8443,6 +8837,20 @@ $hoursLines
 
     fun fetchDirections(stops: List<Stop>) {
         if (stops.size < 2) return
+        if (historyMapPending) {
+            Log.d(tag, "📦 [本地資料] fetchDirections：歷史行程的地圖資料還在載入，等它算完，不重複計算")
+            return
+        }
+        // 同一組站序、同一種交通方式已經算過完整路線：直接沿用，不再重算時間、不再寫回。
+        // 預覽頁、地圖頁、進結果頁都會各自要一次（回預覽頁時地圖折線會被清掉），過去一開行程就重算三次
+        val sig = stopsSig(stops)
+        if (transitTimesReal && transitTimesSig == sig && lastGoodSegmentsSig == sig &&
+            lastRouteMode == stateHolder.transportMode.value &&
+            lastGoodSegments.size == stops.size - 1 && _transitTimes.value.size == stops.size - 1) {
+            if (_roadSegments.value.isEmpty()) _roadSegments.value = lastGoodSegments
+            Log.d(tag, "📦 [本地資料] fetchDirections：路線已算過（站序未變），沿用")
+            return
+        }
         viewModelScope.launch(Dispatchers.IO) {
             try {
                 // 若座標尚未載入（加入者端首次開啟地圖），先補抓座標
@@ -8460,6 +8868,7 @@ $hoursLines
                 // 過去只要有一段 > 0 就重算：部分路段查不到時，那幾段被當成 0 分寫回
                 if (routeComplete(segments, transitMins)) {
                     setTransitTimes(transitMins, stops)
+                    lastRouteMode = stateHolder.transportMode.value
                     Log.d(tag, "✅ fetchDirections 完成：$transitMins 分鐘")
                     recalculateStopTimes(transitMins)
                 } else {
@@ -8562,12 +8971,12 @@ $hoursLines
                 ?.also { parkingDirectory = it }
         }
 
-    // 縣府停車場（assets/parking_taitung.json，網頁 parking-data.js 匯出），App 存活期間解析一次
+    // 縣府＋OSM 停車場（assets/parking_taitung.json，網頁 parking-data.js 匯出），App 存活期間解析一次
     private val localParkingLots by lazy {
         try {
             com.example.travellink_ai.data.transit.ParkingDirectory.parseLocal(
                 getApplication<Application>().assets.open("parking_taitung.json").bufferedReader().use { it.readText() }
-            ).also { Log.d(tag, "📦 [本地資料] 縣府停車場 ${it.size} 筆（assets/parking_taitung.json）") }
+            ).also { Log.d(tag, "📦 [本地資料] 本地停車場 ${it.size} 筆（縣府＋OSM，assets/parking_taitung.json）") }
         } catch (e: Exception) {
             Log.w(tag, "縣府停車場清單讀取失敗：${e.message}")
             emptyList()
@@ -8576,7 +8985,7 @@ $hoursLines
 
     /**
      * 為所有景點找停車場，規則對齊網頁 resolveParkingCoord：
-     * 縣府清單（約 30 座）＋ TDX（4 座）合併，取 1 公里內最近的 4 個候選，
+     * 縣府（約 30 座）＋ OSM（約 170 座）＋ TDX（4 座）合併，取 1 公里內最近的 4 個候選，
      * 用 Directions 步行驗證，12 分鐘內走得到的第一個就採用。Directions 沒回答時才用直線推估
      * （網頁實測過：被限流就把所有候選判死，森林公園旁 593m 的停車場也被誤報成找不到）。
      * 使用 AtomicBoolean 防止 triggerMapReload + fetchDirections 同時觸發兩次。
@@ -8590,7 +8999,7 @@ $hoursLines
             val dir = com.example.travellink_ai.data.transit.ParkingDirectory
             // 出發/回程車站是行程起訖點，不需要停車資訊
             val parkingStops = stops.filter { !it.isStation }
-            // TDX 拿不到也沒關係，縣府清單是內建的；月租、供宿客的排除（觀光客停不了）
+            // TDX 拿不到也沒關係，本地清單是內建的；月租、供宿客、員工等觀光客停不了的排除
             val lots = dir.usable(localParkingLots, loadParkingDirectory().orEmpty())
             if (lots.isEmpty()) {
                 Log.w(tag, "⚠️ 沒有任何停車場清單，跳過停車場")
@@ -8849,8 +9258,8 @@ $hoursLines
     // ════════════════════════════════════════════════════════════════
     // AI 隨行管家（v1：推薦 + 加/刪/換站，走 generate_content 後端）
     // ════════════════════════════════════════════════════════════════
-    // TODO：後端 ALLOWED_MODELS 放行後改成 "gemini-3-flash-preview"
-    private val assistantModel = "gemini-2.5-flash"
+    // 與行程生成同一個模型（對齊網頁 GEMINI_MODEL）
+    private val assistantModel = TEXT_MODEL
 
     private val _assistantOpen = kotlinx.coroutines.flow.MutableStateFlow(false)
     val assistantOpen: kotlinx.coroutines.flow.StateFlow<Boolean> = _assistantOpen.asStateFlow()

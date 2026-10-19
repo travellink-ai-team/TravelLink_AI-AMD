@@ -43,7 +43,15 @@ class ItineraryStateHolder @Inject constructor() {
     val stopLocations  = MutableStateFlow<Map<String, LatLng>>(emptyMap())
     val roadSegments   = MutableStateFlow<List<List<LatLng>>>(emptyList())
     val backgroundUrl  = MutableStateFlow<String?>(null)
+    /** 行程文件上的雲端插圖網址（backgroundUrl 可能是本機 file://，比對站框要用這個） */
+    val remoteImageUrl = MutableStateFlow<String?>(null)
+    /** 多日行程的每日插圖（imageDays，每天一張；空＝單張插圖） */
+    val imageDays      = MutableStateFlow<List<com.example.travellink_ai.data.model.IllustrationDay>>(emptyList())
+    /** 互動插圖：每一站在插圖上的框（micro_trips/{id}.imageStopBoxes） */
+    val imageStopBoxes = MutableStateFlow<com.example.travellink_ai.data.model.IllustrationStopBoxes?>(null)
     val visualState    = MutableStateFlow(VisualData())
+    /** 目前這趟行程正在進行中（TripProgressViewModel 同步）：背景重算不可改動景點時間 */
+    val tripOngoing    = MutableStateFlow(false)
     val isWorkflowRunning = AtomicBoolean(false)
 
     // ── 導覽狀態（Compose State，由 MainActivity 直接讀取）──────
@@ -77,7 +85,6 @@ class ItineraryStateHolder @Inject constructor() {
             }
             _currentScreen.value = value
         }
-    var resultInitialView by mutableStateOf("map")
     // 探索「✨ 用這份開始規劃」：下一次打開建立精靈時預填（取用即清）
     var pendingTemplateSeed by mutableStateOf<com.example.travellink_ai.data.model.TemplateSeed?>(null)
 

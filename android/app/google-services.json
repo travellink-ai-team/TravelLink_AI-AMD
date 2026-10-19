@@ -14,6 +14,22 @@
       },
       "oauth_client": [
         {
+          "client_id": "621019870351-4h4frtufco97skqilf2h2gncqknl2bf5.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.example.travellink_ai",
+            "certificate_hash": "e93387679fa91ecc92272fc52f996ca68b52202a"
+          }
+        },
+        {
+          "client_id": "621019870351-edg5co4lb5ejv7rju3or9kvh6n7k5nb1.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.example.travellink_ai",
+            "certificate_hash": "215c66184ab3727e9a5a31fa2d2aa3127622a70a"
+          }
+        },
+        {
           "client_id": "621019870351-gqhhnala5mbro28qcgoaf4ijqjuo9cl8.apps.googleusercontent.com",
           "client_type": 1,
           "android_info": {

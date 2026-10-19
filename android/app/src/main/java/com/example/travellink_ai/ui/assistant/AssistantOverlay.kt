@@ -45,6 +45,7 @@ import com.example.travellink_ai.ui.agent.AgentViewModel
 import com.example.travellink_ai.ui.agent.DemoControls
 import com.example.travellink_ai.ui.planning.ItineraryViewModel
 import com.example.travellink_ai.ui.theme.DesignTokens
+import com.example.travellink_ai.ui.onboarding.coachTarget
 import kotlinx.coroutines.launch
 import kotlin.math.roundToInt
 
@@ -104,6 +105,7 @@ fun AssistantOverlay(viewModel: ItineraryViewModel, bottomReservedPx: Int = 0) {
             modifier = Modifier
                 .offset { IntOffset(posX.roundToInt(), posY.roundToInt()) }
                 .size(60.dp)
+                .coachTarget(com.example.travellink_ai.ui.onboarding.Tours.T_ASSISTANT)
                 // maxY 也要當 key：底部欄高度變動時，拖曳範圍要跟著換（否則還是舊的下限）
                 .pointerInput(maxWpx, maxY) {
                     detectDragGestures(

@@ -944,17 +944,15 @@ class CollabViewModel @Inject constructor(
                     )).await()
             } catch (e: Exception) { /* 非致命 */ }
             // 導向：群組尚無景點（籌備中，網頁剛建立的群組可能連 status 欄位都沒有）
-            // → 群組設定頁填偏好；已有插圖 → 地圖/插圖頁；否則 → 行程編輯頁
+            // → 群組設定頁填偏好；否則 → 行程編輯頁（插圖在行程頁的插圖卡上）
             val targetScreen = try {
                 val snap = db.collection("micro_trips").document(docId).get().await()
-                val imageUrl = snap.getString("imageUrl") ?: ""
                 val stopsEmpty = (snap.get("stops") as? List<*>).isNullOrEmpty()
                 val tripOngoing = ((snap.get("tripProgress") as? Map<*, *>)
                     ?.get("status") as? String) == "ongoing"
                 when {
                     stopsEmpty  -> "group_setup"
                     tripOngoing -> "trip_progress"   // 行程進行中 → 直接進時間軸（W3）
-                    imageUrl.startsWith("http") || imageUrl.startsWith("file://") -> "result"
                     else -> "preview"
                 }
             } catch (e: Exception) { "preview" }
@@ -1335,10 +1333,11 @@ class CollabViewModel @Inject constructor(
 
                     stateHolder.itinerary.value    = finalItinerary
                     stateHolder.backgroundUrl.value = existingUrl
-                    // 有真實圖片（file:// 或 https://）→ 進入插圖頁；否則進入行程編輯頁
-                    stateHolder.resultInitialView = if (existingUrl?.let {
-                        it.startsWith("file://") || it.startsWith("http")
-                    } == true) "image" else "map"
+                    stateHolder.remoteImageUrl.value = existingUrl?.takeIf { it.startsWith("http") }
+                    stateHolder.imageDays.value =
+                        com.example.travellink_ai.data.model.parseImageDays(doc.get("imageDays"), existingUrl)
+                    stateHolder.imageStopBoxes.value =
+                        com.example.travellink_ai.data.model.IllustrationStopBoxes.fromMap(doc.get("imageStopBoxes"))
 
                     // 同時加入 hasPendingWrites 判斷：純遠端更新（非本裝置 echo）一律觸發地圖重載
                     val isRemoteUpdate = !doc.metadata.hasPendingWrites()
@@ -1533,8 +1532,6 @@ class CollabViewModel @Inject constructor(
                 Log.w(tag, "⚠️ openCollabTrip 讀取失敗：${e.message}")
                 null
             }
-            val imageUrl = snap?.getString("imageUrl") ?: ""
-            val hasImage = imageUrl.startsWith("http") || imageUrl.startsWith("file://")
             val stopsEmpty = (snap?.get("stops") as? List<*>).isNullOrEmpty()
             val tripOngoing = ((snap?.get("tripProgress") as? Map<*, *>)
                 ?.get("status") as? String) == "ongoing"
@@ -1542,11 +1539,10 @@ class CollabViewModel @Inject constructor(
                 // 先清掉 loading，避免顯示「AI 正在規劃」動畫
                 stateHolder.visualState.value = VisualData(isLoading = false)
                 loadItinerary(docId)
-                // 群組尚無景點 → 群組設定頁；行程進行中 → 時間軸（W3）；否則照插圖有無導向
+                // 群組尚無景點 → 群組設定頁；行程進行中 → 時間軸（W3）；否則行程頁
                 stateHolder.currentScreen = when {
                     stopsEmpty  -> "group_setup"
                     tripOngoing -> "trip_progress"
-                    hasImage    -> "result"
                     else        -> "preview"
                 }
             }

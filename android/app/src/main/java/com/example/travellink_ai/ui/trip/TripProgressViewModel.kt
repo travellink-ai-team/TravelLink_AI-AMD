@@ -78,7 +78,12 @@ data class TripProgress(
     val checkIns: Map<String, CheckInRecord> = emptyMap(),
     val skips: Set<String> = emptySet(),
     val parking: Map<String, ParkingRecord> = emptyMap(),  // key = stopId
-    val leaveAt: Map<String, LeaveRecord> = emptyMap()     // key = stopId
+    val leaveAt: Map<String, LeaveRecord> = emptyMap(),    // key = stopId
+    /**
+     * 多日行程：第 N 天被「提早開始」的時間（tripProgress.dayStartedAt.{N}，epoch ms）。
+     * 沒有的天到第一站前 30 分自動開始（見 overnightState）；同步給旅伴，大家一起切到下一天。
+     */
+    val dayStartedAt: Map<Int, Long> = emptyMap()
 ) {
     val isOngoing: Boolean get() = status == "ongoing"
     val isCompleted: Boolean get() = status == "completed"
@@ -157,6 +162,8 @@ class TripProgressViewModel @Inject constructor(
 
     /** 進地圖頁的意圖："plain" | "parking"（聚焦停車點）| "toilets"（預設開廁所圖層） */
     var mapMode by mutableStateOf("plain")
+    /** 進行中地圖頁進場要聚焦的站（互動插圖「在地圖上看」），離開地圖頁時清掉 */
+    var mapFocusStopId by mutableStateOf<String?>(null)
 
     // ── 第 6 項：到預計離開時間的提醒 ─────────────────────────────
     // 目前站或預計離開時間一變就重排（下一站打卡、調整時間、通知上按延長、旅伴改動都會經過這裡），
@@ -165,13 +172,31 @@ class TripProgressViewModel @Inject constructor(
     private var reminderKey: String? = null
 
     init {
+        viewModelScope.launch { _progress.collect { stateHolder.tripOngoing.value = it.isOngoing } }
         viewModelScope.launch {
             // demo 時鐘快轉時也要重排：鬧鐘的真實觸發時間＝預計離開－快轉量
             kotlinx.coroutines.flow.combine(
                 _progress, stateHolder.itinerary, com.example.travellink_ai.debug.DemoClock.offsetMs
-            ) { p, itin, _ -> p to itin?.stops.orEmpty() }
-                .collect { (p, stops) -> syncLeaveReminder(p, stops) }
+            ) { p, itin, _ -> Triple(p, itin?.stops.orEmpty(), itin?.days.orEmpty()) }
+                .collect { (p, stops, days) ->
+                    syncLeaveReminder(p, stops)
+                    syncDayStartReminder(p, stops, days)
+                }
         }
+    }
+
+    /** 兩天之間：排「第 N 天 30 分鐘後開始」的通知；已開始或不在兩天之間就取消 */
+    private var dayStartKey: String? = null
+    private fun syncDayStartReminder(p: TripProgress, stops: List<Stop>, days: String) {
+        val ctx = getApplication<Application>()
+        val tripStart = days.substringBefore(" ").takeIf { it.length == 10 } ?: ""
+        val info = overnightState(stops, p, deriveTripState(stops, p, emptyList()),
+            com.example.travellink_ai.debug.DemoClock.now(), tripStart)
+        val key = info?.let { "${it.nextDay}@${it.switchAtMs}@${com.example.travellink_ai.debug.DemoClock.offsetMs.value}" }
+        if (key == dayStartKey) return
+        dayStartKey = key
+        if (info == null) DayStartReminder.cancel(ctx)
+        else DayStartReminder.schedule(ctx, stateHolder.currentFirestoreDocId.value?.takeIf { it != "current" }, info)
     }
 
     private fun syncLeaveReminder(p: TripProgress, stops: List<Stop>) {
@@ -367,6 +392,19 @@ class TripProgressViewModel @Inject constructor(
         persistLocal()
         pushUpdate(mapOf("tripProgress.skips.$stopId" to FieldValue.delete()))
         mirrorWebProgress()
+    }
+
+    /**
+     * 多日行程：提早開始第 [day] 天（不等第一站前 30 分）。寫進 tripProgress.dayStartedAt，
+     * 旅伴（同一份文件）也一起切到下一天。
+     */
+    fun startDay(day: Int) {
+        val at = com.example.travellink_ai.debug.DemoClock.now()
+        val cur = _progress.value
+        if (day in cur.dayStartedAt) return
+        _progress.value = cur.copy(dayStartedAt = cur.dayStartedAt + (day to at))
+        persistLocal()
+        pushUpdate(mapOf("tripProgress.dayStartedAt.$day" to at))
     }
 
     /**
@@ -721,6 +759,7 @@ class TripProgressViewModel @Inject constructor(
                         })
                     }
                 })
+                put("dayStartedAt", JSONObject().apply { p.dayStartedAt.forEach { (d, at) -> put(d.toString(), at) } })
             }
             prefs.edit().putString(key, json.toString()).apply()
         } catch (e: Exception) {
@@ -772,6 +811,10 @@ class TripProgressViewModel @Inject constructor(
                     )
                 }
             }
+            val dayStartedAt = mutableMapOf<Int, Long>()
+            json.optJSONObject("dayStartedAt")?.let { d ->
+                d.keys().forEach { k -> k.toIntOrNull()?.let { dayStartedAt[it] = d.optLong(k) } }
+            }
             TripProgress(
                 status = json.optString("status"),
                 startedAt = json.optLong("startedAt"),
@@ -779,7 +822,8 @@ class TripProgressViewModel @Inject constructor(
                 checkIns = checkIns,
                 skips = skips,
                 parking = parking,
-                leaveAt = leaveAt
+                leaveAt = leaveAt,
+                dayStartedAt = dayStartedAt
             )
         } catch (e: Exception) {
             TripProgress()
@@ -827,6 +871,11 @@ class TripProgressViewModel @Inject constructor(
                 displayName = m["displayName"] as? String ?: "旅人"
             )
         }
+        val dayStartedAt = (raw["dayStartedAt"] as? Map<*, *>)?.mapNotNull { (k, v) ->
+            val d = (k as? String)?.toIntOrNull() ?: return@mapNotNull null
+            val at = (v as? Number)?.toLong() ?: return@mapNotNull null
+            d to at
+        }?.toMap() ?: emptyMap()
         return TripProgress(
             status = raw["status"] as? String ?: "",
             startedAt = (raw["startedAt"] as? Number)?.toLong() ?: 0L,
@@ -834,7 +883,8 @@ class TripProgressViewModel @Inject constructor(
             checkIns = checkIns,
             skips = skips,
             parking = parking,
-            leaveAt = leaveAt
+            leaveAt = leaveAt,
+            dayStartedAt = dayStartedAt
         )
     }
 

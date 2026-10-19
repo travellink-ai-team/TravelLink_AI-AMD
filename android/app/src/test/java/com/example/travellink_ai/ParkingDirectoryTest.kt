@@ -2,9 +2,11 @@ package com.example.travellink_ai
 
 import com.example.travellink_ai.data.transit.ParkingDirectory
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.io.File
 
 class ParkingDirectoryTest {
 
@@ -112,6 +114,74 @@ class ParkingDirectoryTest {
         """.trimIndent(), null)!!
         // TDX 兩筆都與縣府重複 → 仍是 3 座，且 B 區沒被 A 區吃掉
         assertEquals(3, ParkingDirectory.merge(gov, tdx).size)
+    }
+
+    // 格式照網頁 parking-data.js 的 OSM 資料（2026-09-28 版）：名稱多半就叫「停車場」
+    private val withOsm = """
+        {"lots":[
+          {"name":"停五公有停車場","lat":22.7552484,"lng":121.1448522,"smallSpots":73,"source":"taitung_gov_parking"},
+          {"name":"停車場","lat":22.7553,"lng":121.1449,"source":"osm","notes":"收費"},
+          {"name":"停車場","lat":22.8721225,"lng":121.2258594,"source":"osm","notes":"免費"},
+          {"name":"停車場","lat":22.8873145,"lng":121.2107543,"source":"osm","notes":"免費"},
+          {"name":"停車場","lat":23.1202783,"lng":121.2226173,"smallSpots":25,"source":"osm"},
+          {"name":"池上遊客服務中心停車場","lat":23.1345118,"lng":121.2332899,"smallSpots":13,"source":"osm","notes":"免費"}
+        ]}
+    """.trimIndent()
+
+    @Test
+    fun `OSM 同名「停車場」各自是一座，id 不重複`() {
+        val lots = ParkingDirectory.usable(ParkingDirectory.parseLocal(withOsm), emptyList())
+        // 停五旁邊那筆 OSM 併進縣府，其餘 4 筆 OSM 各自保留
+        assertEquals(5, lots.size)
+        assertEquals(lots.size, lots.map { it.id }.toSet().size)
+        assertEquals(3, lots.count { it.name == "停車場" })
+    }
+
+    @Test
+    fun `OSM 與縣府同一座：留縣府的名稱與車位，補上收費資訊`() {
+        val lot = ParkingDirectory.usable(ParkingDirectory.parseLocal(withOsm), emptyList())
+            .first { it.name == "停五公有停車場" }
+        assertEquals("taitung_gov_parking", lot.source)
+        assertEquals(73, lot.totalSpaces)
+        assertEquals("收費", lot.feeNote)
+    }
+
+    @Test
+    fun `通用名稱被同一座的具名資料取代，但通用名稱之間不比對`() {
+        val osm = ParkingDirectory.parseLocal("""
+            {"lots":[{"name":"停車場","lat":22.7900,"lng":121.1200,"source":"osm"}]}
+        """.trimIndent())
+        val tdx = ParkingDirectory.parse("""
+            {"CarParks":[
+              {"CarParkID":"T1","CarParkName":{"Zh_tw":"某某公有停車場"},"CarParkPosition":{"PositionLat":22.79002,"PositionLon":121.12002}},
+              {"CarParkID":"T2","CarParkName":{"Zh_tw":"停車場"},"CarParkPosition":{"PositionLat":22.8500,"PositionLon":121.2000}}
+            ]}
+        """.trimIndent(), null)!!
+        val merged = ParkingDirectory.merge(osm, tdx)
+        // T1 在 60m 內 → 併入並改用具名名稱；T2 也叫「停車場」但遠在 8 公里外 → 另一座
+        assertEquals(listOf("某某公有停車場", "停車場"), merged.map { it.name })
+    }
+
+    @Test
+    fun `排除員工、車庫、停車棚、大型車`() {
+        listOf("員工停車場", "垃圾車車庫", "停車棚", "大型車停車場").forEach {
+            assertTrue(it, ParkingDirectory.isRestricted(it))
+        }
+        listOf("停車場", "小型車停車場", "池上遊客服務中心停車場").forEach {
+            assertFalse(it, ParkingDirectory.isRestricted(it))
+        }
+    }
+
+    @Test
+    fun `內建資料檔含縣府與 OSM，id 全部不重複`() {
+        val lots = ParkingDirectory.parseLocal(File("src/main/assets/parking_taitung.json").readText(Charsets.UTF_8))
+        assertTrue(lots.count { it.source == "osm" } > 100)
+        assertTrue(lots.count { it.source == "taitung_gov_parking" } >= 30)
+        assertEquals(lots.size, lots.map { it.id }.toSet().size)
+        // 三仙台：只有縣府清單時 1 公里內找不到，加上 OSM 就有
+        val usable = ParkingDirectory.usable(lots, emptyList())
+        assertTrue(ParkingDirectory.candidates(usable.filter { it.source != "osm" }, 23.12316, 121.41104).isEmpty())
+        assertTrue(ParkingDirectory.candidates(usable, 23.12316, 121.41104).isNotEmpty())
     }
 
     @Test

@@ -12,6 +12,8 @@
         android:name="android.permission.WRITE_EXTERNAL_STORAGE"
         android:maxSdkVersion="28" />
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+    <!-- 批次上傳自動分類：Android 10 起要這個權限才讀得到照片 EXIF 的拍攝地點 -->
+    <uses-permission android:name="android.permission.ACCESS_MEDIA_LOCATION" />
 
     <application
         android:name=".TravelLinkApp"
@@ -62,6 +64,10 @@
         <!-- 行程進行中：到預計離開時間的提醒與通知上的「再待 N 分」 -->
         <receiver
             android:name=".ui.trip.LeaveReminderReceiver"
+            android:exported="false" />
+        <!-- 多日行程：下一天第一站前 30 分的「行程即將開始」通知 -->
+        <receiver
+            android:name=".ui.trip.DayStartReminderReceiver"
             android:exported="false" />
 
         <!-- FileProvider：用於安全分享本地圖片（Android 7.0+） -->

@@ -46,6 +46,8 @@ import com.example.travellink_ai.ui.planning.ItineraryViewModel
 import com.example.travellink_ai.ui.theme.DesignTokens
 import com.example.travellink_ai.util.notifyLeftWithoutCheckIn
 import com.example.travellink_ai.util.notifyNearbyStop
+import com.example.travellink_ai.ui.onboarding.Tours
+import com.example.travellink_ai.ui.onboarding.coachTarget
 import com.google.android.gms.location.LocationCallback
 import com.google.android.gms.location.LocationRequest
 import com.google.android.gms.location.LocationResult
@@ -101,6 +103,10 @@ class OngoingTripUi internal constructor(
     internal val onOpenPermissionSettings: () -> Unit,
     /** 🧪 demo 工具（開發版且開著 demo 模式才有） */
     internal val demo: DemoToolsUi? = null,
+    /** 多日行程兩天之間（今天的景點都完成、下一天還沒開始）：顯示「今天結束」卡，暫停下一站與到站提醒 */
+    internal val overnight: OvernightInfo? = null,
+    /** 「提早開始第 N 天」：寫 tripProgress.dayStartedAt，旅伴一起切換 */
+    internal val onStartNextDay: () -> Unit = {},
     /** 結束行程：跳出完成對話框（網頁不必全部打卡完也能結束） */
     val requestFinish: () -> Unit,
     /** 回程車站會晚到時，點紅字請 AI 處理延誤（AMD 模式、可以調整這份行程時才有） */
@@ -235,14 +241,32 @@ fun rememberOngoingTrip(
     //   過去時鐘一到就開往下一站，按「到預計離開」測離開提醒、延誤處理時人已經不在那站了。
     val roadSegments by viewModel.roadSegments.collectAsState()
     val demoOffset by com.example.travellink_ai.debug.DemoClock.offsetMs.collectAsState()
+    // 兩天之間要看時間（第一站前 30 分自動開始下一天）：每 30 秒、demo 快轉時重算
+    var nowMs by remember { mutableLongStateOf(com.example.travellink_ai.debug.DemoClock.now()) }
+    LaunchedEffect(demoOffset) {
+        while (true) {
+            nowMs = com.example.travellink_ai.debug.DemoClock.now()
+            kotlinx.coroutines.delay(30_000L)
+        }
+    }
+    val overnight = remember(stops, progress, derived, nowMs, tripStartDate) {
+        overnightState(stops, progress, derived, nowMs, tripStartDate)
+    }
     var demoReplay by remember { mutableIntStateOf(0) }   // demo 工具「重跑到目前站」
     val demoHere = derived.activeHere(progress)
     val demoHereAt = demoHere?.let { progress.checkIns[it.stop.stopId]?.at }
     // 不以時鐘當 key：快轉時間不該把已經按「離開本站」開走的 GPS 拉回原站
     LaunchedEffect(tripVm.demoModeOn, derived.currentStop?.stopId, derived.currentDayIndex, stops,
-        roadSegments.isNotEmpty(), demoReplay, demoHere?.stop?.stopId) {
+        roadSegments.isNotEmpty(), demoReplay, demoHere?.stop?.stopId, overnight?.nextDay) {
         if (!(BuildConfig.DEBUG && tripVm.demoModeOn)) {
             tripVm.locationSimulator.stop()
+            return@LaunchedEffect
+        }
+        if (overnight != null) {
+            // 兩天之間：停在今天最後一站（住宿），等下一天開始才往明天第一站走
+            val rest = derived.here?.stop ?: overnight.lodging
+            android.util.Log.d("DemoGps", "overnight: stay at ${rest?.name}（第 ${overnight.nextDay} 天還沒開始）")
+            tripVm.locationSimulator.start(listOfNotNull(rest?.let { coordOf(it) }))
             return@LaunchedEffect
         }
         if (demoHere != null && demoHereAt != null) {
@@ -331,7 +355,8 @@ fun rememberOngoingTrip(
         }
     }
 
-    val isNearCurrent = remember(userLocation, derived.currentStop) {
+    val isNearCurrent = remember(userLocation, derived.currentStop, overnight) {
+        if (overnight != null) return@remember false
         val cur = derived.currentStop ?: return@remember false
         val target = coordOf(cur) ?: return@remember false
         val loc = userLocation ?: return@remember false
@@ -537,6 +562,8 @@ fun rememberOngoingTrip(
             )
         },
         demo = demoUi,
+        overnight = overnight,
+        onStartNextDay = { overnight?.let { tripVm.startDay(it.nextDay) } },
         requestFinish = { showFinishDialog = true },
         onAskAiForLate = if (agentInfo?.hasDelay == true) ({
             viewModel.setAssistantOpen(true)
@@ -561,8 +588,18 @@ fun LazyListScope.ongoingTripItems(ui: OngoingTripUi) {
     // ── 日程主卡：進度環 + 回站時間 + 天氣 ─────────────────
     item(key = "ongoing_header") {
         DayProgressHeader(derived = derived, isCompleted = progress.isCompleted,
-            endTimeText = ui.endTimeText, weather = ui.weather, here = derived.activeHere(progress))
+            endTimeText = ui.endTimeText, weather = ui.weather, here = derived.activeHere(progress),
+            overnight = ui.overnight)
         Spacer(Modifier.height(14.dp))
+    }
+
+    // ── 🌙 兩天之間：今天結束、明天幾點從哪開始、可以提早開始 ──
+    ui.overnight?.let { o ->
+        item(key = "ongoing_overnight") {
+            OvernightCard(o, ui.tripStartDate, onNavigateLodging = o.lodging?.let { l -> { ui.onNavigate(l) } },
+                onStartNextDay = ui.onStartNextDay)
+            Spacer(Modifier.height(14.dp))
+        }
     }
 
     // ── 🧪 demo 工具（開發版＋demo 模式）──
@@ -574,7 +611,8 @@ fun LazyListScope.ongoingTripItems(ui: OngoingTripUi) {
     }
 
     // ── ⚠️ 時間衝突（第 4、5 項）：照預計時間會撞到的限制＋處理選項 ──
-    if (ui.conflicts.isNotEmpty()) {
+    // 兩天之間不顯示：那些是明天的預估，明天開始時再提醒
+    if (ui.conflicts.isNotEmpty() && ui.overnight == null) {
         item(key = "ongoing_conflicts") {
             ScheduleConflictCard(
                 conflicts = ui.conflicts,
@@ -647,6 +685,61 @@ fun LazyListScope.ongoingTripItems(ui: OngoingTripUi) {
     }
 }
 
+/** 🌙 多日行程兩天之間：今天結束、今晚住哪、明天幾點從哪開始；可以提早開始下一天 */
+@Composable
+private fun OvernightCard(
+    o: OvernightInfo,
+    tripStartDate: String,
+    onNavigateLodging: (() -> Unit)?,
+    onStartNextDay: () -> Unit
+) {
+    var confirm by remember { mutableStateOf(false) }
+    if (confirm) AlertDialog(
+        onDismissRequest = { confirm = false },
+        title = { Text("提早開始第 ${o.nextDay} 天？", fontWeight = FontWeight.Bold) },
+        text = { Text("同行的旅伴也會一起切到第 ${o.nextDay} 天。") },
+        confirmButton = {
+            TextButton(onClick = { confirm = false; onStartNextDay() }) {
+                Text("開始", color = DesignTokens.Accent, fontWeight = FontWeight.Bold)
+            }
+        },
+        dismissButton = { TextButton(onClick = { confirm = false }) { Text("取消") } }
+    )
+    val date = if (tripStartDate.length == 10) DayPlanner.addDays(tripStartDate, o.nextDay - 1).substring(5) else ""
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(containerColor = Color(0xFF26324A)),
+        elevation = CardDefaults.cardElevation(0.dp)
+    ) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text("🌙 第 ${o.finishedDay} 天的行程完成了", fontSize = 17.sp, fontWeight = FontWeight.Bold, color = Color.White)
+            Text("今天走了 ${o.doneCount} 站，好好休息！", fontSize = 14.sp, color = Color.White.copy(alpha = 0.85f))
+            o.lodging?.let { l ->
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text("🏨 今晚住：${l.name}", fontSize = 14.sp, color = Color.White, modifier = Modifier.weight(1f),
+                        maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    onNavigateLodging?.let { nav -> TextButton(onClick = nav) { Text("導航", color = Color(0xFFFFD27A), fontWeight = FontWeight.Bold) } }
+                }
+            }
+            HorizontalDivider(color = Color.White.copy(alpha = 0.15f))
+            Text(
+                "第 ${o.nextDay} 天${if (date.isNotBlank()) "（$date）" else ""} ${fmtClock(minutesOfDay(o.nextStartMs))} 從「${o.nextFirst.name}」開始，共 ${o.nextDayCount} 站",
+                fontSize = 14.sp, color = Color.White
+            )
+            Text("${fmtClock(minutesOfDay(o.switchAtMs))} 會自動切換到第 ${o.nextDay} 天，並通知你",
+                fontSize = 13.sp, color = Color.White.copy(alpha = 0.7f))
+            OutlinedButton(
+                onClick = { confirm = true },
+                modifier = Modifier.fillMaxWidth().height(44.dp),
+                shape = RoundedCornerShape(12.dp),
+                border = BorderStroke(1.dp, Color.White.copy(alpha = 0.6f)),
+                colors = ButtonDefaults.outlinedButtonColors(contentColor = Color.White)
+            ) { Text("提早開始第 ${o.nextDay} 天", fontWeight = FontWeight.Bold) }
+        }
+    }
+}
+
 /** 公尺 → 「850 公尺」「1.2 公里」 */
 private fun formatDistance(meters: Double): String =
     if (meters < 1000) "${meters.toInt()} 公尺" else "%.1f 公里".format(meters / 1000)
@@ -689,7 +782,8 @@ private fun DayProgressHeader(
     isCompleted: Boolean,
     endTimeText: String?,
     weather: WeatherInfo?,
-    here: HereStop? = null
+    here: HereStop? = null,
+    overnight: OvernightInfo? = null
 ) {
     val frac = if (derived.totalCount == 0) 0f else derived.doneCount.toFloat() / derived.totalCount
     Card(
@@ -721,6 +815,7 @@ private fun DayProgressHeader(
                         val hereNo = here?.let { h -> derived.playable.indexOfFirst { it.stopId == h.stop.stopId } + 1 }
                         Text(
                             when {
+                                overnight != null -> "第 ${overnight.finishedDay} 天完成 · 休息中"
                                 derived.allDone -> "全部景點已完成"
                                 here != null && hereNo != null && hereNo > 0 -> "第 $hereNo 站 · ${here.stop.name}"
                                 else -> derived.currentStop?.let { "前往 ${it.name}" } ?: "行程進行中"
@@ -731,6 +826,7 @@ private fun DayProgressHeader(
                         )
                         val badge = when {
                             isCompleted -> "已完成"
+                            overnight != null -> "🌙 休息中"
                             derived.delayMin > 30 -> "嚴重落後 ${derived.delayMin} 分"
                             derived.delayMin > 5  -> "落後 ${derived.delayMin} 分"
                             derived.delayMin < -5 -> "超前 ${-derived.delayMin} 分"
@@ -853,7 +949,8 @@ private fun LazyListScope.itemsIndexedStops(ui: OngoingTripUi) {
     val progress = ui.progress
     val derived = ui.derived
     val completedExpanded = ui.completedExpanded
-    val currentId = if (progress.isOngoing) derived.currentStop?.stopId else null
+    // 兩天之間沒有「下一站」：明天第一站照一般列顯示，不給到達打卡
+    val currentId = if (progress.isOngoing && ui.overnight == null) derived.currentStop?.stopId else null
     val here = derived.activeHere(progress)
     val hereId = here?.stop?.stopId
     fun isFolded(s: Stop) = !completedExpanded && !s.isStation && progress.isDone(s.stopId) && s.stopId != hereId
@@ -1250,7 +1347,7 @@ private fun NextStopCard(
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
                 Button(
                     onClick = onCheckIn,
-                    modifier = Modifier.weight(1f).height(44.dp),
+                    modifier = Modifier.weight(1f).height(44.dp).coachTarget(Tours.T_ONGOING_CHECKIN),
                     shape = RoundedCornerShape(12.dp),
                     colors = ButtonDefaults.buttonColors(
                         containerColor = if (isNear) DesignTokens.Accent else DesignTokens.AccentDark
@@ -1305,6 +1402,7 @@ private fun HereStopCard(
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
+                    .coachTarget(Tours.T_ONGOING_LEAVE)
                     .background(Color.White, RoundedCornerShape(10.dp))
                     .padding(horizontal = 12.dp, vertical = 8.dp),
                 verticalAlignment = Alignment.CenterVertically

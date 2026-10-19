@@ -8,6 +8,7 @@ import com.example.travellink_ai.data.local.AppDatabase
 import com.example.travellink_ai.data.local.LocalItinerary
 import com.example.travellink_ai.data.local.LocalTripMemory
 import com.example.travellink_ai.data.model.MemoryPhoto
+import com.example.travellink_ai.data.model.PhotoClassifier
 import com.example.travellink_ai.data.model.SpotMemory
 import com.example.travellink_ai.data.model.Stop
 import com.example.travellink_ai.data.model.TripMemory
@@ -30,6 +31,8 @@ import com.google.gson.JsonDeserializer
 import com.google.gson.JsonElement
 import com.google.gson.reflect.TypeToken
 import java.lang.reflect.Type
+import java.time.Instant
+import java.time.LocalDate
 import java.time.ZoneId
 import java.util.UUID
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -116,6 +119,26 @@ class MemoryViewModel @Inject constructor(
 
     private var photosJob: Job? = null
 
+    /** 出發日（從 days 字串解析）；共編文件只有時數時為 null，分類改用照片最早的拍攝日 */
+    private var tripStart: LocalDate? = null
+
+    // ── 批次上傳並自動整理（對齊網頁 addTripPhotosForSorting）──
+
+    /** 批次上傳進度；null＝沒有在跑 */
+    data class BatchProgress(val done: Int, val total: Int, val reading: Boolean = false)
+    private val _batch = MutableStateFlow<BatchProgress?>(null)
+    val batch: StateFlow<BatchProgress?> = _batch.asStateFlow()
+
+    /** 需要使用者確認景點的照片；[guessStopId] 是最可能的那站，當預設選項 */
+    data class SortItem(val uri: Uri, val guessStopId: String?, val hint: String)
+    private val _sortReview = MutableStateFlow<List<SortItem>>(emptyList())
+    val sortReview: StateFlow<List<SortItem>> = _sortReview.asStateFlow()
+
+    /** 一般提示（不是錯誤），畫面用 snackbar 顯示 */
+    private val _notice = MutableStateFlow<String?>(null)
+    val notice: StateFlow<String?> = _notice.asStateFlow()
+    fun clearNotice() { _notice.value = null }
+
     /** tripId：優先 firestoreDocId，純本地行程用 local_{roomId}。皆為合法 path segment。 */
     fun tripIdOf(item: LocalItinerary): String =
         item.firestoreDocId?.takeIf { it.isNotBlank() } ?: "local_${item.id}"
@@ -133,6 +156,8 @@ class MemoryViewModel @Inject constructor(
         val tripId = tripIdOf(item)
         currentTripId = tripId
         cloudTripId = item.firestoreDocId?.takeIf { it.isNotBlank() } ?: ""
+        tripStart = com.example.travellink_ai.util.tripStartMs(item)
+            ?.let { java.time.Instant.ofEpochMilli(it).atZone(ZoneId.systemDefault()).toLocalDate() }
         val stops = item.stops.filter { !it.isStation }
         _orderedStops.value = stops
         val title = item.title.ifBlank { item.aiTitle }
@@ -305,6 +330,112 @@ class MemoryViewModel @Inject constructor(
         }
     }
 
+    /**
+     * 一次選多張照片，依 EXIF 拍攝時間與地點自動歸到各站（規則見 [PhotoClassifier]，與網頁相同）。
+     * 有把握的直接上傳；沒把握的放進 [sortReview] 讓使用者選站。相簿裡已有同一張（hash 相同）的略過。
+     */
+    fun batchUpload(uris: List<Uri>) {
+        if (uris.isEmpty() || _batch.value != null) return
+        val uid = auth.currentUser?.uid
+        if (uid == null) { _error.value = "請先登入才能上傳照片"; return }
+        val stops = _orderedStops.value
+        if (stops.isEmpty()) { _error.value = "這趟行程沒有景點可以歸類"; return }
+        viewModelScope.launch {
+            _batch.value = BatchProgress(0, uris.size, reading = true)
+            val zone = ZoneId.systemDefault()
+            val read = uris.mapNotNull { uri ->
+                runCatching { uri to photoRepo.readEvidence(uri) }
+                    .onFailure { Log.w(tag, "照片讀取失敗：$uri", it) }.getOrNull()
+            }
+            val unreadable = uris.size - read.size
+            // 相簿裡已有、或這一批自己重複選到的都略過
+            val known = photos.value.mapNotNull { it.hash.takeIf(String::isNotBlank) }.toMutableSet()
+            val fresh = read.filter { (_, e) -> known.add(e.hash) }
+            val duplicates = read.size - fresh.size
+
+            val start = tripStart ?: fresh.mapNotNull { it.second.evidence.capturedAt }.minOrNull()
+                ?.let { Instant.ofEpochMilli(it).atZone(zone).toLocalDate() }
+            val windows = PhotoClassifier.windowsOf(stops, start, zone)
+            val results = fresh.map { (uri, e) ->
+                val r = PhotoClassifier.classify(e.evidence, windows, zone)
+                // 每張讀到什麼：Android 10+ 沒拿到 ACCESS_MEDIA_LOCATION 時 GPS 會是「無」
+                Log.d(tag, "📷 ${uri.lastPathSegment}：時間=${e.evidence.capturedAt?.let { Instant.ofEpochMilli(it).atZone(zone).toLocalDateTime() } ?: "無"}" +
+                    "${if (e.evidence.weakTime) "(檔案時間)" else ""}，GPS=${if (e.evidence.lat != null) "有" else "無"}" +
+                    " → ${stops.firstOrNull { it.stopId == r.stopId }?.name ?: "未分類"}（${r.confidence}）")
+                uri to r
+            }
+            val auto = results.filter { it.second.autoAssign }.map { (uri, r) -> uri to r.stopId!! }
+            val review = results.filterNot { it.second.autoAssign }.map { (uri, r) ->
+                SortItem(uri, r.stopId, sortHint(r, stops))
+            }
+            Log.d(tag, "📷 批次整理：${uris.size} 張，自動 ${auto.size}、待確認 ${review.size}、" +
+                "重複 $duplicates、讀不到 $unreadable（出發日 ${start ?: "未知"}）")
+
+            val failed = uploadAssigned(uid, auto)
+            _batch.value = null
+            _notice.value = buildString {
+                when {
+                    fresh.isEmpty() && duplicates > 0 -> append("選的照片都已經在相簿裡了")
+                    review.isEmpty() -> append("✅ 已依拍攝時間與地點整理 ${auto.size - failed} 張照片")
+                    auto.isEmpty() -> append("有 ${review.size} 張照片需要你選擇景點")
+                    else -> append("${auto.size - failed} 張已自動歸類，${review.size} 張需要你選擇景點")
+                }
+                if (duplicates > 0 && fresh.isNotEmpty()) append("；$duplicates 張已在相簿中，已略過")
+                if (unreadable > 0) append("；$unreadable 張讀不到")
+                if (failed > 0) append("；$failed 張上傳失敗，請重試")
+            }
+            _sortReview.value = review
+        }
+    }
+
+    /** 使用者在確認視窗選好景點：[choices] 是 uri → stopId，沒選的那張不上傳 */
+    fun confirmSort(choices: Map<Uri, String>) {
+        val uid = auth.currentUser?.uid ?: return
+        _sortReview.value = emptyList()
+        val items = choices.toList()
+        if (items.isEmpty()) return
+        viewModelScope.launch {
+            val failed = uploadAssigned(uid, items)
+            _batch.value = null
+            _notice.value = if (failed == 0) "✅ 已上傳 ${items.size} 張照片" else "有 $failed 張照片上傳失敗，請重試"
+        }
+    }
+
+    fun dismissSort() { _sortReview.value = emptyList() }
+
+    /** 依序上傳已決定站點的照片，回傳失敗張數（純本地行程寫 Room，失敗由 addLocalPhotos 自己回報） */
+    private suspend fun uploadAssigned(uid: String, items: List<Pair<Uri, String>>): Int {
+        if (items.isEmpty()) return 0
+        val stopsById = _orderedStops.value.associateBy { it.stopId }
+        var failed = 0
+        if (cloudTripId.isNotBlank()) {
+            items.forEachIndexed { i, (uri, stopId) ->
+                _batch.value = BatchProgress(i, items.size)
+                val stop = stopsById[stopId]
+                if (stop == null) { failed++; return@forEachIndexed }
+                runCatching { photoRepo.upload(cloudTripId, stop, uri) }
+                    .onFailure { Log.w(tag, "照片上傳失敗", it); failed++ }
+            }
+        } else {
+            _batch.value = BatchProgress(0, items.size)
+            items.groupBy({ it.second }, { it.first }).forEach { (stopId, us) -> addLocalPhotos(uid, stopId, us) }
+        }
+        return failed
+    }
+
+    private fun sortHint(r: PhotoClassifier.Result, stops: List<Stop>): String {
+        val name = stops.firstOrNull { it.stopId == r.stopId }?.name
+        val clues = listOfNotNull(
+            r.distanceMeters?.let { if (it >= 1000) "拍攝地點距離 %.1f 公里".format(it / 1000.0) else "拍攝地點距離 $it 公尺" },
+            r.timeDistanceMinutes?.takeIf { it > 0 }?.let { "時間差 $it 分鐘" }
+        )
+        return when {
+            name == null -> "照片沒有拍攝地點，時間也對不上任何一站"
+            clues.isEmpty() -> "可能是「$name」，把握不高"
+            else -> "可能是「$name」（${clues.joinToString("、")}）"
+        }
+    }
+
     private suspend fun addLocalPhotos(uid: String, stopId: String, uris: List<Uri>) {
         val added = mutableListOf<MemoryPhoto>()
         for (uri in uris) {
@@ -404,6 +535,20 @@ class MemoryViewModel @Inject constructor(
         }
     }
 
+    /** 設為這一站的代表照（回顧短片用這張）。舊版 memories 的照片不在 photos 裡，改不了排序 */
+    fun setCover(photo: TripPhoto) {
+        if (photo.legacy) return
+        val stopName = _orderedStops.value.firstOrNull { it.stopId == photo.stopId }?.name ?: photo.stopName
+        viewModelScope.launch {
+            runCatching { photoRepo.setAsCover(photo) }
+                .onSuccess { _notice.value = "已設為「$stopName」的代表照，回顧短片會用這張" }
+                .onFailure {
+                    Log.w(tag, "設定代表照失敗", it)
+                    _error.value = "設定失敗，可能沒有權限"
+                }
+        }
+    }
+
     /** 存檔：寫 Firestore + Room。畫面離開或按儲存時呼叫；照片異動已自動呼叫。 */
     fun save() {
         viewModelScope.launch { persist() }
@@ -480,7 +625,7 @@ class MemoryViewModel @Inject constructor(
     fun clearError() { _error.value = null }
 
     private fun parseSpots(json: String): Map<String, SpotMemory> = runCatching {
-        val type = object : TypeToken<Map<String, SpotMemory>>() {}.type
+        val type = TypeToken.getParameterized(Map::class.java, String::class.java, SpotMemory::class.java).type
         gson.fromJson<Map<String, SpotMemory>>(json, type) ?: emptyMap()
     }.getOrElse { emptyMap() }
 

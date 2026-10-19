@@ -34,6 +34,7 @@ import androidx.compose.ui.unit.sp
 import com.example.travellink_ai.data.local.LocalItinerary
 import com.example.travellink_ai.ui.auth.AuthState
 import com.example.travellink_ai.ui.auth.AuthViewModel
+import com.example.travellink_ai.ui.onboarding.coachTarget
 import com.example.travellink_ai.ui.planning.ItineraryViewModel
 import java.text.SimpleDateFormat
 import java.util.*
@@ -227,6 +228,13 @@ fun DrawerContent(
                 onToggle = { viewModel.toggleUpcomingTripNotification(it) }
             )
             DrawerItem(
+                icon = Icons.Default.Lightbulb,
+                label = "使用教學",
+                subtitle = "重看新手介紹與各頁操作提示",
+                onClick = { onClose(); com.example.travellink_ai.ui.onboarding.Onboarding.replay() },
+                modifier = Modifier.coachTarget(com.example.travellink_ai.ui.onboarding.Tours.T_DRAWER_TUTORIAL)
+            )
+            DrawerItem(
                 icon = Icons.Default.Info,
                 label = "關於 TravelLinkAI",
                 subtitle = "版本資訊與使用說明",
@@ -277,7 +285,7 @@ fun DrawerContent(
 
         // ── 底部版本號 ────────────────────────────────────────
         Text(
-            "v1.0.0",
+            "v${com.example.travellink_ai.BuildConfig.VERSION_NAME}",
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(16.dp)
@@ -307,10 +315,11 @@ private fun DrawerItem(
     label: String,
     subtitle: String,
     onClick: () -> Unit,
-    badgeCount: Int = 0
+    badgeCount: Int = 0,
+    modifier: Modifier = Modifier
 ) {
     Row(
-        modifier = Modifier
+        modifier = modifier
             .fillMaxWidth()
             .clickable(onClick = onClick)
             .padding(horizontal = 16.dp, vertical = 10.dp),
@@ -370,7 +379,7 @@ private fun DrawerOfflineMapItem() {
             if (st.outdated) "有新版圖資，點此更新" else "已下載・點此管理"
         is com.example.travellink_ai.util.OfflineBasemap.State.Failed -> "下載失敗，點此重試"
     }
-    Column {
+    Column(Modifier.coachTarget(com.example.travellink_ai.ui.onboarding.Tours.T_DRAWER_OFFLINE)) {
         DrawerItem(
             icon = Icons.Default.Map,
             label = "台東離線地圖",
@@ -978,7 +987,7 @@ fun AboutScreen(onBack: () -> Unit) {
                         Spacer(Modifier.height(8.dp))
                         Surface(shape = RoundedCornerShape(20.dp), color = AccentLight) {
                             Text(
-                                "版本 v1.0.0",
+                                "版本 v${com.example.travellink_ai.BuildConfig.VERSION_NAME}",
                                 modifier = Modifier.padding(horizontal = 14.dp, vertical = 5.dp),
                                 fontSize = 14.sp,
                                 color = AccentDark,

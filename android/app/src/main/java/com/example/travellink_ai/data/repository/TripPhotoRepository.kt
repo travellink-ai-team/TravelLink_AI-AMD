@@ -5,10 +5,13 @@ import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Matrix
 import android.media.ExifInterface
+import android.content.pm.PackageManager
 import android.net.Uri
+import android.os.Build
 import android.provider.DocumentsContract
 import android.provider.MediaStore
 import android.util.Log
+import com.example.travellink_ai.data.model.PhotoClassifier
 import com.example.travellink_ai.data.model.Stop
 import com.example.travellink_ai.data.model.TripMemory
 import com.example.travellink_ai.data.model.TripPhoto
@@ -183,6 +186,18 @@ class TripPhotoRepository @Inject constructor(
     }
 
     /**
+     * 設為這一站的代表照（回顧短片每站只用一張，取排序第一張；九宮格的照片順序也跟著變）。
+     * 排序是 manualOrder 小的在前（網頁 stableSort 同規則），設成「負的現在時間」：
+     * 只寫這一張，不必清別張（別人的照片一般成員改不了），而且最後一次選的永遠最前。
+     */
+    suspend fun setAsCover(photo: TripPhoto) {
+        val now = System.currentTimeMillis()
+        photosRef(photo.tripId).document(photo.photoId).update(
+            mapOf("manualOrder" to -now, "updatedAt" to now)
+        ).await()
+    }
+
+    /**
      * 把自己舊版 memories 的照片搬進 photos，每張只搬一次。
      * - `memories` 的照片陣列保留：還在用舊版 App 的旅伴只讀得到那邊
      * - 搬過的記在 [TripMemory.migratedPhotoKeys]：之後照片文件被刪了也不會再搬回來
@@ -231,11 +246,66 @@ class TripPhotoRepository @Inject constructor(
 
     // ── 本機處理 ─────────────────────────────────────────────
 
+    /** 批次上傳自動分類用：照片的 hash、拍攝時間與 GPS（讀不到的欄位為 null） */
+    data class PhotoEvidence(
+        val hash: String,
+        val evidence: PhotoClassifier.Evidence
+    )
+
+    /**
+     * 讀一張照片的分類證據。只讀不留原檔，上傳時 [upload] 會再讀一次（30 張原圖全放記憶體會爆）。
+     *
+     * Android 10 起照片的 GPS 預設被系統遮掉：呼叫端要先拿到 ACCESS_MEDIA_LOCATION，
+     * 這裡再對媒體庫的 URI 要求原檔（[MediaStore.setRequireOriginal]）；要不到就用一般 URI，只剩時間可用。
+     */
+    suspend fun readEvidence(uri: Uri): PhotoEvidence = withContext(Dispatchers.IO) {
+        val zone = ZoneId.systemDefault()
+        val bytes = openOriginal(uri) ?: error("圖片讀取失敗")
+        val time = readCapturedTime(bytes, uri, zone)
+        val latLng = runCatching {
+            val out = FloatArray(2)
+            @Suppress("DEPRECATION")
+            if (ExifInterface(ByteArrayInputStream(bytes)).getLatLong(out)) out[0].toDouble() to out[1].toDouble() else null
+        }.getOrNull()?.takeIf { (lat, lng) -> PhotoClassifier.validCoords(lat, lng) }
+        PhotoEvidence(
+            hash = "sha256:" + sha256Hex(bytes),
+            evidence = PhotoClassifier.Evidence(
+                capturedAt = time?.first,
+                weakTime = time?.second == true,
+                lat = latLng?.first,
+                lng = latLng?.second
+            )
+        )
+    }
+
+    private fun openOriginal(uri: Uri): ByteArray? {
+        val canLocate = Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q &&
+            context.checkSelfPermission(android.Manifest.permission.ACCESS_MEDIA_LOCATION) == PackageManager.PERMISSION_GRANTED
+        if (canLocate) {
+            // 文件挑選器回來的是 DocumentsProvider 網址：轉成媒體庫網址才能要原檔（含 GPS）
+            val viaStore = if (DocumentsContract.isDocumentUri(context, uri))
+                runCatching { MediaStore.getMediaUri(context, uri) }
+                    .onFailure { Log.d(tag, "文件網址轉媒體庫失敗（$uri）：${it.message}") }.getOrNull()
+            else null
+            for (candidate in listOfNotNull(viaStore, uri)) {
+                runCatching {
+                    context.contentResolver.openInputStream(MediaStore.setRequireOriginal(candidate))?.use { it.readBytes() }
+                }.onFailure { Log.d(tag, "要原檔失敗（$candidate）：${it.javaClass.simpleName} ${it.message}") }
+                    .getOrNull()?.let { Log.d(tag, "原檔讀取成功：$candidate"); return it }
+            }
+        } else Log.d(tag, "不要求原檔：authority=${uri.authority}，SDK=${Build.VERSION.SDK_INT}")
+        return context.contentResolver.openInputStream(uri)?.use { it.readBytes() }
+    }
+
     /**
      * 拍攝時間：EXIF 0x9003 → 0x9004 → 0x0132（有 OffsetTimeOriginal 就照它，否則裝置時區），
      * 都沒有就退到媒體庫的拍攝／修改時間，再沒有就用現在。
      */
-    private fun readCapturedAt(bytes: ByteArray, uri: Uri, zone: ZoneId): Long {
+    private fun readCapturedAt(bytes: ByteArray, uri: Uri, zone: ZoneId): Long =
+        readCapturedTime(bytes, uri, zone)?.first ?: System.currentTimeMillis()
+
+    /** (拍攝時間, 是否只是檔案修改時間)；都讀不到為 null */
+    private fun readCapturedTime(bytes: ByteArray, uri: Uri, zone: ZoneId): Pair<Long, Boolean>? {
         runCatching {
             val exif = ExifInterface(ByteArrayInputStream(bytes))
             val offset = exif.getAttribute("OffsetTimeOriginal") ?: exif.getAttribute("OffsetTime")
@@ -244,10 +314,9 @@ class TripPhotoRepository @Inject constructor(
                 ExifInterface.TAG_DATETIME_DIGITIZED,
                 ExifInterface.TAG_DATETIME
             ).firstNotNullOfOrNull { tag -> parseExifDateTime(exif.getAttribute(tag), offset, zone) }
-        }.getOrNull()?.let { return it }
-        return queryLong(uri, MediaStore.MediaColumns.DATE_TAKEN)
-            ?: queryLong(uri, DocumentsContract.Document.COLUMN_LAST_MODIFIED)
-            ?: System.currentTimeMillis()
+        }.getOrNull()?.let { return it to false }
+        queryLong(uri, MediaStore.MediaColumns.DATE_TAKEN)?.let { return it to false }
+        return queryLong(uri, DocumentsContract.Document.COLUMN_LAST_MODIFIED)?.let { it to true }
     }
 
     private fun queryLong(uri: Uri, column: String): Long? = runCatching {

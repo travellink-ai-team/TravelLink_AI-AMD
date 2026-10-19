@@ -18,15 +18,23 @@ LOCATION = "us-central1"  # gemini-2.5-flash 與 gemini-3.1-flash-image 皆在�
 
 # generate_content 代理僅允許這些模型，避免被當成任意 LLM 代理濫用
 # 註：gemini-3.1-flash-image 為正式版；曾用的 gemini-3.1-flash-image-preview 已失效（404）。
-ALLOWED_MODELS = {"gemini-2.5-flash", "gemini-3.1-flash-image"}
+# 2026-10-11 起 App 改用 gemini-3-flash-preview（文字，對齊網頁）與 gemini-3-pro-image（插圖）；
+# 2.5 / 3.1 先留著：已安裝的 v1.1 試用版還在用，全部更新後再拿掉。
+ALLOWED_MODELS = {"gemini-2.5-flash", "gemini-3.1-flash-image", "gemini-3-flash-preview", "gemini-3-pro-image"}
+# Gemini 3 只開在 global（實測 us-central1 回 404「Publisher model … was not found」）。
+# 舊版 vertexai SDK 處理不了 global 的端點，這些模型一律走 REST。
+GLOBAL_MODELS = {"gemini-3-flash-preview", "gemini-3-pro-image"}
 MAX_PROMPT_LENGTH = 20000
+# 圖片生成可附的參考圖（互動插圖的構圖草稿）：一張、base64 後最多約 3MB（草稿是幾十 KB 的 PNG）
+MAX_REFERENCE_IMAGES = 1
+MAX_REFERENCE_IMAGE_B64 = 3_000_000
 
 # 生成耗時量測：分出「冷啟動（新實例＋首次 import vertexai）」與「模型本身」各花多少時間
 _INSTANCE_STARTED_AT = time.time()
 _calls_on_instance = 0
 
 
-@https_fn.on_call(region="us-central1", timeout_sec=180)
+@https_fn.on_call(region="us-central1", timeout_sec=300)
 def generate_content(req: https_fn.CallableRequest) -> dict:
     """Android App 端所有 Gemini 呼叫的代理入口，避免在用戶端攜帶 Vertex AI 金鑰。"""
     global _calls_on_instance
@@ -41,6 +49,14 @@ def generate_content(req: https_fn.CallableRequest) -> dict:
     # 實測冷啟動光 import 就 14.2s（模型本身約 7s）；使用者填精靈的時間足夠讓實例熱好。
     if data.get("warmup"):
         t_import = time.perf_counter()
+        # 新版 App（文字走 REST 的 gemini-3）帶 rest=true：只叫醒實例、取好權杖，約 1 秒。
+        # 不能再載入 vertexai：要 22 秒，而一個實例同時只處理一個請求，使用者在這期間按 AI
+        # 會再開一個冷實例（實測換景點來回 27.4 秒）。舊版 v1.1 沒帶旗標，照舊預載 vertexai。
+        if data.get("rest"):
+            _vertex_creds()
+            import_ms = int((time.perf_counter() - t_import) * 1000)
+            print(f"[timing] warmup(rest) importMs={import_ms} coldStart={_calls_on_instance == 1}")
+            return {"warm": True, "timing": {"importMs": import_ms, "coldStart": _calls_on_instance == 1}}
         import vertexai
         from vertexai.generative_models import GenerativeModel  # noqa: F401（重的是這個子模組）
         vertexai.init(project=PROJECT_ID, location=LOCATION)
@@ -60,6 +76,8 @@ def generate_content(req: https_fn.CallableRequest) -> dict:
     # 文字生成維持走 SDK（已驗證正常）。
     if "IMAGE" in (data.get("responseModalities") or []):
         return _generate_image_via_rest(model_name, prompt, data)
+    if model_name in GLOBAL_MODELS:
+        return _generate_text_via_rest(model_name, prompt, data, t_start)
 
     t_import = time.perf_counter()
     import vertexai
@@ -135,16 +153,97 @@ def generate_content(req: https_fn.CallableRequest) -> dict:
     return {"result": response.text, "usage": usage, "timing": timing}
 
 
-def _generate_image_via_rest(model_name: str, prompt: str, data: dict) -> dict:
-    """以 REST v1 呼叫圖片模型（繞開舊版 vertexai SDK 的 404）。回 {imageBase64, usage}。"""
-    import json
-    import urllib.request
-    import urllib.error
+# 服務帳戶憑證：同一個實例沿用，權杖過期（約 1 小時）才重取，不必每次呼叫都多一趟 refresh
+_cached_creds = None
+
+
+def _vertex_creds():
+    global _cached_creds
     import google.auth
     from google.auth.transport.requests import Request as GAuthRequest
+    if _cached_creds is None:
+        _cached_creds, _ = google.auth.default(scopes=["https://www.googleapis.com/auth/cloud-platform"])
+    if not _cached_creds.valid:
+        _cached_creds.refresh(GAuthRequest())
+    return _cached_creds
 
-    creds, _ = google.auth.default(scopes=["https://www.googleapis.com/auth/cloud-platform"])
-    creds.refresh(GAuthRequest())
+
+def _vertex_rest(model_name: str, body: dict, timeout: int) -> dict:
+    """以服務帳戶呼叫 Vertex REST v1 generateContent，依模型選 global 或 us-central1。"""
+    import json
+    import urllib.request
+
+    creds = _vertex_creds()
+    if model_name in GLOBAL_MODELS:
+        host, location = "aiplatform.googleapis.com", "global"
+    else:
+        host, location = "aiplatform.googleapis.com", LOCATION
+    url = (f"https://{host}/v1/projects/{PROJECT_ID}"
+           f"/locations/{location}/publishers/google/models/{model_name}:generateContent")
+    request = urllib.request.Request(
+        url,
+        data=json.dumps(body).encode("utf-8"),
+        headers={"Authorization": f"Bearer {creds.token}", "Content-Type": "application/json"},
+        method="POST",
+    )
+    with urllib.request.urlopen(request, timeout=timeout) as resp:
+        return json.loads(resp.read().decode("utf-8"))
+
+
+def _usage_of(payload: dict) -> dict:
+    um = payload.get("usageMetadata", {}) or {}
+    return {
+        "promptTokens": int(um.get("promptTokenCount", 0) or 0),
+        "outputTokens": int(um.get("candidatesTokenCount", 0) or 0),
+        "thoughtsTokens": int(um.get("thoughtsTokenCount", 0) or 0),
+    }
+
+
+def _generate_text_via_rest(model_name: str, prompt: str, data: dict, t_start: float) -> dict:
+    """Gemini 3 文字生成（global 端點）。參數與 SDK 路徑相同：temperature、responseMimeType、
+    thinkingBudget（網頁對 gemini-3-flash-preview 也用 thinkingBudget，0＝不思考）、maxOutputTokens。"""
+    import urllib.error
+
+    gen_config = {"temperature": data.get("temperature", 0.4)}
+    if data.get("responseMimeType"):
+        gen_config["responseMimeType"] = data["responseMimeType"]
+    if data.get("thinkingBudget") is not None:
+        gen_config["thinkingConfig"] = {"thinkingBudget": int(data["thinkingBudget"])}
+    if data.get("maxOutputTokens") is not None:
+        gen_config["maxOutputTokens"] = int(data["maxOutputTokens"])
+    body = {"contents": [{"role": "user", "parts": [{"text": prompt}]}], "generationConfig": gen_config}
+
+    t_model = time.perf_counter()
+    try:
+        payload = _vertex_rest(model_name, body, timeout=150)
+    except urllib.error.HTTPError as e:
+        detail = e.read().decode("utf-8", "ignore")[:400]
+        raise https_fn.HttpsError("internal", f"AI 生成失敗 HTTP {e.code}: {detail}")
+    except Exception as e:
+        raise https_fn.HttpsError("internal", f"AI 生成失敗: {e}")
+    timing = {
+        "serverMs": int((time.perf_counter() - t_start) * 1000),
+        "importMs": 0,
+        "modelMs": int((time.perf_counter() - t_model) * 1000),
+        "coldStart": _calls_on_instance == 1,
+        "instanceAgeS": int(time.time() - _INSTANCE_STARTED_AT),
+    }
+    print(f"[timing] generate_content {model_name} {timing}")
+
+    candidates = payload.get("candidates", [])
+    if not candidates:
+        raise https_fn.HttpsError("internal", "AI 回應為空，可能被安全過濾器攔截")
+    # thinking 開著時 parts 會有 thought=true 的思考摘要，不能混進結果（JSON 會壞）
+    text = "".join(p.get("text", "") for p in candidates[0].get("content", {}).get("parts", [])
+                   if not p.get("thought"))
+    if not text:
+        raise https_fn.HttpsError("internal", f"AI 回應沒有文字（finishReason={candidates[0].get('finishReason')}）")
+    return {"result": text, "usage": _usage_of(payload), "timing": timing}
+
+
+def _generate_image_via_rest(model_name: str, prompt: str, data: dict) -> dict:
+    """以 REST v1 呼叫圖片模型（繞開舊版 vertexai SDK 的 404）。回 {imageBase64, usage}。"""
+    import urllib.error
 
     # responseModalities 必須含 TEXT，否則模型會回 NO_IMAGE 不出圖（實測）。
     modalities = data.get("responseModalities") or ["TEXT", "IMAGE"]
@@ -153,21 +252,24 @@ def _generate_image_via_rest(model_name: str, prompt: str, data: dict) -> dict:
     if image_config:
         gen_config["imageConfig"] = {"aspectRatio": image_config.get("aspectRatio", "1:1")}
 
+    # 參考圖（選填）：互動插圖的「構圖草稿」（紅色編號圓點＋虛線路線），放在文字前面，與網頁 posterSketchPart 相同
+    parts = []
+    for img in (data.get("images") or [])[:MAX_REFERENCE_IMAGES]:
+        mime = img.get("mimeType") if isinstance(img, dict) else None
+        b64 = img.get("data") if isinstance(img, dict) else None
+        if mime not in ("image/png", "image/jpeg") or not isinstance(b64, str) or not b64:
+            raise https_fn.HttpsError("invalid-argument", "參考圖格式不正確")
+        if len(b64) > MAX_REFERENCE_IMAGE_B64:
+            raise https_fn.HttpsError("invalid-argument", "參考圖太大")
+        parts.append({"inlineData": {"mimeType": mime, "data": b64}})
+    parts.append({"text": prompt})
     body = {
-        "contents": [{"role": "user", "parts": [{"text": prompt}]}],
+        "contents": [{"role": "user", "parts": parts}],
         "generationConfig": gen_config,
     }
-    url = (f"https://aiplatform.googleapis.com/v1/projects/{PROJECT_ID}"
-           f"/locations/{LOCATION}/publishers/google/models/{model_name}:generateContent")
-    request = urllib.request.Request(
-        url,
-        data=json.dumps(body).encode("utf-8"),
-        headers={"Authorization": f"Bearer {creds.token}", "Content-Type": "application/json"},
-        method="POST",
-    )
+    # gemini-3-pro-image 實測小圖就要 ~30 秒，整張行程插圖更久；上限放到函式逾時（300s）之內
     try:
-        with urllib.request.urlopen(request, timeout=150) as resp:
-            payload = json.loads(resp.read().decode("utf-8"))
+        payload = _vertex_rest(model_name, body, timeout=280)
     except urllib.error.HTTPError as e:
         detail = e.read().decode("utf-8", "ignore")[:400]
         raise https_fn.HttpsError("internal", f"圖片生成失敗 HTTP {e.code}: {detail}")
@@ -178,12 +280,7 @@ def _generate_image_via_rest(model_name: str, prompt: str, data: dict) -> dict:
     if not candidates:
         raise https_fn.HttpsError("internal", "圖片回應為空，可能被安全過濾器攔截")
 
-    um = payload.get("usageMetadata", {}) or {}
-    usage = {
-        "promptTokens": int(um.get("promptTokenCount", 0) or 0),
-        "outputTokens": int(um.get("candidatesTokenCount", 0) or 0),
-        "thoughtsTokens": int(um.get("thoughtsTokenCount", 0) or 0),
-    }
+    usage = _usage_of(payload)
 
     # REST 回應的 inlineData.data 已是 base64 字串，直接回傳給 App 解碼。
     for part in candidates[0].get("content", {}).get("parts", []):
@@ -192,6 +289,211 @@ def _generate_image_via_rest(model_name: str, prompt: str, data: dict) -> dict:
             return {"imageBase64": inline["data"], "usage": usage}
 
     raise https_fn.HttpsError("internal", "圖片回應中沒有影像資料（finishReason 可能為 NO_IMAGE）")
+
+
+# ── 互動插圖：找出每一站在行程插圖上的位置 ──
+# 插圖是 AI 畫的，不對應真實地理，站在哪裡只能請模型看圖找。
+# 結果寫回 micro_trips/{tripId}.imageStopBoxes，App 與網頁共用：
+#   {imageUrl, model, at, boxes: [{stopId, name, box: [ymin, xmin, ymax, xmax], point: [y, x]}]}（0～1000 正規化）
+# box＝點擊範圍（編號標記、名稱、小插圖）；point＝該站在路線上的標記中心（選填），進行中的小點沿這些點走。
+# imageUrl 記的是「這組框是看哪張圖找的」；插圖重畫後網址會變，用戶端比對不同就再呼叫一次。
+STOP_BOX_MODEL = "gemini-3-flash-preview"
+MAX_BOX_STOPS = 40
+
+
+def _is_trip_member(doc: dict, uid: str, email: str) -> bool:
+    if uid and uid == doc.get("ownerUid"):
+        return True
+    if not email:
+        return False
+    email = email.lower()
+    singles = [doc.get("ownerEmail"), doc.get("userEmail")]
+    lists = (doc.get("memberEmails") or []) + (doc.get("editorEmails") or [])
+    return any(isinstance(e, str) and e.lower() == email for e in singles + lists)
+
+
+def _storage_path_of(url: str, bucket_name: str) -> str | None:
+    """Firebase Storage 下載網址 → 檔案路徑；不是我們自己 bucket 的網址一律不收（避免被拿去抓任意網址）。"""
+    from urllib.parse import urlparse, unquote
+    u = urlparse(url)
+    if u.scheme != "https" or u.netloc != "firebasestorage.googleapis.com":
+        return None
+    parts = u.path.split("/")   # ['', 'v0', 'b', bucket, 'o', encodedPath]
+    if len(parts) != 6 or parts[1] != "v0" or parts[2] != "b" or parts[4] != "o" or parts[3] != bucket_name:
+        return None
+    path = unquote(parts[5])
+    return path if path and ".." not in path else None
+
+
+def _stop_box_prompt(stops: list) -> str:
+    # 每一站用它在行程裡的序號（1 起算）找，不用站名：起點＝終點時兩站同名，用名字對會把同一個框
+    # 給兩站、另一處標記反而沒框（2026-10-19 泓廷回報開元漁港 1／11）。網頁疊字插圖的同一地點
+    # 標成「1／11」，這時兩個編號各回一筆、同一個位置。
+    stop_lines = "\n".join(f"{i + 1}. {s['name']}" for i, s in enumerate(stops))
+    return (
+        "這是一張旅遊行程插畫，圖上的景點可能標有編號 1、2、3…並以路線相連。請依編號找出下列每一站在圖中的位置，"
+        "回傳 JSON 陣列，每筆 {\"number\": 站的編號, \"box_2d\": [ymin, xmin, ymax, xmax], \"point\": [y, x]}，"
+        "座標以 0～1000 正規化。box_2d 框住該站的編號標記、名稱文字與旁邊的小插圖；"
+        "point 是該站在路線上的標記（例如編號圓點）的中心，沒有標記就給該站插圖的中心。"
+        "圖上有編號時以編號為準：同一個地點的標記可能寫成「1／11」這類合併編號，這時編號 1 和 11 各回一筆、用同一個位置；"
+        "同一個地點若畫了兩處、各有自己的編號，就各自回傳那一處。圖上沒有編號時才依名稱找。"
+        "每個編號只回一筆；圖中找不到的站就不要回。\n各站：\n" + stop_lines
+    )
+
+
+# 用 schema 鎖住回傳格式：只給 responseMimeType 時，模型偶爾會寫出壞掉的 JSON
+#（2026-10-18 實測某張圖固定在第 5 筆漏掉 "number"，temperature 0 每次都一樣壞）
+_STOP_BOX_SCHEMA = {
+    "type": "ARRAY",
+    "items": {
+        "type": "OBJECT",
+        "properties": {
+            "number": {"type": "INTEGER"},
+            "box_2d": {"type": "ARRAY", "items": {"type": "INTEGER"}, "minItems": 4, "maxItems": 4},
+            "point": {"type": "ARRAY", "items": {"type": "INTEGER"}, "minItems": 2, "maxItems": 2},
+        },
+        "required": ["number", "box_2d", "point"],
+        "propertyOrdering": ["number", "box_2d", "point"],
+    },
+}
+
+
+def _stop_box_request(stops: list, mime: str, image_bytes: bytes) -> dict:
+    return {
+        "contents": [{"role": "user", "parts": [
+            {"inlineData": {"mimeType": mime, "data": base64.b64encode(image_bytes).decode("ascii")}},
+            {"text": _stop_box_prompt(stops)}]}],
+        "generationConfig": {"responseMimeType": "application/json", "responseSchema": _STOP_BOX_SCHEMA,
+                             "temperature": 0, "thinkingConfig": {"thinkingBudget": 0}},
+    }
+
+
+def _parse_stop_boxes(raw, stops: list) -> list:
+    """模型回應 → [{stopId, name, box, point?}]，依 stops 順序；編號＝站在行程裡的序號（1 起算），壞資料略過。
+    模型漏回的站，若有同名的站找到了就沿用它的位置（舊版插圖同一地點只畫一次、沒有合併編號）。"""
+    def coords(v, n):
+        if isinstance(v, list) and len(v) == n and all(isinstance(x, (int, float)) for x in v):
+            return [max(0, min(1000, int(round(x)))) for x in v]
+        return None
+
+    found = {}
+    for item in raw if isinstance(raw, list) else []:
+        if not isinstance(item, dict) or not isinstance(item.get("number"), int):
+            continue
+        idx = item["number"] - 1
+        if not 0 <= idx < len(stops) or idx in found:
+            continue
+        box = coords(item.get("box_2d"), 4)
+        point = coords(item.get("point"), 2)
+        if box is None or box[2] <= box[0] or box[3] <= box[1]:
+            # 框壞掉（實測回過 3 個數字）但圓點位置還在：以圓點為中心補一個可以點的範圍
+            if point is None:
+                continue
+            box = [max(0, point[0] - 50), max(0, point[1] - 80), min(1000, point[0] + 50), min(1000, point[1] + 80)]
+        found[idx] = (box, point)
+
+    by_name = {}
+    for idx in sorted(found):
+        by_name.setdefault(stops[idx]["name"].strip(), found[idx])
+    boxes = []
+    for i, s in enumerate(stops):
+        hit = found.get(i) or by_name.get(s["name"].strip())
+        if hit is None:
+            continue
+        entry = {"stopId": s["stopId"], "name": s["name"], "box": hit[0]}
+        if hit[1] is not None:
+            entry["point"] = hit[1]
+        boxes.append(entry)
+    return boxes
+
+
+@https_fn.on_call(region="us-central1", timeout_sec=120)
+def detect_stop_boxes(req: https_fn.CallableRequest) -> dict:
+    """請 gemini-3-flash-preview 看行程插圖，回每站的框並存回行程文件。
+    參數：tripId、stops=[{stopId, name}]、force（選填，同一張圖也重找）。"""
+    import json
+    import urllib.error
+    from firebase_admin import firestore, storage
+
+    if req.auth is None:
+        raise https_fn.HttpsError("unauthenticated", "需要登入")
+    data = req.data or {}
+    trip_id = data.get("tripId") or ""
+    if not isinstance(trip_id, str) or not trip_id or "/" in trip_id:
+        raise https_fn.HttpsError("invalid-argument", "tripId 不正確")
+    stops = []
+    for s in (data.get("stops") or [])[:MAX_BOX_STOPS]:
+        if isinstance(s, dict) and isinstance(s.get("stopId"), str) and isinstance(s.get("name"), str):
+            name = s["name"].strip()[:60]
+            if s["stopId"] and name:
+                stops.append({"stopId": s["stopId"][:80], "name": name})
+    if not stops:
+        raise https_fn.HttpsError("invalid-argument", "沒有景點")
+
+    db = firestore.client()
+    ref = db.collection("micro_trips").document(trip_id)
+    snap = ref.get()
+    if not snap.exists:
+        raise https_fn.HttpsError("not-found", "行程不存在")
+    doc = snap.to_dict() or {}
+    if not _is_trip_member(doc, req.auth.uid, (req.auth.token or {}).get("email", "")):
+        raise https_fn.HttpsError("permission-denied", "不是這趟行程的成員")
+
+    # 圖一律用行程文件上的 imageUrl，不收用戶端給的網址
+    image_url = doc.get("imageUrl") or ""
+    existing = doc.get("imageStopBoxes") or {}
+    # 同一張圖已有站框就回快取。疊字時算好的框（model＝web-layout，網頁與 App 都會寫）是精確值，
+    # 就算帶 force 也不重找，免得被模型猜的框蓋掉
+    same_image = existing.get("imageUrl") == image_url and existing.get("boxes") is not None
+    if same_image and (not data.get("force") or existing.get("model") == "web-layout"):
+        return {"imageUrl": image_url, "boxes": existing.get("boxes"), "cached": True}
+
+    bucket = storage.bucket()
+    path = _storage_path_of(image_url, bucket.name)
+    if path is None:
+        raise https_fn.HttpsError("failed-precondition", "行程還沒有雲端插圖")
+    blob = bucket.blob(path)
+    try:
+        image_bytes = blob.download_as_bytes()
+    except Exception as e:
+        raise https_fn.HttpsError("not-found", f"讀不到插圖：{e}")
+    mime = blob.content_type or "image/jpeg"
+
+    body = _stop_box_request(stops, mime, image_bytes)
+    t_model = time.perf_counter()
+    try:
+        payload = _vertex_rest(STOP_BOX_MODEL, body, timeout=90)
+    except urllib.error.HTTPError as e:
+        detail = e.read().decode("utf-8", "ignore")[:400]
+        raise https_fn.HttpsError("internal", f"找站點失敗 HTTP {e.code}: {detail}")
+    except Exception as e:
+        raise https_fn.HttpsError("internal", f"找站點失敗: {e}")
+
+    candidates = payload.get("candidates", [])
+    text = "".join(p.get("text", "") for p in (candidates[0].get("content", {}).get("parts", []) if candidates else [])
+                   if not p.get("thought"))
+    try:
+        raw = json.loads(text)
+    except Exception:
+        raise https_fn.HttpsError("internal", "模型回傳的格式看不懂")
+
+    boxes = _parse_stop_boxes(raw, stops)
+
+    model_ms = int((time.perf_counter() - t_model) * 1000)
+    print(f"[timing] detect_stop_boxes trip={trip_id} found={len(boxes)}/{len(stops)} modelMs={model_ms} "
+          f"usage={_usage_of(payload)}")
+    # 只動 imageStopBoxes 這一個欄位；圖在呼叫期間被重畫就不寫，免得新圖配舊框
+    @firestore.transactional
+    def _save(tx):
+        cur = ref.get(transaction=tx).to_dict() or {}
+        if (cur.get("imageUrl") or "") != image_url:
+            return False
+        tx.update(ref, {"imageStopBoxes": {"imageUrl": image_url, "model": STOP_BOX_MODEL,
+                                           "at": firestore.SERVER_TIMESTAMP, "boxes": boxes}})
+        return True
+    saved = _save(db.transaction())
+    return {"imageUrl": image_url, "boxes": boxes, "cached": False, "saved": saved,
+            "usage": _usage_of(payload)}
 
 
 @https_fn.on_call(region="us-central1", timeout_sec=120)

@@ -47,6 +47,7 @@ import com.example.travellink_ai.ui.drawer.PreferencesScreen
 import com.example.travellink_ai.ui.feedback.FeedbackScreen
 import com.example.travellink_ai.ui.explore.ExploreScreen
 import com.example.travellink_ai.ui.home.HomeScreen
+import com.example.travellink_ai.ui.onboarding.coachTarget
 import com.example.travellink_ai.ui.planning.*
 import com.example.travellink_ai.util.soonKey
 import kotlinx.coroutines.launch
@@ -64,7 +65,8 @@ class MainActivity : ComponentActivity() {
         createNotificationChannel()
         UpcomingTripReceiver.schedule(this)
         setContent {
-            MaterialTheme {
+            // 首次使用提示畫在所有畫面之上（見 ui/onboarding/CoachMarks.kt）
+            MaterialTheme { com.example.travellink_ai.ui.onboarding.CoachMarkHost {
                 Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
                     val vm: ItineraryViewModel = hiltViewModel()
                     val collabVm: CollabViewModel = hiltViewModel()
@@ -79,6 +81,28 @@ class MainActivity : ComponentActivity() {
                             android.widget.Toast.makeText(this@MainActivity, it, android.widget.Toast.LENGTH_LONG).show()
                             vm.consumeGenerationError()
                         }
+                    }
+                    // 插圖在背景畫好／失敗時提示。停在行程頁時插圖卡會直接換上新圖（或顯示「重試」），不用再跳提示
+                    val imageResult by vm.imageResult.collectAsState()
+                    LaunchedEffect(imageResult, vm.currentScreen) {
+                        val r = imageResult ?: return@LaunchedEffect
+                        vm.consumeImageResult()
+                        if (vm.currentScreen == "preview") return@LaunchedEffect
+                        android.widget.Toast.makeText(
+                            this@MainActivity,
+                            if (r == ItineraryViewModel.ImageResult.DONE) "🎨 行程插圖完成了，在行程頁上方就能看到"
+                            else "插圖生成失敗，到行程頁的插圖卡可以重試",
+                            android.widget.Toast.LENGTH_LONG
+                        ).show()
+                    }
+
+                    // ── 歡迎輪播：第一次打開 App（或側欄「使用教學」）時，比登入畫面先出現 ──
+                    val showWelcome by com.example.travellink_ai.ui.onboarding.Onboarding.showWelcome.collectAsState()
+                    if (showWelcome) {
+                        com.example.travellink_ai.ui.onboarding.WelcomeCarousel(
+                            onDone = { com.example.travellink_ai.ui.onboarding.Onboarding.finishWelcome() }
+                        )
+                        return@Surface
                     }
 
                     // ── Auth Gate ─────────────────────────────────────────
@@ -228,7 +252,6 @@ class MainActivity : ComponentActivity() {
                                     viewModel = vm,
                                     onConfirm = { vm.confirmAndGenerateVisuals(feedbackVm) },
                                     onCancel  = { vm.currentScreen = vm.previewReturnScreen },
-                                    onExportImage = { vm.confirmAndGenerateVisuals(feedbackVm, openExport = true) },
                                     onBottomBarHeightChange = { previewBottomBarPx = it }
                                 )
                                 com.example.travellink_ai.ui.assistant.AssistantOverlay(
@@ -237,9 +260,7 @@ class MainActivity : ComponentActivity() {
                             }
                             "result" -> ItineraryResultScreen(
                                 viewModel = vm,
-                                docId = "current",
-                                initialShowImage = vm.resultInitialView == "image",
-                                openExport = vm.resultInitialView == "export"
+                                docId = "current"
                             )
                             "feedback" -> FeedbackScreen(
                                 viewModel = feedbackVm,
@@ -300,7 +321,10 @@ class MainActivity : ComponentActivity() {
                                 val tripItin by vm.itinerary.collectAsState()
                                 val tripProg by tripVm.progress.collectAsState()
                                 val activePk = tripProg.activeParking?.second
+                                val focusStop = remember { tripVm.mapFocusStopId }
+                                DisposableEffect(Unit) { onDispose { tripVm.mapFocusStopId = null } }
                                 com.example.travellink_ai.ui.map.ItineraryMapScreen(
+                                    focusStopId = focusStop,
                                     viewModel = vm,
                                     stops = tripItin?.stops ?: emptyList(),
                                     initialShowToilets = tripVm.mapMode == "toilets",
@@ -318,7 +342,7 @@ class MainActivity : ComponentActivity() {
                                     onBack = { vm.currentScreen = "preview" },
                                     progress = tripProg,
                                     demoModeOn = tripVm.demoModeOn,
-                                    simulatedLocation = tripVm.locationSimulator.location.collectAsState().value
+                                    simulatedLocation = tripVm.locationSimulator.location.collectAsState()
                                 )
                             }
                             "stop_detail" -> com.example.travellink_ai.ui.trip.StopDetailScreen(
@@ -438,7 +462,8 @@ class MainActivity : ComponentActivity() {
                             bottomBar = {
                                 NavigationBar(
                                     containerColor = Color.White,
-                                    tonalElevation = 0.dp
+                                    tonalElevation = 0.dp,
+                                    modifier = Modifier.coachTarget(com.example.travellink_ai.ui.onboarding.Tours.T_NAV)
                                 ) {
                                     NavigationBarItem(
                                         selected = selectedTab == 0,
@@ -584,6 +609,18 @@ class MainActivity : ComponentActivity() {
                                         modifier = Modifier.align(androidx.compose.ui.Alignment.BottomCenter)
                                     )
                                 }
+
+                                // 首次使用提示：首頁（生成中、側欄開著、精靈開著都不跳）與側欄（完全打開才跳）
+                                val drawerIdle = !drawerState.isAnimationRunning
+                                com.example.travellink_ai.ui.onboarding.CoachTour(
+                                    com.example.travellink_ai.ui.onboarding.Tours.HOME,
+                                    enabled = selectedTab == 0 && vm.currentScreen == "home" && !visualState.isLoading &&
+                                        drawerIdle && drawerState.currentValue == DrawerValue.Closed && !showPlanningSheet
+                                )
+                                com.example.travellink_ai.ui.onboarding.CoachTour(
+                                    com.example.travellink_ai.ui.onboarding.Tours.DRAWER,
+                                    enabled = drawerIdle && drawerState.currentValue == DrawerValue.Open
+                                )
                             }
                         }
 
@@ -598,7 +635,7 @@ class MainActivity : ComponentActivity() {
                         } // end ModalNavigationDrawer
                     }
                 }
-            }
+            } }
         }
     }
 
