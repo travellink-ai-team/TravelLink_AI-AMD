@@ -1448,6 +1448,25 @@ app.get('/api/cwa/v1/rest/datastore/:dataset', cwaLimiter, async (req, res) => {
 // 回顧短片渲染 job 端點（需登入 + 每人每小時 5 次 + 序列化渲染）
 mountRecapJobs(app, { requireFirebaseUser, rateLimit, ipKeyGenerator });
 
+// 全域錯誤處理：必須排在所有路由之後。沒有它時 Express 會回預設 HTML 錯誤頁，
+// 未設 NODE_ENV=production 就連 stack trace（含本機路徑）一起經 nginx 送到公網。
+// body-parser 的錯誤帶 err.type（壞 JSON = entity.parse.failed、太大 = entity.too.large）。
+app.use((err, req, res, next) => {
+  if (res.headersSent) return next(err);
+  if (err && err.type === 'entity.parse.failed') {
+    return res.status(400).json({ error: 'invalid json' });
+  }
+  if (err && err.type === 'entity.too.large') {
+    return res.status(413).json({ error: 'payload too large' });
+  }
+  const status = Number(err && (err.status || err.statusCode));
+  if (status >= 400 && status < 500) {
+    return res.status(status).json({ error: 'bad request' });
+  }
+  console.error('[proxy] 未處理的錯誤：', req.method, req.path, err && (err.stack || err.message));
+  res.status(500).json({ error: 'internal error' });
+});
+
 app.listen(PORT, '127.0.0.1', () => {
   console.log(`[proxy] 代理已啟動 http://127.0.0.1:${PORT}（僅本機；對外請經 nginx /api/）`);
   console.log('[proxy] /api/vertex：需登入 + 20req/10min/IP；/api/tdx：60req/10min/IP；/api/cwa：60req/10min/IP＋10min 快取');
