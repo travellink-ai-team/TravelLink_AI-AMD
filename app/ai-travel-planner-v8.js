@@ -2423,9 +2423,10 @@
     if (!ready) { console.warn('[coord reverify] Places 服務未就緒，略過座標重驗'); return stops; }
     let snapped = 0;
 
-    // 需要重驗的站：排除端點/鎖定座標/已驗證（各站互相獨立 → 可平行）
+    // 需要重驗的站：排除端點/鎖定座標/已驗證/住宿（各站互相獨立 → 可平行）
+    // 住宿是使用者自己選的地方（常是私人民宿），模糊比對會把它改名成附近別間民宿、連座標一起搬走
     const targets = stops.filter((stop) =>
-      stop && stop.type !== 'start' && stop.type !== 'end'
+      stop && stop.type !== 'start' && stop.type !== 'end' && !isLodgingStop(stop)
       && !stop._lockedCoordinates && !stop.coordVerified
       && String(stop.name || '').trim());
 
@@ -3643,7 +3644,29 @@
     return 6371000 * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
   }
 
+  // 住宿站：多日行程的住宿會在「前一天最後一站」與「隔天第一站」各出現一次（同名同座標）。
+  // App 寫 isLodging: true（載入後在原始物件或 __appExtras 上）；網頁自建的站就看類型／圖示／站名（與 explore 同一份規則）。
+  const LODGING_NAME_RE = /民宿|飯店|旅館|旅宿|旅店|汽車旅館|客棧|青年旅|渡假村|度假村|hotel|hostel|motel|resort/i;
+  function isLodgingStop(stop) {
+    if (!stop) return false;
+    const extras = stop.__appExtras || {};
+    if (stop.isLodging === true || extras.isLodging === true) return true;
+    if (stop.type === 'lodging' || stop.stopType === 'lodging' || extras.stopType === 'lodging') return true;
+    if (String(stop.emoji || '').trim() === '🏨') return true;
+    return LODGING_NAME_RE.test(String(stop.name || ''));
+  }
+  // 兩站都標了天數且不同天 → 不同天的站不能併成一站，否則其中一天的起點／終點就消失了
+  function stopsOnDifferentDays(a, b) {
+    const da = Number(a && a.dayIndex), db = Number(b && b.dayIndex);
+    return Number.isFinite(da) && Number.isFinite(db) && da > 0 && db > 0 && da !== db;
+  }
+  // 住宿閘門＋跨天閘門：所有「把兩站併成一站」的規則都先過這關
+  function isMergeBlockedStopPair(a, b) {
+    return isLodgingStop(a) || isLodgingStop(b) || stopsOnDifferentDays(a, b);
+  }
+
   function shouldMergeAdjacentStops(a, b) {
+    if (isMergeBlockedStopPair(a, b)) return false;
     // 「火車站→車站」正規化：「台東火車站」與「台東車站」是同一地，否則會出現
     // 起點車站旁再排一個同站「景點」、之間還走 15 分鐘的荒謬行程。
     const aN = normalizeText(a.name || '').replace(/火車站/g, '車站');
@@ -3768,6 +3791,7 @@
   // 是否該歸入同一大景區（以距離為主）
   function shouldClusterStops(a, b) {
     if (isFoodStop(a) || isFoodStop(b)) return false; // 餐廳閘門：用餐站不與他站合併
+    if (isMergeBlockedStopPair(a, b)) return false; // 住宿閘門＋跨天閘門
     const ca = readStopCoordinates(a);
     const cb = readStopCoordinates(b);
     if (ca && cb) {
@@ -4009,6 +4033,7 @@
       // 跳過端點與「座標已鎖定」的站（如本島港/離島返程港）：不再用 Places 補子景點或 snap，避免被搬位
       if (!stop || stop.type === 'start' || stop.type === 'end' || stop._lockedCoordinates) return false;
       if (isFoodStop(stop)) return false; // 餐廳閘門：用餐站不被標為合併大景點、不補子景點
+      if (isLodgingStop(stop)) return false; // 住宿閘門：住宿站不被換成大景點名、不補子景點
       if (/火車站|車站|捷運|高鐵|轉運站|客運站|機場|航空站/.test(String(stop.name || ''))) return false; // 交通樞紐閘門
       return !!readStopCoordinates(stop);
     };
@@ -10888,9 +10913,11 @@
         // 避免 Firebase 內留下殘缺文件，且確保 createdAt 存在讓 loadState 的 orderBy 查詢能撈到。
         // 共編結構欄位（成員/角色/擁有者/邀請/分享）由 collab.js 專管，改行程內容的 persist 不可寫回，
         // 否則會用本機過期副本 merge 蓋掉擁有者剛改的角色/成員（#10 加入者權限狀態）。
+        // tripProgress 也不帶：停車紀錄由 persistParkingRecords 專寫，其餘子欄位（App 的
+        // dayStartedAt.{N} 等）網頁不維護；本機副本只在停車變動時才刷新，帶上去會把 App 的新值蓋回舊值。
         const { __saving, members: _m, memberEmails: _me, ownerEmail: _oe, ownerUid: _ou, ownerName: _on,
           role: _role, guestReadable: _gr, shareToken: _stk, inviteCode: _ivc, maxMembers: _mmx,
-          collabCreatedAt: _ccat, userEmail: _ue, cloudSyncedFor: _csf, ...cleanLocal } = localTrip || {};
+          collabCreatedAt: _ccat, userEmail: _ue, cloudSyncedFor: _csf, tripProgress: _tp, ...cleanLocal } = localTrip || {};
         // 共編文件必須使用明確白名單。不能展開 localTrip：本機卡片含 createdAt、tripMode、cc，
         // 也可能仍保留舊 title/titleVersion；整包 merge 不只會被 editor Rules 拒絕，還會把別人
         // 剛完成的改名覆蓋回舊值。名稱只能走專用的 transaction 改名流程。
