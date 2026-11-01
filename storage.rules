@@ -5,18 +5,22 @@ rules_version = '2';
 service firebase.storage {
   match /b/{bucket}/o {
 
-    // App 端（Android）：AI 行程插圖 —— 既有段落，原樣保留
+    // App 端（Android）：AI 行程插圖。App 用固定檔名（{行程 ID}.jpg、{行程 ID}_day{N}.jpg）覆蓋重畫，
+    // 所以要允許 update；至少要登入（App 上傳後還要寫 micro_trips，本來就一定是登入狀態）。
     match /itinerary_backgrounds/{file} {
       allow read: if true;
-      allow write: if request.resource.size < 5 * 1024 * 1024
+      allow create, update: if request.auth != null
+                   && request.resource.size < 5 * 1024 * 1024
                    && request.resource.contentType == 'image/jpeg';
     }
 
-    // 網頁端：行程海報（uploadPosterToStorage）—— 既有段落，原樣保留
+    // 網頁端：行程插圖（uploadPosterDataUrl）。要登入，而且只能新增、不能覆蓋或刪除：
+    // 網頁每次都用新檔名（時間戳＋亂數），不需要覆蓋；以前不登入也能寫，任何人都能拿來當圖床或換掉別人的插圖。
     match /posters/{file} {
       allow read: if true;
-      allow write: if request.resource.size < 5 * 1024 * 1024
-                   && request.resource.contentType == 'image/png';
+      allow create: if request.auth != null
+                    && request.resource.size < 5 * 1024 * 1024
+                    && request.resource.contentType == 'image/png';
     }
 
     // 網頁端：旅記景點照片（本次新增）—— 僅本人可寫/刪；

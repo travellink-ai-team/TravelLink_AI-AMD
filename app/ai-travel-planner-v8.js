@@ -5167,6 +5167,8 @@
   }
 
   async function uploadPosterDataUrl(dataUrl) {
+    // storage.rules 的 posters/ 只允許登入者新增；沒登入就不要白打一次會被拒的上傳
+    if (!(firebaseAuth && firebaseAuth.currentUser)) throw new Error('登入後才能上傳插圖');
     const blob = await (await fetch(dataUrl)).blob();
     const code = currentInviteCode || 'trip';
     const path = `posters/${code}-${Date.now()}-${Math.random().toString(36).slice(2, 6)}.png`;
@@ -9981,6 +9983,9 @@
     }
     if (!firebaseStorage) {
       window.alert('Firebase Storage 尚未初始化，請確認 Firebase 專案已啟用 Storage。'); return;
+    }
+    if (!(firebaseAuth && firebaseAuth.currentUser)) {
+      window.alert('登入後才能取得插圖連結；沒登入也可以按「下載插圖」存到裝置。'); return;
     }
     if (!posterImageUploadPromise) {
       posterImageUploadPromise = uploadPosterToStorage();
