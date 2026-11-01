@@ -9,7 +9,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@300;400;500;700&family=Noto+Serif+TC:wght@500;700&family=DM+Serif+Display&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="./ai-travel-planner-v8.css?v=20261005-simdrag1">
+<link rel="stylesheet" href="./ai-travel-planner-v8.css?v=20261101-poster1">
 <link rel="stylesheet" href="./design-tokens.css?v=20260727-fix3">
 <link rel="stylesheet" href="./trip-photo-gallery.css?v=20260922-gallery1">
 <script src="./icons.js?v=20260727-fix3"></script>
@@ -100,6 +100,8 @@
           <div class="prototype-id-chip" id="prototypeTripId">原型資料</div>
         </div>
       </div>
+      <!-- 手機版：行程插圖卡（點一下開全螢幕；與 App 一致）。內容由 renderPosterTripCard 產生 -->
+      <div class="poster-trip-card-host" id="posterTripCard" hidden></div>
       <div class="timeline" id="itineraryPlannedBlock"></div>
       <div class="planning-stage" id="itineraryPlanningBlock">
         <div class="planning-shell">
@@ -369,6 +371,13 @@
 
   <aside class="map-panel" id="mapPanel">
     <div id="googleMap" style="width: 100%; height: 100%;"></div>
+
+    <!-- ── 地圖顯示方式：Google 地圖 ↔ AI 行程插圖（有插圖時才出現）── -->
+    <div class="map-mode-toggle" id="mapModeToggle" role="tablist" aria-label="地圖顯示方式" hidden>
+      <button type="button" role="tab" id="mapModeGoogleBtn" onclick="setPlannerMapMode('google')">🗺 地圖</button>
+      <button type="button" role="tab" id="mapModePosterBtn" onclick="setPlannerMapMode('poster')">🎨 插圖</button>
+    </div>
+    <div class="poster-mapview" id="posterMapView" hidden></div>
 
     <!-- ── 地圖右上角總流程時間 ── -->
     <div class="map-time-banner" id="mapTimeBanner">
@@ -644,12 +653,13 @@
 <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-storage-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-auth-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-functions-compat.js"></script>
 <script src="./collab.js?v=20260726-fix3"></script>
 <script src="./notifications.js?v=20260722-friends2"></script>
 <script src="./trip-photo-manager.js?v=20261005-batch1"></script>
 <script src="./trip-photo-sync.js?v=20260927-ownfile1"></script>
 <script src="./trip-photo-gallery.js?v=20261005-batch1"></script>
-<script src="./ai-travel-planner-v8.js?v=20261101-sync1"></script>
+<script src="./ai-travel-planner-v8.js?v=20261101-poster1"></script>
 <script>
   // 動態載入 Google Maps：金鑰統一由 weather.env.js 的 TRAVEL_APP_CONFIG 提供，
   // 避免在頁面硬編金鑰（先前硬編的舊金鑰已失效，導致 InvalidKeyMapError）。
