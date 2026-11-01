@@ -3477,6 +3477,9 @@ body.prototype-mode .prototype-id-chip {
   font-weight: 800;
   letter-spacing: 0.08em;
 }
+.mic-desc[data-source="ai"]::before { content: 'AI 簡介'; }
+/* 介紹的來源：開放資料或 AI 整理，讓使用者知道能信到什麼程度 */
+.mic-desc-source { margin-top: -10px; padding: 0 6px; font-size: 11px; color: var(--ink3, #8a857c); text-wrap: pretty; }
 /* 合併大景點的「附近景點」區塊：沿用景點介紹卡片樣式，標題改為中標題 + 子景點以小標籤列出（取代舊的「（含 …）」內文） */
 .mic-nearby {
   position: relative;
@@ -8874,6 +8877,9 @@ button.notif-item { cursor: pointer; }
 }
 .poster-stop-card-title { font-size: 15px; font-weight: 800; color: var(--ink, #22201d); line-height: 1.5; word-break: keep-all; overflow-wrap: anywhere; }
 .poster-stop-card-meta { display: grid; gap: 2px; margin: 6px 0 4px; font-size: 13px; color: var(--ink2, #4a463f); }
+.poster-stop-card-intro { margin: 6px 0 8px; padding: 8px 10px; border-radius: 10px; background: rgba(46, 125, 109, .06); }
+.poster-stop-card-intro-text { font-size: 13px; line-height: 1.7; color: var(--ink2, #4a463f); max-height: 7.2em; overflow-y: auto; text-wrap: pretty; }
+.poster-stop-card-intro .mic-desc-source { margin-top: 4px; padding: 0; }
 .poster-stop-card-close {
   position: absolute; top: 8px; right: 8px; width: 28px; height: 28px;
   border: none; border-radius: 50%; background: rgba(0,0,0,.06); cursor: pointer; font-size: 13px;

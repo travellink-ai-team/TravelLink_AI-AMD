@@ -863,7 +863,9 @@
       // App 端手機新增景點時只寫這個佔位字串（全形・或半形·或無分隔都算），
       // 判成「有意義」的話卡片就會把這五個字當介紹顯示（組員回報的空介紹）。
       /^新增\s*[・·･]?\s*景點$/,
-      /^新增$/
+      /^新增$/,
+      // buildSpotDescription 沒資料時組出來的通用句：不是真的介紹，不能當成有內容
+      /建議不要只停留打卡/
     ].some((pattern) => pattern.test(value));
   }
 
@@ -922,6 +924,68 @@
     if (hasMeaningfulSpotNotice(notice)) return String(notice).trim();
     return inferSpotContext(name, desc).notice;
   }
+
+  // ── 景點卡的「景點介紹」：先用本地景點資料庫（poi-data.js，大多是台東觀光旅遊網開放資料）的介紹，
+  // 沒有才用行程生成時 AI 寫的描述（標明是 AI 整理），兩者都沒有就不顯示——不再拿通用句充數。
+  // 注意：poi-data.js 目前沒有輸出來源欄位，少數早期快取的景點介紹也是 AI 寫的，所以來源只寫「景點資料庫」。
+  function normalizeSpotLookupName(s) {
+    return String(s || '').replace(/臺/g, '台').replace(/\s/g, '').toLowerCase();
+  }
+
+  // 名稱的幾種寫法：全名、去掉括號附註、括號裡的別名（例如「富岡地質公園 (小野柳)」）
+  function spotNameVariants(name) {
+    const raw = String(name || '').trim();
+    const out = new Set([normalizeSpotLookupName(raw)]);
+    const m = raw.match(/^(.*?)[(（]([^)）]+)[)）]\s*$/);
+    if (m) { out.add(normalizeSpotLookupName(m[1])); out.add(normalizeSpotLookupName(m[2])); }
+    out.delete('');
+    return [...out];
+  }
+
+  function findLocalSpotRecord(name) {
+    const variants = spotNameVariants(name);
+    if (!variants.length) return null;
+    // 只用有地址的景點：開放資料匯入的都有地址；沒有地址的多半是早期 AI 生成後快取的，介紹也是 AI 寫的
+    const usable = (p) => p && p.name && p.address && (!p.kind || p.kind === 'scenic') && String(p.desc || '').trim().length >= 12;
+    const regional = (getLocalPoiList(currentTripRegion) || []).filter(usable);
+    const exactIn = (list) => list.find((p) => spotNameVariants(p.name).some((v) => variants.includes(v))) || null;
+    const exact = exactIn(regional);
+    if (exact) return exact;
+    // 包含比對只在本行程的目的地內做，取名稱最長的；至少 3 個字避免誤配。
+    // 站名包含資料名稱可以（「加路蘭遊憩區」→「加路蘭」）；資料名稱較長時只接受通用後綴
+    //（「鯉魚山」→「鯉魚山公園」），「三仙台」不能配到「三仙台遊客中心」這種不同地點。
+    const GENERIC_SUFFIX = /^(公園|遊憩區|風景區|休憩區|步道|園區|海灘|沙灘|親水公園|森林公園)$/;
+    let best = null;
+    regional.forEach((p) => {
+      const pv = spotNameVariants(p.name);
+      const hit = pv.some((a) => variants.some((b) => {
+        if (a.length < 3 || b.length < 3) return false;
+        if (b.includes(a)) return true; // 站名較長
+        return a.startsWith(b) && GENERIC_SUFFIX.test(a.slice(b.length));
+      }));
+      if (hit && (!best || normalizeSpotLookupName(p.name).length > normalizeSpotLookupName(best.name).length)) best = p;
+    });
+    if (best) return best;
+    // 目的地對不上（例如行程地區寫得比較籠統）時，退到全部資料但只接受完全同名
+    const data = (typeof window !== 'undefined' && window.WAI_POI_DATA) || null;
+    if (!data) return null;
+    const all = [];
+    Object.keys(data).forEach((k) => { if (k !== '__generatedAt' && Array.isArray(data[k])) all.push(...data[k].filter(usable)); });
+    return exactIn(all);
+  }
+
+  // 回傳 { text, source }：source＝'local'（開放資料）／'ai'（行程生成時 AI 寫的）／''（沒有介紹）
+  function getSpotIntro(name, aiDesc) {
+    const local = findLocalSpotRecord(name);
+    if (local) return { text: String(local.desc).trim(), source: 'local' };
+    if (hasMeaningfulSpotDescription(aiDesc)) return { text: String(aiDesc).trim(), source: 'ai' };
+    return { text: '', source: '' };
+  }
+
+  const SPOT_INTRO_SOURCE_NOTE = {
+    local: '資料來源：TravelLinkAI 景點資料庫',
+    ai: 'AI 依行程整理的簡介，僅供參考'
+  };
 
   function buildSpotPinPayload({ emoji = '📍', name = '', desc = '', notice = '', region = '', title = '' } = {}) {
     const safeName = String(name || '景點').trim() || '景點';
@@ -6278,6 +6342,7 @@
     const hours = stop.businessHours ? formatDayBusinessHours(stop.businessHours, getStopServiceDate(stop)) : '';
     const hasPos = !!getStopLatLng(stop);
     const sid = escapeHtml(JSON.stringify(String(stop.id)));
+    const intro = getSpotIntro(stop.name, stop.desc);
     return `
       <div class="poster-stop-card" id="${cardId}">
         ${closeBtn}
@@ -6287,6 +6352,11 @@
           <div>⏱ 停留 ${escapeHtml(String(sched.computedStayMin))} 分鐘</div>
           ${hours ? `<div>${hours}</div>` : ''}
         </div>
+        ${intro.text ? `
+          <div class="poster-stop-card-intro" data-source="${intro.source}">
+            <div class="poster-stop-card-intro-text">${escapeHtml(intro.text)}</div>
+            <div class="mic-desc-source">${escapeHtml(SPOT_INTRO_SOURCE_NOTE[intro.source] || '')}</div>
+          </div>` : ''}
         ${missingNote}
         ${hasPos ? `
           <div class="travel-action-row">
@@ -21858,10 +21928,18 @@
     
     // 替換卡片內容
     const nameFromTitle = String(data.title || '').replace(/^[^\s]+\s+/, '').trim();
-    const finalDesc = buildSpotDescription(nameFromTitle, data.desc, currentTripRegion, currentTripTitle);
     const finalNotice = buildSpotNotice(nameFromTitle, data.desc, data.notice);
     document.getElementById('micTitle').innerText = data.title;
-    document.getElementById('micDesc').innerText = finalDesc;
+    const intro = getSpotIntro(nameFromTitle, data.desc);
+    const micDescEl = document.getElementById('micDesc');
+    micDescEl.innerText = intro.text;
+    micDescEl.dataset.source = intro.source;
+    micDescEl.style.display = intro.text ? '' : 'none';
+    const micSourceEl = document.getElementById('micDescSource');
+    if (micSourceEl) {
+      micSourceEl.textContent = SPOT_INTRO_SOURCE_NOTE[intro.source] || '';
+      micSourceEl.style.display = intro.text ? '' : 'none';
+    }
     document.getElementById('micNotice').innerText = finalNotice;
     const micHoursEl = document.getElementById('micHours');
     if (micHoursEl) {
@@ -21909,6 +21987,7 @@
     // 顯示卡片
     document.getElementById('mapInfoCard').classList.add('show');
     document.body.classList.add('map-info-open');
+    startMapInfoCardTracking();
     
     // 重置所有圖釘，並高亮當前點擊的圖釘
     document.querySelectorAll('.map-pin').forEach(p => p.classList.remove('active'));
@@ -21929,7 +22008,91 @@
     }
   }
 
+  // ── 景點卡位置：貼齊地圖右下角，但避開右下的定位／縮放鈕、Google 版權列，以及會浮在右下角的
+  // 面板（展示模擬、找車列、共編同步晶片、AI 管家抽屜）與上方的時間橫幅、路線面板。
+  // 這些面板有的可拖曳、有的隨功能出現，CSS 寫死的位置一定會擋到，所以卡片開著時定時重算。
+  const MIC_GAP = 10;
+  const MIC_EDGE = 16;
+  let micPositionTimer = null;
+
+  function micObstacleRect(el) {
+    if (!el || el.hidden) return null;
+    const cs = getComputedStyle(el);
+    if (cs.display === 'none' || cs.visibility === 'hidden' || Number(cs.opacity) === 0) return null;
+    const r = el.getBoundingClientRect();
+    return r.width > 0 && r.height > 0 ? r : null;
+  }
+
+  function positionMapInfoCard() {
+    const card = document.getElementById('mapInfoCard');
+    const panel = document.getElementById('mapPanel');
+    if (!card || !panel) return;
+    const reset = () => { ['left', 'top', 'right', 'bottom', 'width', 'height'].forEach((k) => { card.style[k] = ''; }); };
+    // 手機地圖不顯示這張卡（showPinInfo 直接關掉）；平板沿用這裡的計算，CSS 的全寬版面只當備援
+    if (isMobileLayout() || !card.classList.contains('show')) { reset(); return; }
+    const m = panel.getBoundingClientRect();
+    // 版面在某些寬度會整頁縮放（zoom）：量到的是螢幕座標，寫回 style 前要換回 CSS 像素
+    const sx = panel.offsetWidth ? m.width / panel.offsetWidth : 1;
+    const sy = panel.offsetHeight ? m.height / panel.offsetHeight : 1;
+    const intersectsMap = (r) => r.right > m.left && r.left < m.right && r.bottom > m.top && r.top < m.bottom;
+    const obstacles = [];
+    const add = (el) => {
+      const r = micObstacleRect(el);
+      // 蓋住大半張地圖的是 Google 的容器，不是按鈕
+      if (r && intersectsMap(r) && r.width * r.height < m.width * m.height * 0.4) obstacles.push(r);
+    };
+    const gmap = document.getElementById('googleMap');
+    if (gmap) gmap.querySelectorAll('button, .gm-style-cc').forEach(add);
+    ['tripSimulationPanel', 'findCarBar', 'mapTimeBanner', 'mapModeToggle', 'directionsPanel'].forEach((id) => add(document.getElementById(id)));
+    document.querySelectorAll('.collab-sync-chip, .ai-drawer.open').forEach(add);
+
+    const W = Math.min(438 * sx, m.width - MIC_EDGE * 2);
+    const H_MAX = 392 * sy;
+    const H_MIN = Math.min(240 * sy, m.height - MIC_EDGE * 2);
+    const overlaps = (a, b) => a.left < b.right + 4 && a.right > b.left - 4 && a.top < b.bottom + 4 && a.bottom > b.top - 4;
+    // 候選的右緣／下緣：貼地圖邊，或貼在某個障礙物的左邊／上方
+    const rights = [m.right - MIC_EDGE, ...obstacles.map((r) => r.left - MIC_GAP)];
+    const bottoms = [m.bottom - MIC_EDGE, ...obstacles.map((r) => r.top - MIC_GAP)];
+    let best = null;
+    rights.forEach((R) => {
+      if (R > m.right - MIC_EDGE || R - W < m.left + MIC_EDGE) return;
+      bottoms.forEach((B) => {
+        if (B > m.bottom - MIC_EDGE) return;
+        // 上緣：不超出地圖，也不能蓋到同一欄裡在上方的東西（例如時間橫幅）
+        let top = Math.max(B - H_MAX, m.top + MIC_EDGE);
+        obstacles.forEach((r) => {
+          if (r.right > R - W && r.left < R && r.bottom <= B) top = Math.max(top, r.bottom + MIC_GAP);
+        });
+        const H = B - top;
+        if (H < H_MIN) return;
+        const rect = { left: R - W, right: R, top, bottom: B };
+        if (obstacles.some((r) => overlaps(rect, r))) return;
+        // 越靠右下越好；同樣位置時取較高的卡片
+        const score = (m.right - R) + (m.bottom - B) - H * 0.01;
+        if (!best || score < best.score) best = { R, B, H, score };
+      });
+    });
+    if (!best) { reset(); return; }
+    card.style.left = 'auto';
+    card.style.top = 'auto';
+    card.style.right = `${Math.round((m.right - best.R) / sx)}px`;
+    card.style.bottom = `${Math.round((m.bottom - best.B) / sy)}px`;
+    card.style.width = `${Math.floor(W / sx)}px`;
+    card.style.height = `${Math.floor(best.H / sy)}px`;
+  }
+
+  function startMapInfoCardTracking() {
+    positionMapInfoCard();
+    if (micPositionTimer) return;
+    micPositionTimer = setInterval(positionMapInfoCard, 300);
+  }
+
+  function stopMapInfoCardTracking() {
+    if (micPositionTimer) { clearInterval(micPositionTimer); micPositionTimer = null; }
+  }
+
   function closePinInfo() {
+    stopMapInfoCardTracking();
     // 隱藏卡片
     document.getElementById('mapInfoCard').classList.remove('show');
     document.body.classList.remove('map-info-open');
