@@ -18286,7 +18286,28 @@
   let _osmInFlight = Promise.resolve();
   function _osmSleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 
+  // 代理模式：交給同源 /api/overpass（伺服器帶 User-Agent 換端點、快取）。
+  // 瀏覽器直連時端點常回 406/500 且錯誤頁不帶 CORS 標頭，F12 會一片紅；
+  // 代理在全部端點失敗時回 200＋{ ok:false }，這裡視同失敗（不快取、畫近似色塊）。
+  async function _overpassViaProxy(q) {
+    try {
+      const res = await fetch(`${VERTEX_PROXY_BASE}/overpass`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'text/plain;charset=UTF-8' },
+        body: q,
+        signal: AbortSignal.timeout(70000) // 代理最多輪詢 3 個端點 × 20 秒
+      });
+      if (!res.ok) return null;
+      const data = await res.json().catch(() => null);
+      return data && data.ok !== false ? data : null;
+    } catch (e) { return null; }
+  }
+
   function _overpassRequest(q) {
+    if (VERTEX_PROXY_BASE) {
+      _osmInFlight = _osmInFlight.then(() => _overpassViaProxy(q), () => _overpassViaProxy(q));
+      return _osmInFlight;
+    }
     const run = async () => {
       for (let attempt = 0; attempt < _OVERPASS_ENDPOINTS.length * 2; attempt++) {
         const ep = _OVERPASS_ENDPOINTS[attempt % _OVERPASS_ENDPOINTS.length];

@@ -1445,6 +1445,60 @@ app.get('/api/cwa/v1/rest/datastore/:dataset', cwaLimiter, async (req, res) => {
   }
 });
 
+// ══════════════ Overpass（OSM 景點邊界；查詢格式白名單；限流＋快取）══════════════
+// 瀏覽器直連公開 Overpass 時，端點常回 406/500，且錯誤頁不帶 CORS 標頭 → F12 一片紅字。
+// 改由伺服器帶 User-Agent、以表單格式送出（overpass-api.de 會拒絕不具名的請求），
+// 全部端點失敗時回 200＋{ ok:false }：前端據此不快取、改畫近似色塊，console 保持乾淨。
+
+const OVERPASS_ENDPOINTS = [
+  'https://overpass-api.de/api/interpreter',
+  'https://overpass.private.coffee/api/interpreter',
+  'https://overpass.kumi.systems/api/interpreter'
+];
+const OVERPASS_USER_AGENT = 'TravelLinkAI/1.0 (+https://travel-link-amd.duckdns.org)';
+// 只放行前端 _flushOsmBatch 產生的那一種查詢：名稱 + around 的 wr 聯集、out geom。
+// 擋掉任意 Overpass QL，避免本機成為替全網跑重查詢的開放代理。
+// 名稱可含前端 _osmNameRegex 跳脫過的特殊字元（\( \. \" …），未跳脫的引號／括號／分號一律拒絕
+const OVERPASS_GROUP = String.raw`wr\["name"~"(?:[^"\\;()\[\]\n]|\\[\\^$.*+?()\[\]{}|"]){1,120}"\]\(around:\d{1,5},-?\d{1,3}(?:\.\d+)?,-?\d{1,3}(?:\.\d+)?\);`;
+const OVERPASS_ALLOWED_QUERY = new RegExp(String.raw`^\[out:json\]\[timeout:25\];\((?:` + OVERPASS_GROUP + String.raw`){1,20}\);out geom;$`);
+
+const overpassLimiter = rateLimit({
+  windowMs: 10 * 60 * 1000,
+  max: 60,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { ok: false, error: 'rate limited' }
+});
+
+// 景點邊界幾乎不變：成功結果快取 24 小時，全站共用
+const _overpassCache = new Map(); // query → { exp, body }
+app.post('/api/overpass', overpassLimiter, express.text({ type: '*/*', limit: '8kb' }), async (req, res) => {
+  const q = typeof req.body === 'string' ? req.body.trim() : '';
+  if (!OVERPASS_ALLOWED_QUERY.test(q)) return res.status(403).json({ ok: false, error: 'query not allowed' });
+
+  const hit = _overpassCache.get(q);
+  if (hit && Date.now() < hit.exp) return res.type('application/json').send(hit.body);
+
+  for (const ep of OVERPASS_ENDPOINTS) {
+    try {
+      const upstream = await fetch(ep, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'User-Agent': OVERPASS_USER_AGENT },
+        body: 'data=' + encodeURIComponent(q),
+        signal: AbortSignal.timeout(20000)
+      });
+      const body = await upstream.text();
+      if (!upstream.ok || /rate_limited|Too Many Requests/i.test(body)) continue;
+      try { JSON.parse(body); } catch (e) { continue; } // 端點偶爾回 HTML 錯誤頁卻給 200
+      if (_overpassCache.size > 500) _overpassCache.delete(_overpassCache.keys().next().value);
+      _overpassCache.set(q, { exp: Date.now() + 24 * 60 * 60 * 1000, body });
+      return res.type('application/json').send(body);
+    } catch (err) { /* 逾時／網路錯誤 → 換下一個端點 */ }
+  }
+  console.error('[proxy] overpass 全部端點失敗');
+  res.json({ ok: false, error: 'all overpass endpoints failed' });
+});
+
 // 回顧短片渲染 job 端點（需登入 + 每人每小時 5 次 + 序列化渲染）
 mountRecapJobs(app, { requireFirebaseUser, rateLimit, ipKeyGenerator });
 
@@ -1469,7 +1523,7 @@ app.use((err, req, res, next) => {
 
 app.listen(PORT, '127.0.0.1', () => {
   console.log(`[proxy] 代理已啟動 http://127.0.0.1:${PORT}（僅本機；對外請經 nginx /api/）`);
-  console.log('[proxy] /api/vertex：需登入 + 20req/10min/IP；/api/tdx：60req/10min/IP；/api/cwa：60req/10min/IP＋10min 快取');
+  console.log('[proxy] /api/vertex：需登入 + 20req/10min/IP；/api/tdx：60req/10min/IP；/api/cwa：60req/10min/IP＋10min 快取；/api/overpass：60req/10min/IP＋24h 快取');
   if (amdLlm.isEnabled()) {
     console.log('[proxy] AI_PROVIDER=amd：文字生成改走 AMD gpt-oss-120b；圖片生成仍走 Vertex'
       + (amdLlm.hasFallback() ? '；直連連不上時自動改走備援代理' : '；未設定備援代理'));
