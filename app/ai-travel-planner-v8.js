@@ -103,6 +103,7 @@
   let posterModelLabel = '';
   let posterLoadToken = 0;
   let posterCloudCheckedKey = '';   // 已為哪個「行程｜帳號」查過雲端插圖，避免每次重繪都讀一次 Firestore
+  let posterRemoteSig = '';          // 上次看到的行程文件插圖欄位（共編即時同步用來判斷旅伴是否畫了新插圖）
   let posterByokDraftKey = '';
   let posterByokTesting = false;
   let importedTravelPinSerial = 0;
@@ -5585,6 +5586,7 @@
       posterDays = null;
       posterDaysUserPicked = false;
       posterWide = null;
+      posterRemoteSig = '';
     }
     if (posterImageGenerating || posterGeneratedImageBase64 || posterDays) return;
     const user = firebaseAuth && firebaseAuth.currentUser;
@@ -5596,6 +5598,12 @@
       data = snap.exists ? (snap.data() || {}) : null;
     } catch (_e) { return; } // 讀不到（未上雲／無權限）就維持原本的「生成插圖」畫面
     if (token !== posterLoadToken || tripId !== currentItineraryId || posterGeneratedImageBase64) return;
+    applyTripPosterDoc(data, tripId, token);
+  }
+
+  // 依目前版面（桌機先用橫式）從行程文件挑出要顯示的插圖並載入
+  function applyTripPosterDoc(data, tripId, token) {
+    posterRemoteSig = posterDocSignature(data);
     // 桌機：有橫式就用橫式；沒有才退回直式（畫面上會出現「生成桌機橫式版」）
     if (data && !isMobileLayout() && loadPosterWideFromDoc(data, tripId)) { renderTravelTools(); return; }
     const imageUrl = data && typeof data.imageUrl === 'string' ? data.imageUrl : '';
@@ -5617,6 +5625,71 @@
     // 舊行程或站框已作廢（imageUrl 不同）→ 補找一次
     renderTravelTools();
     detectPosterStopBoxes({ force: false, token });
+  }
+
+  // 行程文件上和插圖有關的欄位（只取網址），用來判斷旅伴是不是畫了新的插圖
+  function posterDocSignature(data) {
+    if (!data) return '';
+    const urls = (list) => (Array.isArray(list) ? list.map((d) => `${d && d.day}:${d && d.imageUrl}`).join(',') : '');
+    return [data.imageUrl || '', urls(data.imageDays), (data.imageWide && data.imageWide.imageUrl) || '', urls(data.imageDaysWide)].join('|');
+  }
+
+  // 目前畫面上的插圖網址（多日時每一天都算）
+  function posterShownUrls() {
+    const out = new Set();
+    if (posterImageUploadUrl) out.add(posterImageUploadUrl);
+    if (/^https:\/\//.test(String(posterGeneratedImageBase64 || ''))) out.add(posterGeneratedImageBase64);
+    if (posterDays) Object.values(posterDays.items).forEach((it) => { if (it && it.uploadUrl) out.add(it.uploadUrl); });
+    return out;
+  }
+
+  // 依版面會被選來顯示的網址（與 applyTripPosterDoc 的挑法一致）
+  function posterDocPreferredUrls(data) {
+    const pick = (main, days) => {
+      const list = Array.isArray(days) ? days.map((d) => d && d.imageUrl).filter((u) => /^https:\/\//.test(String(u || ''))) : [];
+      return list.length ? list : (/^https:\/\//.test(String(main || '')) ? [main] : []);
+    };
+    if (!isMobileLayout() && data.imageWide && /^https:\/\//.test(String(data.imageWide.imageUrl || ''))) {
+      return pick(data.imageWide.imageUrl, data.imageDaysWide);
+    }
+    return pick(data.imageUrl, data.imageDays);
+  }
+
+  // 共編即時同步收到行程文件：旅伴（或另一個分頁）畫了新插圖 → 不用重畫，直接換成新的那張
+  function applyRemotePosterUpdate(data) {
+    const tripId = currentItineraryId;
+    if (!data || !tripId || tripId === 'TRIP-EMPTY') return;
+    const sig = posterDocSignature(data);
+    if (sig === posterRemoteSig) return;
+    // 自己正在畫或上傳：等自己的寫回落地，下一個快照再比對
+    if (posterImageGenerating || posterImageUploading) return;
+    posterRemoteSig = sig;
+    const wanted = posterDocPreferredUrls(data);
+    if (!wanted.length) return;
+    const shown = posterShownUrls();
+    if (wanted.every((u) => shown.has(u))) return; // 就是自己剛寫回的那張
+    const keepDay = posterDays && posterDaysUserPicked ? posterDays.active : null;
+    posterLoadToken++;
+    posterGeneratedImageBase64 = null;
+    posterImageUploadUrl = null;
+    posterImageUploadPromise = null;
+    posterStopBoxes = null;
+    posterBoxesStatus = 'idle';
+    posterBoxesNote = '';
+    posterSelectedBoxIndex = -1;
+    posterSelectedMissingIndex = -1;
+    posterStopsSnapshot = [];
+    posterDays = null;
+    posterWide = null;
+    posterCloudCheckedKey = posterCloudCheckKey();
+    applyTripPosterDoc(data, tripId, posterLoadToken);
+    if (keepDay && posterDays && posterDays.list.includes(keepDay)) {
+      posterDays.active = keepDay;
+      posterDaysUserPicked = true;
+      posterLoadDay(keepDay);
+    }
+    renderTravelTools();
+    if (typeof feedbackToast === 'function') feedbackToast('旅伴更新了行程插圖', 'green');
   }
 
   // 多日行程的 imageDays。第 1 天的圖若和 imageUrl 不同，代表之後有人（例如 App）重畫了單張插圖：
@@ -12301,6 +12374,8 @@
       return;
     }
     collabLivePendingData = null;
+    // 旅伴畫了新的行程插圖：直接換上，不用自己重畫（插圖不碰行程站點，所以放在擱置判斷之後即可）
+    try { applyRemotePosterUpdate(data); } catch (e) { console.warn('[互動插圖] 套用旅伴插圖失敗：', e); }
 
     // 標題／成員資訊即時更新（角色被擁有者調整時，唯讀狀態跟著切換）
     let hasStatusOrIndexChange = false;
