@@ -94,7 +94,18 @@ function buildManifest(trip, mediaCount, routePoints, mediaStopIndices) {
   return manifest;
 }
 
-// 照片：每站最多一張，url 需為 https 或 data:image；stopIndex 需在範圍內。
+// 照片網址由使用者送來、伺服器端去抓，所以只放行自家 Firebase Storage 的下載網址
+// （前端 uploadTripPhoto 的 getDownloadURL）。不放行任意網域：否則可拿來打內網（SSRF），
+// 也會讓伺服器去解惡意站台回的壓縮內容（如 CVE-2026-111497 Brotli RCE）。
+const PHOTO_HOSTS = new Set(['firebasestorage.googleapis.com']);
+function isAllowedPhotoUrl(url) {
+  if (/^data:image\//i.test(url)) return true;
+  let u;
+  try { u = new URL(url); } catch (_e) { return false; }
+  return u.protocol === 'https:' && !u.port && PHOTO_HOSTS.has(u.hostname);
+}
+
+// 照片：每站最多一張，url 需為 Firebase Storage 的 https 下載網址或 data:image；stopIndex 需在範圍內。
 function sanitizePhotos(raw, stopCount) {
   if (raw == null) return [];
   if (!Array.isArray(raw)) throw badReq('photos must be array');
@@ -105,7 +116,7 @@ function sanitizePhotos(raw, stopCount) {
     const idx = finite(p.stopIndex);
     if (idx === null || idx < 0 || idx >= stopCount) return;
     const url = String(p.url || '');
-    if (!/^https?:\/\//i.test(url) && !/^data:image\//i.test(url)) return;
+    if (!isAllowedPhotoUrl(url)) return;
     if (url.length > 6 * 1024 * 1024) return;
     if (seen[idx]) return;
     seen[idx] = true;
@@ -190,7 +201,8 @@ async function fetchPhotoDataUrl(url) {
   try {
     const ctrl = new AbortController();
     const to = setTimeout(() => ctrl.abort(), 10000);
-    const r = await fetch(url, { signal: ctrl.signal });
+    // 不跟隨轉址：白名單只驗了第一跳，轉址會把請求帶到白名單外。
+    const r = await fetch(url, { signal: ctrl.signal, redirect: 'error' });
     clearTimeout(to);
     if (!r.ok) return null;
     const ct = (r.headers.get('content-type') || '').toLowerCase();
