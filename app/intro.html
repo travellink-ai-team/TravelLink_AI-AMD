@@ -863,7 +863,19 @@ async function doSocial(providerName) {
     }
     handleAuthSuccess(user, user.displayName || providerName + '用戶', providerName === 'Google' ? '🌐' : '📘', isNew);
   } catch(e) {
-    showToast('登入失敗: ' + e.message, 'red');
+    // 不直接秀 e.message（英文原文、且看不出可行動原因）；依錯誤碼給中文提示
+    const code = (e && e.code) || '';
+    const msg = {
+      'auth/popup-closed-by-user': '已取消登入',
+      'auth/cancelled-popup-request': '已取消登入',
+      'auth/popup-blocked': '登入視窗被瀏覽器封鎖，請允許本站彈出視窗後再試。',
+      'auth/operation-not-allowed': '此登入方式目前尚未開放，請改用其他方式登入。',
+      'auth/unauthorized-domain': '此網域尚未被授權使用社群登入，請改用其他方式登入。',
+      'auth/account-exists-with-different-credential': '這個 Email 已用其他方式註冊過，請改用原本的登入方式。',
+      'auth/network-request-failed': '網路連線異常，請檢查網路後再試。'
+    }[code] || '社群登入失敗，請稍後再試或改用其他方式登入。';
+    if (code && code !== 'auth/popup-closed-by-user' && code !== 'auth/cancelled-popup-request') console.warn('社群登入失敗：', code);
+    showToast(msg, msg === '已取消登入' ? 'orange' : 'red');
   }
 }
 

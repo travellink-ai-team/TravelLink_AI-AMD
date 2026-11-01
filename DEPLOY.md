@@ -108,8 +108,11 @@ http {
     # 注意：include 相對路徑是相對於 conf/ 目錄，寫 blocklist.conf（不是 conf/blocklist.conf）
     include       blocklist.conf;
 
-    # 限制請求速率（防掃描/DDoS）：每個 IP 每秒最多 10 個請求
+    # 限制請求速率（每個 IP）：
+    #   general：/api 與「非已知靜態類型」的路徑（掃描探測、未知路徑）— 嚴格 10r/s
+    #   static ：已知靜態檔類型 — 一次冷載入就要抓約 75 個同源檔，需要寬鬆的 burst
     limit_req_zone $binary_remote_addr zone=general:10m rate=10r/s;
+    limit_req_zone $binary_remote_addr zone=static:10m rate=30r/s;
 
     server {
         listen       80;
@@ -132,7 +135,9 @@ http {
         add_header Permissions-Policy "camera=(), microphone=(), geolocation=(self)" always;
 
         # 後端代理：Vertex(Gemini) 走 Node，金鑰不進瀏覽器（見 Step 4 方案 B）
-        location /api/ {
+        # ^~：避免下方靜態副檔名 regex 搶走 /api/*.json 之類的路徑
+        location ^~ /api/ {
+            limit_req zone=general burst=20 nodelay;   # Node 端另有各端點的 express-rate-limit（429）
             proxy_pass http://127.0.0.1:3001;
             proxy_http_version 1.1;
             proxy_set_header Host $host;
@@ -140,13 +145,31 @@ http {
             proxy_read_timeout 300s;      # AI 生成較久
         }
 
+        # Firebase Auth 處理頁掛在自有網域（authDomain，見 Step 4 方案 C-3 第 4 點）
+        # ^~ 優先於下面的 regex location（靜態快取、隱藏檔）
+        location ^~ /__/ {
+            proxy_pass https://project-720a680b-3ad1-40d1-b07.firebaseapp.com;
+            proxy_set_header Host project-720a680b-3ad1-40d1-b07.firebaseapp.com;
+            proxy_ssl_server_name on;
+            proxy_ssl_name project-720a680b-3ad1-40d1-b07.firebaseapp.com;
+            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        }
+
         # 靜態資源快取（CSS/圖片/字型；不含 .js — 見下方說明）
         location ~* \.(css|png|jpg|jpeg|gif|ico|svg|woff|woff2)$ {
+            limit_req zone=static burst=200 nodelay;
             expires 7d;
             add_header Cache-Control "public, immutable";
         }
 
-        # 主要路由：靜態檔案服務
+        # 每次都重新驗證的靜態檔（JS/HTML/資料檔，沿用 server 層 expires -1）
+        # burst 200：沒快取的首次載入（約 75 檔）加上連續重新整理都不會被回 503
+        location ~* \.(js|mjs|json|html|htm|map|txt|webp|avif|mp4|webm|ttf|otf|webmanifest)$ {
+            limit_req zone=static burst=200 nodelay;
+            try_files $uri =404;
+        }
+
+        # 主要路由：目錄、未知類型、掃描探測 — 維持嚴格限制
         location / {
             limit_req zone=general burst=20 nodelay;
             try_files $uri $uri/ =404;
@@ -158,6 +181,8 @@ http {
 > **為什麼不擋 `weather.env.js`？** 它是前端檔，網頁用 `<script src="weather.env.js">` 載入才能取得金鑰；擋掉會讓 app 壞掉。金鑰的正確防護見 Step 4——client-side 的金鑰一定會到瀏覽器，藏不住，靠 console 網域限制。
 >
 > **為什麼快取不含 `.js`？** 更新頻繁時把 `.js` 設 `immutable` 會讓瀏覽器抓到舊版；穩定後再自行加回。
+>
+> **為什麼靜態檔另設 `static` zone？**（2026-10-19）原本只有 `location /` 套 `general`（10r/s、burst 20），所有 `.js`/`.html` 都落在這裡；`ai-travel-planner-v8.html` 冷載入約 75 個同源檔，超過 burst 的部分被回 **503**，頁面整個壞掉（沒快取的首次造訪者也會中）。現在已知靜態類型改走 `static`（30r/s、burst 200），`/api/` 與其他路徑仍是 `general`。實測：同一 IP 同時抓 80 個靜態檔連打三輪全部 200；`/api/health` 60 連發約 30 個回 503；`/wp-login.php` 60 連發約 30 個回 503。代價是掃描器拿 `*.js/*.html` 檔名亂猜時上限放寬到 30r/s（只會拿到 404，成本很低）。
 >
 > **實測小坑（Windows）：**
 > - 用 PowerShell 寫 `nginx.conf` **不要用 `Set-Content -Encoding UTF8`**（會加 BOM，nginx 報 `unknown directive "﻿worker_processes"`）。改用 `[System.IO.File]::WriteAllText($path,$text,(New-Object System.Text.UTF8Encoding($false)))`。**也不要 `Get-Content` 讀回再改寫**（中文註解會亂碼、甚至吃掉換行把指令變成註解）。建議註解用英文，整份一次覆寫。
@@ -248,6 +273,13 @@ Firebase Web API key（`FIREBASE_CONFIG.apiKey`，`AIzaSyDp9...`）本質是識�
    - ⚠️ **裸 IP 的坑**：授權網域主要管 **OAuth 彈窗登入（Google 登入）**。有些專案**不接受裸 IP**、或 Google 彈窗從 IP 開會失敗。若遇到，**Email/密碼登入不受影響**照常可用；要讓 Google 登入也能用，就得用網域——**這也是建議做 DuckDNS 的原因**：改加 `travel-link-ai.duckdns.org` 到授權網域（配合 Step 5 的 SSL）。
 2. **Firestore 安全規則**：這是資料庫的真正門鎖。[firestore.rules](firestore.rules) 已限制「只有登入者/資料擁有者可讀寫」，**已於 2026-07 部署並實測通過**（匿名寫入、跨使用者讀取皆被擋；本人讀寫、訪客讀分享行程正常）。更新規則：Console → Firestore → 規則，或 `firebase deploy --only firestore:rules`。**別讓規則退回「任何人可讀寫」的預設。**
 3. （選配）Cloud Console → 憑證 → 這把 Browser key → 「API 限制」只勾 Firebase 用到的（Identity Toolkit API、Token Service API、Cloud Firestore API）。
+4. **Google 登入畫面顯示自有網域（authDomain，2026-10-11 起）**：預設 `authDomain` 是 `project-720a680b-3ad1-40d1-b07.firebaseapp.com`，Google 的「選擇帳戶」與同意畫面會顯示「繼續使用「…firebaseapp.com」」。改成顯示 `travel-link-ai.duckdns.org` 需要三處一起設定，**順序不能反**：
+   1. **nginx**：加上 Step 2 的 `location ^~ /__/` 區塊，把 Firebase Auth 處理頁代理到 firebaseapp.com，`nginx -t` 後 reload。驗證：`https://travel-link-ai.duckdns.org/__/auth/handler` 回 200。（`/__/firebase/init.json` 回 404 是正常的——直連 firebaseapp.com 也是 404，登入用不到。）
+   2. **Google Cloud Console → API 和服務 → 憑證**：打開**網站用的那個** OAuth 用戶端（Web client (auto created by Google Service)，用戶端 ID 開頭 `62101`），在「**已授權的重新導向 URI**」（不是上面的「已授權的 JavaScript 來源」）加入 `https://travel-link-ai.duckdns.org/__/auth/handler`，儲存後等幾分鐘生效。原本的 firebaseapp.com 那條保留。
+   3. **`app/weather.env.js`**（gitignored，換機器要手動改）：`FIREBASE_CONFIG.authDomain` 改成 `'travel-link-ai.duckdns.org'`。這個檔是 `no-cache`，改完重新整理即生效，不用跳版本號。
+   - 順序反了（先改 authDomain、URI 還沒加）會出現 `400 redirect_uri_mismatch`，**所有人都登不進去**；把 `authDomain` 改回 firebaseapp.com 即可立刻還原。錯誤頁的「錯誤詳細資料」會寫出實際送出的 `redirect_uri`，用來比對。
+   - 之後開放 Facebook 登入時，Meta App 的「有效的 OAuth 重新導向 URI」也要加同一條。
+   - 要顯示「TravelLinkAI」名稱與 logo（而非網域）是另一件事：Google Auth Platform → 品牌塑造，並通過品牌驗證（需在 Search Console 驗證網域）。
 
 #### C-4. TDX / CWA（低風險，選配）
 
@@ -379,7 +411,7 @@ Remove-Item "$s\WanderAI-nginx-autostart.vbs","$s\WanderAI-proxy-autostart.vbs" 
 | 1 | `root=app/` | 專案敏感檔（.claude / crawler / .git / *.md）天然不在網站根目錄，一律 404 |
 | 2 | IP 封鎖清單（`blocklist.conf`） | 拒絕已知惡意 IP |
 | 3 | 隱藏檔封鎖（`location ~ /\.`） | 點開頭檔案回 404（防呆） |
-| 4 | 速率限制（`limit_req`） | 每 IP 每秒最多 10 次，防掃描/DDoS |
+| 4 | 速率限制（`limit_req`） | `/api/` 與未知路徑：每 IP 10r/s（burst 20），防掃描/DDoS；已知靜態檔：30r/s（burst 200），避免冷載入約 75 檔時被 503 |
 | 5 | 隱藏版本號（`server_tokens off`） | 不洩漏 nginx 版本 |
 | 6 | 安全標頭 | 防點擊劫持 / MIME 嗅探 |
 | 7 | Body 大小限制（`client_max_body_size`） | 防大檔攻擊 |
@@ -458,6 +490,7 @@ Register-ScheduledTask -TaskName "Nginx Auto Block" -Action $action -Trigger $tr
 □ 9. Firebase 授權網域已加 IP、Firestore 規則已限制（方案 C-3）
 □ 10. Google Maps 地圖正常顯示、Firebase 登入正常、AI 行程生成正常
 □ 11. 手機（行動網路）可正常開啟
+□ 12. /__/auth/handler → 回 200；Google 登入畫面顯示 travel-link-ai.duckdns.org（方案 C-3 第 4 點）
 ```
 
 > 3~6 可本機快速驗證（nginx + 代理啟動後）：

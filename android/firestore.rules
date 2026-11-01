@@ -373,6 +373,8 @@ service cloud.firestore {
             'stops', 'status', 'currentStopIndex', 'startedAt', 'updatedAt',
             'lastEditedBy', 'lastEditedByName', 'titleVersion',
             'aiTitle', 'aiReply', 'appDays', 'transportMode', 'imageUrl', 'editingLocks', 'transitMins',
+            // 網頁多日行程每天一張插圖（imageDays：[{ day, imageUrl, imageStopBoxes }]），編輯者重畫也要能存回。
+            'imageDays',
             // 回顧短片：Directions 路線幾何快取（比照 transitMins，按站點簽章失效）。
             // owner 走 blocklist 本就可寫；加這個是讓 editor 也能填快取（部署後生效，非必要）。
             'routeGeometry'

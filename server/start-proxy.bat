@@ -20,5 +20,5 @@ if not errorlevel 1 (
 cd /d "%PROXY_DIR%"
 echo [%date% %time%] starting node server.js on %PORT%>> "%LOG_DIR%\autostart.log"
 REM Redirect stdout/stderr to files: without this a crash at boot leaves no trace.
-start "" /B node server.js >> "%LOG_DIR%\proxy.out.log" 2>> "%LOG_DIR%\proxy.err.log"
+start "" /B node --dns-result-order=ipv4first server.js >> "%LOG_DIR%\proxy.out.log" 2>> "%LOG_DIR%\proxy.err.log"
 endlocal
