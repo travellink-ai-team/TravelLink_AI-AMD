@@ -13,8 +13,9 @@ import org.json.JSONObject
  * 8 站只查到 1～2 站。這份資料其實是靜態的（UpdateTime 停在 2023-10-13），
  * 整縣抓一次、存 30 天就夠了——之後查停車場不再打 API。
  *
- * TDX 在臺東只登錄 4 座，另外合併網頁的縣府停車場清單（約 30 座，[parseLocal]）；
- * 候選挑選規則對齊網頁 resolveParkingCoord（1 公里、最多 4 個候選、步行 12 分鐘內）。
+ * TDX 在臺東只登錄 4 座，另外合併網頁的停車場清單（[parseLocal]）：縣府約 30 座＋
+ * OpenStreetMap 約 170 座。候選挑選規則對齊網頁 resolveParkingCoord（1 公里、最多 4 個候選、
+ * 步行 12 分鐘內）。
  */
 object ParkingDirectory {
 
@@ -66,8 +67,12 @@ object ParkingDirectory {
     }
 
     /**
-     * 網頁 parking-data.js 匯出的縣府停車場（assets/parking_taitung.json，
-     * scripts/export_parking_data.mjs 產生）。約 30 筆、含汽機車位；TDX 在臺東只有 4 筆。
+     * 網頁 parking-data.js 匯出的停車場（assets/parking_taitung.json，scripts/export_parking_data.mjs 產生）：
+     * 縣府約 30 筆（含汽機車位）＋ OSM 約 170 筆（多半只有座標、名稱就叫「停車場」）。
+     *
+     * id 用「來源＋名稱＋座標」：OSM 有 150 多筆同名「停車場」，只用名稱會撞在一起，
+     * 地圖依 id 去重時不同景點的停車場就只剩一個標點；縣府的火車站 A～D 區則是同一組座標，
+     * 只用座標也會撞。
      */
     fun parseLocal(json: String): List<ParkingLotInfo> {
         val arr = try { JSONObject(json).optJSONArray("lots") } catch (e: Exception) { null } ?: return emptyList()
@@ -75,20 +80,25 @@ object ParkingDirectory {
             val o = arr.optJSONObject(i) ?: return@mapNotNull null
             val name = o.optString("name").takeIf { it.isNotBlank() } ?: return@mapNotNull null
             if (!o.has("lat") || !o.has("lng")) return@mapNotNull null
+            val lat = o.getDouble("lat")
+            val lng = o.getDouble("lng")
+            val source = o.optString("source", "taitung_gov_parking")
             ParkingLotInfo(
-                id = "gov:$name",
+                id = "$source:$name@%.6f,%.6f".format(java.util.Locale.ROOT, lat, lng),
                 name = name,
-                position = LatLng(o.getDouble("lat"), o.getDouble("lng")),
+                position = LatLng(lat, lng),
                 totalSpaces = o.optInt("smallSpots", 0),
                 motoSpots = o.optInt("motoSpots", 0),
-                source = o.optString("source", "taitung_gov_parking")
+                source = source,
+                feeNote = o.optString("notes", "")
             )
         }
     }
 
     /**
-     * 合併兩份清單：[primary] 全留，[secondary] 裡與 primary 同一座（60m 內）的略過。
-     * 縣府資料放 primary（網頁也是先查縣府、再查 TDX）；TDX 那筆若有車位數而縣府沒有就補上。
+     * 合併兩份清單：[primary] 全留，[secondary] 裡與 primary 同一座（60m 內或名稱相同）的略過，
+     * 但用它補上 primary 缺的資訊（車位數、收費、具名名稱）。
+     * 優先順序：縣府 → OSM → TDX（網頁也是先查本地清單、再查 TDX）。
      */
     fun merge(primary: List<ParkingLotInfo>, secondary: List<ParkingLotInfo>): List<ParkingLotInfo> {
         val merged = primary.toMutableList()
@@ -96,11 +106,23 @@ object ParkingDirectory {
             val i = merged.indexOfFirst {
                 dist(it, s.position.latitude, s.position.longitude) <= SAME_LOT_M || sameName(it.name, s.name)
             }
-            if (i < 0) merged += s
-            else if (merged[i].totalSpaces == 0 && s.totalSpaces > 0) merged[i] = merged[i].copy(totalSpaces = s.totalSpaces)
+            if (i < 0) { merged += s; return@forEach }
+            val p = merged[i]
+            merged[i] = p.copy(
+                name = if (isGenericName(p.name) && !isGenericName(s.name)) s.name else p.name,
+                totalSpaces = p.totalSpaces.takeIf { it > 0 } ?: s.totalSpaces,
+                motoSpots = p.motoSpots.takeIf { it > 0 } ?: s.motoSpots,
+                feeNote = p.feeNote.ifBlank { s.feeNote }
+            )
         }
         return merged
     }
+
+    // 只是類別、不是專有名稱的（同網頁 PARKING_GENERIC_NAME_RE，再加 OSM 常見的車種寫法）。
+    // 這種名稱不能拿來比對同一座——OSM 有 150 多筆都叫「停車場」，會被當成同一座全部吃掉。
+    private val GENERIC_NAME = Regex("""^\s*(停車場|停車位|公有停車場|小型車停車場|小客車停車場|parking)\s*$""", RegexOption.IGNORE_CASE)
+
+    fun isGenericName(name: String) = GENERIC_NAME.matches(name)
 
     /**
      * 名稱比對：兩份資料的座標可能差很遠（實測長濱鄉一號／壹號差 600m、火車站 A 區差 147m 以上），
@@ -113,19 +135,24 @@ object ParkingDirectory {
         .replace(Regex("^台東(縣|市)?"), "")
         .replace(Regex("""[\s（）()]"""), "")
 
-    private fun sameName(a: String, b: String) = normName(a).let { it.isNotEmpty() && it == normName(b) }
+    private fun sameName(a: String, b: String) =
+        !isGenericName(a) && !isGenericName(b) && normName(a).let { it.isNotEmpty() && it == normName(b) }
 
     // 觀光客停不了的：月租（含「月租型」）、只給住客的（「供宿客」）。「供遊客」的照留。
-    private val RESTRICTED = Regex("月租|宿客")
+    // OSM 另外有員工停車場、垃圾車車庫、停車棚（機車／腳踏車）、大型車（遊覽車）停車場。
+    private val RESTRICTED = Regex("月租|宿客|員工|車庫|停車棚|大型車")
 
     fun isRestricted(name: String) = RESTRICTED.containsMatchIn(name)
 
     /**
      * 合併後再排除觀光客停不了的停車場。一定要「先合併、再排除」：縣府的「長濱鄉一號停車場(月租)」
      * 在 TDX 叫「長濱鄉壹號停車場」、名稱沒標月租——先排除的話 TDX 那筆會補進來。
+     * 本地清單裡縣府優先於 OSM：縣府那筆有車位數與正式名稱，OSM 同一座只用來補收費資訊。
      */
-    fun usable(local: List<ParkingLotInfo>, tdx: List<ParkingLotInfo>): List<ParkingLotInfo> =
-        merge(local, tdx).filterNot { isRestricted(it.name) }
+    fun usable(local: List<ParkingLotInfo>, tdx: List<ParkingLotInfo>): List<ParkingLotInfo> {
+        val (osm, gov) = local.partition { it.source == "osm" }
+        return merge(merge(gov, osm), tdx).filterNot { isRestricted(it.name) }
+    }
 
     /** 半徑內由近到遠的候選（最多 [CANDIDATE_LIMIT] 個），交給呼叫端逐一驗證步行時間 */
     fun candidates(

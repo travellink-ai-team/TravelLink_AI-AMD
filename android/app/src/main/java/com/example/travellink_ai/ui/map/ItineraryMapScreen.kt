@@ -21,7 +21,7 @@ import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -31,6 +31,7 @@ import androidx.compose.material.icons.filled.MyLocation
 import androidx.compose.material.icons.filled.Navigation
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -77,22 +78,43 @@ private val Border      = DesignTokens.Border
 // 僅在尚未取得 GPS fix（權限被拒 / 模擬器未設座標）時，作為「回到定位」按鈕的相機目標
 private val FallbackLocation = LatLng(22.7059, 121.0557)
 
-// ── 路段分色色板（每段不同顏色）────────────────────────────
-private val SegmentColors = listOf(
-    Color(0xFF2A6B5E),  // 綠（accent）
-    Color(0xFFF07B3F),  // 橘
-    Color(0xFF3B82F6),  // 藍
-    Color(0xFF8B5CF6),  // 紫
-    Color(0xFFEC4899),  // 粉
-    Color(0xFFEF4444),  // 紅
-    Color(0xFFEAB308),  // 黃
-    Color(0xFF06B6D4),  // 青
-    Color(0xFF84CC16),  // 萊姆綠
-    Color(0xFFF472B6),  // 玫瑰
+// ── 路線顏色依交通方式（對齊網頁 ROUTE_MODE_COLORS）：過去每段一種顏色輪替，段數一多很花 ──
+private val ModeCarColor     = Color(0xFF1D4ED8)  // 開車、計程車
+private val ModeScooterColor = Color(0xFFEA580C)  // 機車
+private val ModeWalkColor    = Color(0xFFF97316)  // 步行
+/** 走過的路段、正在走那段已走過的部分（同網頁 ROUTE_COMPLETED_COLOR） */
+private val RouteDoneColor   = Color(0xFF94A3B8)
+/** 下一站模式下其他路段：比走過的更淡，只當背景 */
+private val RouteDimColor    = Color(0xFFCBD5E1)
+
+private fun modeColor(mode: String) = when (mode) {
+    "walking" -> ModeWalkColor
+    "scooter", "motorcycle" -> ModeScooterColor
+    else -> ModeCarColor
+}
+
+private fun modeMeta(mode: String) = when (mode) {
+    "walking" -> "🚶" to "步行"
+    "taxi" -> "🚕" to "計程車"
+    "scooter", "motorcycle" -> "🛵" to "機車"
+    else -> "🚗" to "開車"
+}
+
+/** 路段（stops[idx] → stops[idx+1]）在下方面板與地圖標籤用的資料 */
+private class RouteSegmentInfo(
+    val idx: Int,
+    val from: Stop,
+    val to: Stop,
+    val mode: String,
+    val mins: Long?,
+    val km: Double?,
+    /** 出發時間（上一站排定時間＋停留） */
+    val departText: String?
 )
 
-// ── 已走過的路段（終點站已打卡／跳過）統一淡灰，跟未走的分色區隔開 ──
-private val DoneSegmentColor = Color(0xFFAFA89E)
+private fun pathKm(points: List<LatLng>): Double? =
+    if (points.size < 2) null
+    else points.zipWithNext().sumOf { (a, b) -> com.example.travellink_ai.ui.trip.haversineMeters(a, b) } / 1000.0
 
 /** 停車場→景點步行距離（公尺，haversine 直線估算，不發 API） */
 private fun walkDistanceMeters(a: LatLng, b: LatLng): Int {
@@ -109,7 +131,7 @@ private fun walkDistanceMeters(a: LatLng, b: LatLng): Int {
  * 從完整一週營業時間字串中，只取出行程日期當天的時段。
  * 若 businessHours 不含星期前綴（即已是單日格式），直接回傳原字串。
  */
-private fun filterBusinessHoursForDate(businessHours: String, tripDateStr: String): String {
+internal fun filterBusinessHoursForDate(businessHours: String, tripDateStr: String): String {
     if (!businessHours.contains("星期")) return businessHours
     return try {
         val sdf = java.text.SimpleDateFormat("yyyy/MM/dd", java.util.Locale.getDefault())
@@ -145,12 +167,13 @@ fun ItineraryMapScreen(
     parkingMarker: LatLng? = null,             // 我的停車點（行程進行中記錄）
     parkingNote: String = "",                  // 停車點備註（顯示在 marker snippet）
     focusParking: Boolean = false,             // 進場相機聚焦停車點（停車按鈕導入）
+    focusStopId: String? = null,               // 進場聚焦這一站並打開景點卡（互動插圖「在地圖上看」）
     onConfirmParking: ((LatLng, String) -> Unit)? = null, // 非 null＝停車編輯模式（可拖曳+備註+確認）
     onBack: (() -> Unit)? = null,              // 獨立畫面時的返回；null＝內嵌於預覽頁
     progress: com.example.travellink_ai.ui.trip.TripProgress = com.example.travellink_ai.ui.trip.TripProgress(), // 行程進行中的打卡狀態：已完成路段/景點淡化顯示
     // 🧪 Debug-only 假 GPS（demo 用）：開著時地圖上的「目前位置」改吃模擬座標，不吃真實 GPS
     demoModeOn: Boolean = false,
-    simulatedLocation: LatLng? = null
+    simulatedLocation: State<LatLng?>? = null
 ) {
     val stopLocations  by viewModel.stopLocations.collectAsState()
     val roadSegments   by viewModel.roadSegments.collectAsState()
@@ -160,6 +183,8 @@ fun ItineraryMapScreen(
     val parkingLots    by viewModel.parkingLots.collectAsState()
     val walkingLegs    by viewModel.walkingLegs.collectAsState()
     val stopToilets    by viewModel.stopToilets.collectAsState()
+    val transitTimes   by viewModel.transitTimes.collectAsState()
+    val segmentModes   by viewModel.segmentModes.collectAsState()
 
     // 🚻 附近公廁顯示開關（開啟時才向 ViewModel 要資料，未載入的站才會發查詢）
     var showToilets by remember { mutableStateOf(initialShowToilets) }
@@ -179,18 +204,51 @@ fun ItineraryMapScreen(
     }
 
     var selectedStop    by remember { mutableStateOf<Stop?>(null) }
+    // 聚焦的那一段路（roadSegments 的索引；null＝全部路線）。與網頁 activeRouteStage 相同：
+    // 點某一段只顯示那一段與它頭尾兩站，再點一次恢復全部；點景點聚焦「從這站出發」的那一段
     var topSegmentIdx   by remember { mutableStateOf<Int?>(null) }
 
     val cameraPositionState = rememberCameraPositionState()
     val coroutineScope = rememberCoroutineScope()
     val density = LocalDensity.current
+    /** 第 i 站要聚焦哪一段：從這站出發的那段，沒有（最後一站）就是抵達這站的那段 */
+    fun segmentForStop(i: Int): Int? = when {
+        i in roadSegments.indices && roadSegments[i].isNotEmpty() -> i
+        i - 1 in roadSegments.indices && roadSegments[i - 1].isNotEmpty() -> i - 1
+        else -> null
+    }
+    /** 鏡頭框住整段路 */
+    fun fitSegment(idx: Int) {
+        val points = roadSegments.getOrNull(idx)?.takeIf { it.isNotEmpty() } ?: return
+        val builder = com.google.android.gms.maps.model.LatLngBounds.builder()
+        points.forEach { builder.include(it) }
+        coroutineScope.launch {
+            try {
+                cameraPositionState.animate(CameraUpdateFactory.newLatLngBounds(builder.build(), 160))
+            } catch (e: Exception) {
+                cameraPositionState.animate(CameraUpdateFactory.newLatLngZoom(points[points.size / 2], 14f))
+            }
+        }
+    }
+    /** 聚焦第 i 站所在的那一段（點景點標記、點下方行程清單時） */
+    fun focusStop(i: Int) {
+        val seg = segmentForStop(i) ?: return
+        topSegmentIdx = seg
+        fitSegment(seg)
+    }
 
     // ── C3：GPS 即時定位 ──────────────────────────────────
     val context = LocalContext.current
-    var realLocation      by remember { mutableStateOf<LatLng?>(null) }
-    var locationAccuracy by remember { mutableStateOf(0f) }  // 公尺，畫準確度光環用
+    // 定位存成 State 物件、只在用到的那一層讀：過去在這裡直接讀，GPS 每 2～5 秒一更新，
+    // 整張地圖（所有標記、路線）連下方行程清單都跟著重建，是地圖頁卡頓的主因
+    val realLocation = remember { mutableStateOf<LatLng?>(null) }
+    val locationAccuracy = remember { mutableFloatStateOf(0f) }  // 公尺，畫準確度光環用
     // demo 開著時整顆藍點改吃模擬器座標；真實 GPS 那份 DisposableEffect 照常跑、只是畫面不採用
-    val userLocation = if (com.example.travellink_ai.BuildConfig.DEBUG && demoModeOn) simulatedLocation else realLocation
+    val userLocation: State<LatLng?> = remember(demoModeOn, simulatedLocation) {
+        derivedStateOf {
+            if (com.example.travellink_ai.BuildConfig.DEBUG && demoModeOn) simulatedLocation?.value else realLocation.value
+        }
+    }
     var hasLocationPermission by remember {
         mutableStateOf(
             ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED ||
@@ -212,27 +270,27 @@ fun ItineraryMapScreen(
         }
     }
 
-    // 權限就緒後開始接收定位更新（5 秒一次），離開地圖時停止
+    // 權限就緒後開始接收定位更新（5 秒一次；過去最快 2 秒一次，看地圖用不到那麼密），離開地圖時停止
     DisposableEffect(hasLocationPermission) {
         if (!hasLocationPermission) return@DisposableEffect onDispose { }
         val fusedClient = LocationServices.getFusedLocationProviderClient(context)
         val request = LocationRequest.Builder(Priority.PRIORITY_HIGH_ACCURACY, 5000L)
-            .setMinUpdateIntervalMillis(2000L)
+            .setMinUpdateIntervalMillis(4000L)
             .build()
         val callback = object : LocationCallback() {
             override fun onLocationResult(result: LocationResult) {
                 result.lastLocation?.let {
-                    realLocation = LatLng(it.latitude, it.longitude)
-                    locationAccuracy = it.accuracy
+                    realLocation.value = LatLng(it.latitude, it.longitude)
+                    locationAccuracy.floatValue = it.accuracy
                 }
             }
         }
         try {
             // 先取最後已知位置讓藍點立即出現，再開始持續更新
             fusedClient.lastLocation.addOnSuccessListener { loc ->
-                if (loc != null && realLocation == null) {
-                    realLocation = LatLng(loc.latitude, loc.longitude)
-                    locationAccuracy = loc.accuracy
+                if (loc != null && realLocation.value == null) {
+                    realLocation.value = LatLng(loc.latitude, loc.longitude)
+                    locationAccuracy.floatValue = loc.accuracy
                 }
             }
             fusedClient.requestLocationUpdates(request, callback, Looper.getMainLooper())
@@ -249,9 +307,64 @@ fun ItineraryMapScreen(
         )
     )
 
+    // ── 行程進行中：預設「下一站模式」（只強調目前這一段），可切回「今天全部」──
+    var nextOnly by rememberSaveable { mutableStateOf(true) }
+    val tripFocus = remember(progress, stops, transitTimes, stopLocations, nextOnly, tripDate) {
+        if (!progress.isOngoing) null else {
+            val derived = com.example.travellink_ai.ui.trip.deriveTripState(stops, progress, transitTimes)
+            fun coordOf(st: Stop?) = st?.let { it.lat?.let { la -> it.lng?.let { lo -> LatLng(la, lo) } } ?: stopLocations[it.name] }
+            // 多日行程兩天之間：沒有下一站，看今天的路線、鏡頭停在今天最後一站（住宿）
+            val overnight = com.example.travellink_ai.ui.trip.overnightState(
+                stops, progress, derived, com.example.travellink_ai.debug.DemoClock.now(), tripDate)
+            if (overnight != null) return@remember TripFocus(
+                day = overnight.finishedDay, nextId = null, nextName = null, currentLeg = IntRange.EMPTY,
+                nextOnly = nextOnly,
+                nextLatLng = coordOf(derived.here?.stop ?: overnight.lodging ?: stops.lastOrNull { it.dayIndex == overnight.finishedDay }),
+                fromLatLng = null
+            )
+            // 下一站：還沒打卡的景點；景點都完成了就是回程車站
+            val next = derived.currentStop ?: stops.lastOrNull()?.takeIf { it.isStation && derived.allDone }
+            val nextIdx = next?.let { n -> stops.indexOfFirst { it.stopId == n.stopId } } ?: -1
+            // 這一段的起點：下一站之前最後一個沒被跳過的站（剛打卡的站、出發車站、昨晚的住宿）
+            val fromIdx = if (nextIdx > 0) (nextIdx - 1 downTo 0).firstOrNull { stops[it].stopId !in progress.skips } ?: -1 else -1
+            TripFocus(
+                day = next?.dayIndex ?: derived.currentDayIndex,
+                nextId = next?.stopId,
+                nextName = next?.name,
+                currentLeg = if (fromIdx >= 0) fromIdx until nextIdx else IntRange.EMPTY,
+                nextOnly = nextOnly,
+                nextLatLng = coordOf(next),
+                fromLatLng = coordOf(stops.getOrNull(fromIdx))
+            )
+        }
+    }
+
     LaunchedEffect(cameraTarget) {
+        // 行程進行中由下一站模式自己決定鏡頭（框住「我」和下一站），不要縮回第一站
+        if (tripFocus != null) return@LaunchedEffect
         cameraTarget?.let {
             cameraPositionState.animate(CameraUpdateFactory.newLatLngZoom(it, 13f))
+        }
+    }
+
+    // 下一站模式：鏡頭框住「我」（沒有定位就用上一站）和下一站；今天全部：框住今天所有站。
+    // 只在下一站換了或切換模式時移動，不跟著每次 GPS 更新跳
+    LaunchedEffect(tripFocus?.nextId, tripFocus?.nextOnly, tripFocus?.nextLatLng) {
+        val f = tripFocus ?: return@LaunchedEffect
+        if (focusStopId != null || focusParking) return@LaunchedEffect
+        val pts = if (f.nextOnly) listOfNotNull(f.nextLatLng, userLocation.value ?: f.fromLatLng)
+            else stops.filter { it.dayIndex == f.day }.mapNotNull { stopLocations[it.name] }
+        if (pts.isEmpty()) return@LaunchedEffect
+        try {
+            if (pts.size == 1) cameraPositionState.animate(CameraUpdateFactory.newLatLngZoom(pts[0], 15f))
+            else {
+                val b = com.google.android.gms.maps.model.LatLngBounds.builder()
+                pts.forEach { b.include(it) }
+                cameraPositionState.animate(CameraUpdateFactory.newLatLngBounds(b.build(), 180))
+            }
+        } catch (e: Exception) {
+            // 地圖還沒排版好時 newLatLngBounds 會丟例外：退回以下一站為中心
+            (f.nextLatLng ?: pts[0]).let { cameraPositionState.animate(CameraUpdateFactory.newLatLngZoom(it, 14f)) }
         }
     }
 
@@ -262,6 +375,15 @@ fun ItineraryMapScreen(
         }
     }
 
+    // 互動插圖「在地圖上看」：在 cameraTarget 之後聚焦該站並打開景點卡
+    LaunchedEffect(focusStopId, stopLocations[stops.firstOrNull { it.stopId == focusStopId }?.name]) {
+        val stop = stops.firstOrNull { it.stopId == focusStopId } ?: return@LaunchedEffect
+        selectedStop = stop
+        val latLng = stop.lat?.let { la -> stop.lng?.let { lo -> LatLng(la, lo) } } ?: stopLocations[stop.name]
+            ?: return@LaunchedEffect
+        cameraPositionState.animate(CameraUpdateFactory.newLatLngZoom(latLng, 15f))
+    }
+
     // 加入者端：地圖開啟時若路線還未計算（roadSegments 為空但 stops 有內容），主動補算
     LaunchedEffect(stops.size) {
         if (roadSegments.isEmpty() && stops.size >= 2) {
@@ -269,22 +391,55 @@ fun ItineraryMapScreen(
         }
     }
 
+    // ── 下方面板：路段清單（對齊網頁手機版路線面板）。收合只顯示一段摘要，往上拉看全部 ──
+    val segmentInfos = remember(stops, roadSegments, transitTimes, segmentModes, transportMode) {
+        (0 until (stops.size - 1).coerceAtLeast(0)).map { i ->
+            val from = stops[i]; val to = stops[i + 1]
+            val depart = com.example.travellink_ai.ui.trip.parseClockToMinutes(from.time)
+                ?.let { com.example.travellink_ai.ui.trip.fmtClock(it + if (from.isStation && i == 0) 0 else from.duration.toInt()) }
+            RouteSegmentInfo(
+                idx = i, from = from, to = to,
+                mode = segmentModes.getOrNull(i) ?: if (from.walkNext) "walking" else transportMode,
+                mins = transitTimes.getOrNull(i),
+                km = roadSegments.getOrNull(i)?.let { pathKm(it) },
+                departText = depart
+            )
+        }
+    }
+    val dayCount = remember(stops) { stops.map { it.dayIndex }.distinct().size }
+    // 面板看哪一天（0＝全部）：行程進行中預設今天，規劃中預設全部
+    var sheetDay by rememberSaveable { mutableIntStateOf(-1) }
+    val shownDay = if (sheetDay >= 0) sheetDay else (tripFocus?.day ?: 0)
+    val shownSegments = segmentInfos.filter { shownDay == 0 || it.to.dayIndex == shownDay }
+    fun segmentStatus(seg: RouteSegmentInfo): String? = when {
+        tripFocus == null -> null
+        seg.idx in tripFocus.currentLeg -> "進行中"
+        !seg.to.isStation && progress.isDone(seg.to.stopId) -> "已完成"
+        else -> null
+    }
+    // 收合時的摘要：聚焦的那段 → 行程進行中目前這段 → 這天第一段
+    val summarySeg = topSegmentIdx?.let { segmentInfos.getOrNull(it) }
+        ?: tripFocus?.currentLeg?.lastOrNull()?.let { segmentInfos.getOrNull(it) }
+        ?: shownSegments.firstOrNull()
+
     BottomSheetScaffold(
         scaffoldState = sheetState,
-        sheetPeekHeight = 100.dp,
+        sheetPeekHeight = 92.dp,
         sheetShape = RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp),
         sheetContainerColor = Surface,
         sheetShadowElevation = 16.dp,
         containerColor = Color.Transparent,
         sheetDragHandle = {
-            // 對應網頁 .driver-panel-drag-handle
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .background(
-                        Brush.verticalGradient(listOf(AccentLight.copy(alpha = 0.6f), Surface))
-                    )
-                    .padding(horizontal = 18.dp, vertical = 12.dp)
+                    .clickable {
+                        coroutineScope.launch {
+                            if (sheetState.bottomSheetState.currentValue == SheetValue.Expanded) sheetState.bottomSheetState.partialExpand()
+                            else sheetState.bottomSheetState.expand()
+                        }
+                    }
+                    .padding(horizontal = 18.dp, vertical = 10.dp)
             ) {
                 Box(
                     modifier = Modifier
@@ -294,58 +449,68 @@ fun ItineraryMapScreen(
                         .align(Alignment.CenterHorizontally)
                 )
                 Spacer(Modifier.height(10.dp))
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.SpaceBetween
-                ) {
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text(
-                            text = itinerary?.let { it.title.ifBlank { it.aiTitle } } ?: "行程地圖",
-                            fontSize = 16.sp, fontWeight = FontWeight.ExtraBold, color = Ink,
-                            maxLines = 1, overflow = TextOverflow.Ellipsis
-                        )
-                        // 景點數不含出發/回程車站
-                        Text(
-                            text = "${stops.count { !it.isStation }} 個景點・${itinerary?.days ?: ""}",
-                            fontSize = 13.sp, color = Ink2
-                        )
-                    }
-                    Surface(shape = RoundedCornerShape(999.dp), color = AccentLight) {
-                        Text(
-                            text = "${stops.count { !it.isStation }} 站",
-                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
-                            fontSize = 13.sp, fontWeight = FontWeight.ExtraBold, color = AccentDark
-                        )
-                    }
+                if (summarySeg == null) {
+                    Text(itinerary?.let { it.title.ifBlank { it.aiTitle } } ?: "行程地圖",
+                        fontSize = 16.sp, fontWeight = FontWeight.ExtraBold, color = Ink, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                } else {
+                    val (icon, _) = modeMeta(summarySeg.mode)
+                    Text(
+                        "第 ${summarySeg.idx + 1} 段 · ${summarySeg.from.name} → ${summarySeg.to.name}",
+                        fontSize = 15.sp, fontWeight = FontWeight.ExtraBold, color = Ink, maxLines = 1, overflow = TextOverflow.Ellipsis
+                    )
+                    Spacer(Modifier.height(2.dp))
+                    Text(
+                        listOfNotNull(
+                            summarySeg.mins?.let { "$icon $it 分" } ?: icon,
+                            summarySeg.km?.let { "%.1f km".format(it) },
+                            segmentStatus(summarySeg),
+                            "${if (shownDay > 0 && dayCount > 1) "第 $shownDay 天 · " else ""}共 ${shownSegments.size} 段 ⌃"
+                        ).joinToString(" · "),
+                        fontSize = 13.sp, color = Ink2, maxLines = 1, overflow = TextOverflow.Ellipsis
+                    )
                 }
             }
         },
         sheetContent = {
-            LazyColumn(
-                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
-                contentPadding = PaddingValues(bottom = 32.dp)
-            ) {
-                itemsIndexed(stops) { index, stop ->
-                    TimelineRow(
-                        stop = stop,
-                        index = index,
-                        isLast = index == stops.lastIndex,
-                        tripDate = tripDate,
-                        transportMode = transportMode,
-                        onClick = {
-                            selectedStop = stop
-                            coroutineScope.launch {
-                                // 收合資訊欄回底部，讓地圖與景點卡露出
-                                sheetState.bottomSheetState.partialExpand()
-                                stopLocations[stop.name]?.let { latLng ->
-                                    cameraPositionState.animate(
-                                        CameraUpdateFactory.newLatLngZoom(latLng, 15f)
-                                    )
-                                }
+            // 往上拉最多約三段的高度（不拉到頂，地圖還看得到）；超過的在清單裡捲動
+            Column(Modifier.fillMaxWidth().heightIn(max = if (dayCount > 1) 360.dp else 316.dp).padding(horizontal = 16.dp)) {
+                // 多日行程：面板裡直接切天（對齊網頁「看哪一天」）
+                if (dayCount > 1) {
+                    Row(
+                        Modifier.horizontalScroll(rememberScrollState()).padding(bottom = 8.dp),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        ((1..dayCount).toList() + 0).forEach { d ->
+                            val selected = d == shownDay
+                            Surface(
+                                shape = RoundedCornerShape(999.dp),
+                                color = if (selected) Accent else Surface2,
+                                modifier = Modifier.clip(RoundedCornerShape(999.dp)).clickable { sheetDay = d; topSegmentIdx = null }
+                            ) {
+                                Text(if (d == 0) "全部" else "第 $d 天",
+                                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+                                    fontSize = 13.sp, fontWeight = FontWeight.Bold, color = if (selected) Color.White else Ink2)
                             }
                         }
-                    )
+                    }
+                }
+                LazyColumn(contentPadding = PaddingValues(bottom = 32.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    if (shownSegments.isEmpty()) item {
+                        Text("這一天沒有移動路段", fontSize = 14.sp, color = Ink2, modifier = Modifier.padding(vertical = 12.dp))
+                    }
+                    items(shownSegments.size) { k ->
+                        val seg = shownSegments[k]
+                        RouteSegmentRow(
+                            seg = seg,
+                            status = segmentStatus(seg),
+                            selected = seg.idx == topSegmentIdx,
+                            onClick = {
+                                if (topSegmentIdx == seg.idx) topSegmentIdx = null
+                                else { topSegmentIdx = seg.idx; fitSegment(seg.idx) }
+                                coroutineScope.launch { sheetState.bottomSheetState.partialExpand() }
+                            }
+                        )
+                    }
                 }
             }
         }
@@ -357,12 +522,14 @@ fun ItineraryMapScreen(
             // 動態追蹤 panel 當前高度（px → dp），讓按鈕跟著 panel 一起移動
             val panelHeightDp by remember {
                 derivedStateOf {
+                    // 面板剛排版或拖曳超出時 offset 可能大於螢幕高度，算出負數會讓下面的 padding 直接閃退
+                    // （2026-10-19 Crash：Padding must be non-negative）
                     try {
                         val offsetPx = sheetState.bottomSheetState.requireOffset()
                         with(density) { (screenHeightPx - offsetPx).toDp() }
                     } catch (e: Exception) {
                         paddingValues.calculateBottomPadding()
-                    }
+                    }.coerceAtLeast(0.dp)
                 }
             }
 
@@ -389,28 +556,20 @@ fun ItineraryMapScreen(
             }
 
             // ── 全螢幕地圖 ────────────────────────────────────
+            // 地圖底圖先出來，載入完成後才加路線與標記：過去兩件事擠在同一個畫面裡，第一次進地圖掉幀 0.8 秒
+            var mapLoaded by remember { mutableStateOf(false) }
+            // 網路慢或離線時底圖可能很久都載不完：最多等 1.5 秒就照樣畫路線
+            LaunchedEffect(Unit) { kotlinx.coroutines.delay(1_500L); mapLoaded = true }
             GoogleMap(
                 modifier = Modifier.fillMaxSize(),
                 cameraPositionState = cameraPositionState,
                 properties = MapProperties(isMyLocationEnabled = false),
-                uiSettings = MapUiSettings(zoomControlsEnabled = false)
+                uiSettings = MapUiSettings(zoomControlsEnabled = false),
+                onMapLoaded = { mapLoaded = true }
             ) {
-                // 使用者即時定位（C3）：藍色標點 + 準確度光環，取得 GPS fix 後才顯示
-                userLocation?.let { loc ->
-                    Circle(
-                        center = loc,
-                        radius = locationAccuracy.coerceAtLeast(30f).toDouble(),
-                        fillColor = Color(0x333B82F6),
-                        strokeColor = Color(0xFF3B82F6),
-                        strokeWidth = 3f
-                    )
-                    Marker(
-                        state = MarkerState(position = loc),
-                        title = "目前位置",
-                        icon = com.google.android.gms.maps.model.BitmapDescriptorFactory
-                            .defaultMarker(com.google.android.gms.maps.model.BitmapDescriptorFactory.HUE_AZURE)
-                    )
-                }
+                if (!mapLoaded) return@GoogleMap
+                // 使用者即時定位（C3）：獨立一層，定位更新只重畫這一層（藍點＋準確度光環）
+                UserLocationLayer(userLocation, locationAccuracy, density.density)
 
                 // 🚗 我的停車點（行程進行中記錄；橘色與 TDX 停車場藍色區隔）
                 // 編輯模式（onConfirmParking != null）可拖曳微調位置
@@ -425,22 +584,48 @@ fun ItineraryMapScreen(
                     )
                 }
 
-                // 景點標點：已打卡／已跳過的站淡化，視覺上跟時間軸頁的「已完成」呼應
+                // 景點標點：已打卡／已跳過的站淡化。行程進行中只顯示今天的站，改用帶編號的小圓點（下一站大而醒目）。
+                // MarkerState 用 remember 記住：過去每次重畫都 new 一個，等於所有標記重新設定一次
                 stops.forEachIndexed { index, stop ->
                     val latLng = stopLocations[stop.name] ?: return@forEachIndexed
+                    val focusSeg = topSegmentIdx
+                    if (focusSeg != null) {
+                        if (index != focusSeg && index != focusSeg + 1) return@forEachIndexed
+                    } else if (tripFocus != null && stop.dayIndex != tripFocus.day) return@forEachIndexed
                     val isStopDone = !stop.isStation && progress.isDone(stop.stopId)
-                    Marker(
-                        state = MarkerState(position = latLng),
-                        title = "${index + 1}. ${stop.name}",
-                        snippet = stop.desc,
-                        alpha = if (isStopDone) 0.45f else 1f,
-                        onClick = { selectedStop = stop; true }
-                    )
+                    val isNext = stop.stopId == tripFocus?.nextId
+                    key(stop.stopId) {
+                        val state = remember(latLng) { MarkerState(position = latLng) }
+                        Marker(
+                            state = state,
+                            title = "${index + 1}. ${stop.name}",
+                            snippet = stop.desc,
+                            icon = tripFocus?.let {
+                                MapMarkerIcons.stop("${index + 1}", when {
+                                    isNext -> MapMarkerIcons.Style.NEXT
+                                    isStopDone -> MapMarkerIcons.Style.DONE
+                                    else -> MapMarkerIcons.Style.UPCOMING
+                                }, density.density)
+                            },
+                            anchor = if (tripFocus != null) androidx.compose.ui.geometry.Offset(0.5f, 0.5f)
+                                else androidx.compose.ui.geometry.Offset(0.5f, 1f),
+                            alpha = if (isStopDone) 0.45f else 1f,
+                            zIndex = if (isNext) 2f else 1f,
+                            onClick = { selectedStop = stop; focusStop(index); true }
+                        )
+                    }
                 }
 
-                // 停車場標點（僅 car 模式），snippet 附「步行約 X 公尺至景點」
+                // 聚焦某一段時，停車場、廁所、步行虛線只留那段頭尾兩站的
+                val focusedNames: Set<String>? = topSegmentIdx?.let { seg ->
+                    setOfNotNull(stops.getOrNull(seg)?.name, stops.getOrNull(seg + 1)?.name)
+                }
+
+                // 停車場標點（僅 car 模式），snippet 附「步行約 X 公尺至景點」。下一站模式只顯示下一站的
                 if (transportMode == "car") {
-                    parkingLots.entries.distinctBy { it.value.id }.forEach { (stopName, lot) ->
+                    parkingLots.entries
+                        .filter { e -> focusedNames?.let { e.key in it } ?: (tripFocus == null || !tripFocus.nextOnly || e.key == tripFocus.nextName) }
+                        .distinctBy { it.value.id }.forEach { (stopName, lot) ->
                         // 有步行分鐘（Directions 實測或推估）就用分鐘，對齊網頁「步行約 N 分鐘」
                         val walkText = lot.walkMins?.let { m ->
                             "・步行約 $m 分鐘${if (lot.walkEstimated) "（估計）" else ""}至 $stopName"
@@ -449,36 +634,51 @@ fun ItineraryMapScreen(
                         } ?: ""
                         val spacesText = listOfNotNull(
                             lot.totalSpaces.takeIf { it > 0 }?.let { "汽車 $it 格" },
-                            lot.motoSpots.takeIf { it > 0 }?.let { "機車 $it 格" }
+                            lot.motoSpots.takeIf { it > 0 }?.let { "機車 $it 格" },
+                            lot.feeNote.takeIf { it.isNotBlank() }
                         ).joinToString("、")
-                        Marker(
-                            state = MarkerState(position = lot.position),
-                            title = "🅿 ${lot.name}",
-                            snippet = (spacesText + walkText).ifBlank { null },
-                            icon = com.google.android.gms.maps.model.BitmapDescriptorFactory
-                                .defaultMarker(com.google.android.gms.maps.model.BitmapDescriptorFactory.HUE_BLUE)
-                        )
-                    }
-                }
-
-                // 🚻 附近公廁標點（開關開啟時顯示）
-                if (showToilets) {
-                    stopToilets.forEach { (stopName, toilets) ->
-                        toilets.forEach { t ->
+                        key("lot", lot.id) {
+                            val state = remember(lot.position) { MarkerState(position = lot.position) }
                             Marker(
-                                state = MarkerState(position = t.latLng),
-                                title = "🚻 ${t.name}",
-                                snippet = "鄰近 $stopName",
+                                state = state,
+                                title = "🅿 ${lot.name}",
+                                snippet = (spacesText + walkText).ifBlank { null },
                                 icon = com.google.android.gms.maps.model.BitmapDescriptorFactory
-                                    .defaultMarker(com.google.android.gms.maps.model.BitmapDescriptorFactory.HUE_VIOLET)
+                                    .defaultMarker(com.google.android.gms.maps.model.BitmapDescriptorFactory.HUE_BLUE)
                             )
                         }
                     }
                 }
 
-                // 停車場→景點步行虛線（僅 car 模式）
+                // 🚻 附近公廁標點（開關開啟時顯示；下一站模式只顯示下一站附近的）
+                if (showToilets) {
+                    stopToilets
+                        .filter { e -> focusedNames?.let { e.key in it } ?: (tripFocus == null || !tripFocus.nextOnly || e.key == tripFocus.nextName) }
+                        .forEach { (stopName, toilets) ->
+                        toilets.forEach { t ->
+                            key("wc", stopName, t.latLng) {
+                                val state = remember(t.latLng) { MarkerState(position = t.latLng) }
+                                Marker(
+                                    state = state,
+                                    title = "🚻 ${t.name}",
+                                    snippet = "鄰近 $stopName",
+                                    icon = com.google.android.gms.maps.model.BitmapDescriptorFactory
+                                        .defaultMarker(com.google.android.gms.maps.model.BitmapDescriptorFactory.HUE_VIOLET)
+                                )
+                            }
+                        }
+                    }
+                }
+
+                // 停車場→景點步行虛線（僅 car 模式；下一站模式只畫下一站那段）
                 if (transportMode == "car") {
-                    walkingLegs.forEach { (parkingPos, stopPos) ->
+                    val nextPos = tripFocus?.nextName?.let { stopLocations[it] }
+                    val focusedPos = focusedNames?.mapNotNull { stopLocations[it] }
+                    walkingLegs
+                        .filter { (_, stopPos) ->
+                            focusedPos?.let { stopPos in it } ?: (tripFocus == null || !tripFocus.nextOnly || stopPos == nextPos)
+                        }
+                        .forEach { (parkingPos, stopPos) ->
                         Polyline(
                             points = listOf(parkingPos, stopPos),
                             color = Color(0xFF4CAF50),
@@ -505,33 +705,121 @@ fun ItineraryMapScreen(
                 renderOrder.forEach { idx ->
                     val points = roadSegments.getOrNull(idx) ?: return@forEach
                     if (points.isEmpty()) return@forEach
+                    val focusSeg = topSegmentIdx
+                    if (focusSeg != null && idx != focusSeg) return@forEach
+                    // 行程進行中只畫今天的路段（以終點站的天為準：第一段從昨晚住宿出發也算今天）
+                    if (focusSeg == null && tripFocus != null && stops.getOrNull(idx + 1)?.dayIndex != tripFocus.day) return@forEach
                     // 這段路的終點站已打卡／跳過 → 這段路已經走過，淡灰處理
                     val isSegmentDone = stops.getOrNull(idx + 1)?.let { progress.isDone(it.stopId) } == true
+                    val isCurrentLeg = tripFocus != null && idx in tripFocus.currentLeg
+                    val mode = segmentInfos.getOrNull(idx)?.mode ?: transportMode
+                    val color = when {
+                        // 聚焦的那一段一定上色（下一站模式下聚焦一段走過的路也看得清楚）
+                        idx == focusSeg -> modeColor(mode)
+                        // 下一站模式：只有目前這一段上色，其他段（走過的、還沒到的）都是淡灰細線
+                        tripFocus?.nextOnly == true -> if (isCurrentLeg) modeColor(mode) else RouteDimColor
+                        isSegmentDone -> RouteDoneColor
+                        else -> modeColor(mode)
+                    }
+                    val width = when {
+                        idx == topSegmentIdx || isCurrentLeg -> 16f
+                        tripFocus?.nextOnly == true -> 7f
+                        isSegmentDone -> 9f
+                        else -> 11f
+                    }
                     Polyline(
                         points = points,
-                        color = if (isSegmentDone) DoneSegmentColor else SegmentColors[idx % SegmentColors.size],
-                        width = if (idx == topSegmentIdx) 18f else if (isSegmentDone) 10f else 14f,
+                        color = color,
+                        width = width,
+                        zIndex = if (isCurrentLeg) 1f else 0f,
                         clickable = true,
                         onClick = {
-                            topSegmentIdx = idx
-                            val midPoint = points[points.size / 2]
-                            // 計算路段兩端的 LatLngBounds 讓整段放入視野
-                            val builder = com.google.android.gms.maps.model.LatLngBounds.builder()
-                            points.forEach { builder.include(it) }
-                            coroutineScope.launch {
-                                try {
-                                    cameraPositionState.animate(
-                                        CameraUpdateFactory.newLatLngBounds(builder.build(), 120)
-                                    )
-                                } catch (e: Exception) {
-                                    // 邊界計算失敗時退回中點 zoom
-                                    cameraPositionState.animate(
-                                        CameraUpdateFactory.newLatLngZoom(midPoint, 14f)
-                                    )
-                                }
-                            }
+                            // 再點一次同一段 → 恢復全部路線（與網頁相同）
+                            if (topSegmentIdx == idx) topSegmentIdx = null
+                            else { topSegmentIdx = idx; fitSegment(idx) }
                         }
                     )
+                }
+
+                // 正在走的那段：已經走過的部分畫灰色（依 GPS 位置投影到路線上切開，同網頁 completedRouteRenderers）
+                if (tripFocus != null && !tripFocus.currentLeg.isEmpty() &&
+                    (topSegmentIdx == null || topSegmentIdx in tripFocus.currentLeg)) {
+                    CurrentLegProgressLayer(tripFocus.currentLeg.mapNotNull { roadSegments.getOrNull(it) }, userLocation)
+                }
+
+                // 路段中間的時間標籤（例「🚗 7 分」）：只標聚焦的那段、下一站模式的目前這段，避免滿地圖都是字
+                val labelSegs = topSegmentIdx?.let { listOf(it) }
+                    ?: tripFocus?.takeIf { it.nextOnly }?.currentLeg?.toList().orEmpty()
+                labelSegs.forEach { i ->
+                    val info = segmentInfos.getOrNull(i) ?: return@forEach
+                    val pts = roadSegments.getOrNull(i)?.takeIf { it.isNotEmpty() } ?: return@forEach
+                    val mins = info.mins ?: return@forEach
+                    key("label", i) {
+                        val pos = pts[pts.size / 2]
+                        val state = remember(pos) { MarkerState(position = pos) }
+                        Marker(
+                            state = state,
+                            icon = MapMarkerIcons.label("${modeMeta(info.mode).first} $mins 分",
+                                android.graphics.Color.argb(255,
+                                    (modeColor(info.mode).red * 255).toInt(), (modeColor(info.mode).green * 255).toInt(),
+                                    (modeColor(info.mode).blue * 255).toInt()),
+                                density.density),
+                            anchor = androidx.compose.ui.geometry.Offset(0.5f, 0.5f),
+                            zIndex = 4f,
+                            onClick = { true }
+                        )
+                    }
+                }
+            }
+
+            // ── 聚焦某一段時：顯示是哪一段，點「顯示全部」恢復 ──
+            topSegmentIdx?.let { seg ->
+                val from = stops.getOrNull(seg)?.name.orEmpty()
+                val to = stops.getOrNull(seg + 1)?.name.orEmpty()
+                Surface(
+                    modifier = Modifier
+                        .align(Alignment.TopCenter)
+                        .statusBarsPadding()
+                        .padding(top = if (tripFocus != null) 60.dp else 12.dp, start = 72.dp, end = 72.dp)
+                        .clip(RoundedCornerShape(999.dp))
+                        .clickable { topSegmentIdx = null },
+                    shape = RoundedCornerShape(999.dp),
+                    color = Surface.copy(alpha = 0.95f),
+                    shadowElevation = 4.dp
+                ) {
+                    Row(Modifier.padding(horizontal = 14.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Text("${seg + 1}→${seg + 2}  $from → $to", fontSize = 13.sp, color = Ink,
+                            maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
+                        Spacer(Modifier.width(8.dp))
+                        Text("顯示全部", fontSize = 13.sp, fontWeight = FontWeight.Bold, color = Accent)
+                    }
+                }
+            }
+
+            // ── 行程進行中：「下一站／今天全部」切換 ──
+            if (tripFocus != null) {
+                Row(
+                    modifier = Modifier
+                        .align(Alignment.TopCenter)
+                        .statusBarsPadding()
+                        .padding(top = 12.dp)
+                        .clip(RoundedCornerShape(999.dp))
+                        .background(Surface.copy(alpha = 0.95f))
+                        .padding(3.dp)
+                ) {
+                    listOf(true to "下一站", false to "今天全部").forEach { (value, label) ->
+                        val selected = nextOnly == value
+                        Text(
+                            label,
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(999.dp))
+                                .background(if (selected) Accent else Color.Transparent)
+                                .clickable { nextOnly = value; topSegmentIdx = null }
+                                .padding(horizontal = 14.dp, vertical = 7.dp),
+                            fontSize = 14.sp, fontWeight = FontWeight.Bold,
+                            color = if (selected) Color.White else Ink2
+                        )
+                    }
                 }
             }
 
@@ -551,7 +839,7 @@ fun ItineraryMapScreen(
                     OfflineVectorMap(
                         stops = stops,
                         roadSegments = roadSegments,
-                        userLocation = userLocation,
+                        userLocation = userLocation.value,
                         modifier = Modifier.fillMaxSize()
                     )
                     OfflineBanner("📴 離線模式・離線地圖", Modifier.align(Alignment.TopCenter))
@@ -563,7 +851,7 @@ fun ItineraryMapScreen(
                     stops = stops,
                     roadSegments = roadSegments,
                     region = itinerary?.region ?: "",
-                    userLocation = userLocation,
+                    userLocation = userLocation.value,
                     modifier = Modifier.fillMaxSize()
                 )
             }
@@ -609,7 +897,7 @@ fun ItineraryMapScreen(
                 onClick = {
                     coroutineScope.launch {
                         cameraPositionState.animate(
-                            CameraUpdateFactory.newLatLngZoom(userLocation ?: FallbackLocation, 15f)
+                            CameraUpdateFactory.newLatLngZoom(userLocation.value ?: FallbackLocation, 15f)
                         )
                     }
                 },
@@ -663,6 +951,40 @@ fun ItineraryMapScreen(
             }
         }
     }
+}
+
+/** 行程進行中的下一站模式：要看的那天、下一站、目前這一段路（roadSegments 的索引範圍） */
+private class TripFocus(
+    val day: Int,
+    val nextId: String?,
+    val nextName: String?,
+    val currentLeg: IntRange,
+    val nextOnly: Boolean,
+    val nextLatLng: LatLng?,
+    val fromLatLng: LatLng?
+)
+
+/** 「我在這裡」：獨立的一層，定位更新時只有這裡重畫 */
+@Composable
+@GoogleMapComposable
+private fun UserLocationLayer(location: State<LatLng?>, accuracy: FloatState, density: Float) {
+    val loc = location.value ?: return
+    Circle(
+        center = loc,
+        radius = accuracy.floatValue.coerceAtLeast(30f).toDouble(),
+        fillColor = Color(0x333B82F6),
+        strokeColor = Color(0xFF3B82F6),
+        strokeWidth = 3f
+    )
+    val state = remember { MarkerState(position = loc) }
+    LaunchedEffect(loc) { state.position = loc }
+    Marker(
+        state = state,
+        title = "目前位置",
+        icon = MapMarkerIcons.userDot(density),
+        anchor = androidx.compose.ui.geometry.Offset(0.5f, 0.5f),
+        zIndex = 3f
+    )
 }
 
 // ── 🅿 停車點微調面板：拖曳提示 + 備註輸入 + 確認 ────────────────
@@ -730,71 +1052,80 @@ private fun ParkingEditPanel(
     }
 }
 
-// ── 時間軸列 ──────────────────────────────────────────────
+// ── 路段列（下方面板）：第幾段、出發時間、起點 → 終點、交通方式・時間・距離、狀態 ──
 @Composable
-private fun TimelineRow(
-    stop: Stop,
-    index: Int,
-    isLast: Boolean,
-    tripDate: String = "",
-    transportMode: String = "taxi",
-    onClick: () -> Unit
-) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clickable(onClick = onClick)
-            .padding(vertical = 2.dp)
+private fun RouteSegmentRow(seg: RouteSegmentInfo, status: String?, selected: Boolean, onClick: () -> Unit) {
+    val (icon, label) = modeMeta(seg.mode)
+    Card(
+        modifier = Modifier.fillMaxWidth().clickable(onClick = onClick),
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(containerColor = if (selected) AccentLight else Surface),
+        border = BorderStroke(if (selected) 2.dp else 1.dp, if (selected) Accent else Border),
+        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
     ) {
-        Box(modifier = Modifier.width(52.dp).padding(top = 10.dp), contentAlignment = Alignment.CenterEnd) {
-            Text(text = stop.time, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = Ink2, textAlign = TextAlign.End)
-        }
-        Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.width(28.dp)) {
-            Spacer(Modifier.height(14.dp))
-            Box(modifier = Modifier.size(10.dp).clip(CircleShape).background(Accent))
-            if (!isLast) {
-                Spacer(modifier = Modifier.width(2.dp).height(72.dp).background(Border))
+        Row(Modifier.padding(horizontal = 14.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Text(
+                    "第 ${seg.idx + 1} 段" + (seg.departText?.let { " · $it 出發" } ?: ""),
+                    fontSize = 12.sp, fontWeight = FontWeight.Bold, color = Ink2
+                )
+                Spacer(Modifier.height(3.dp))
+                Text("${seg.from.name} → ${seg.to.name}", fontSize = 15.sp, fontWeight = FontWeight.SemiBold, color = Ink,
+                    maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Spacer(Modifier.height(3.dp))
+                Text(
+                    listOfNotNull("$icon $label", seg.mins?.let { "$it 分" }, seg.km?.let { "%.1f km".format(it) }).joinToString(" · "),
+                    fontSize = 13.sp, color = modeColor(seg.mode)
+                )
             }
-        }
-        Spacer(Modifier.width(10.dp))
-        Card(
-            modifier  = Modifier.weight(1f).padding(top = 4.dp, bottom = if (isLast) 0.dp else 8.dp),
-            shape     = RoundedCornerShape(20.dp),
-            colors    = CardDefaults.cardColors(containerColor = Surface),
-            border    = BorderStroke(1.dp, Border),
-            elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
-        ) {
-            Row(modifier = Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
-                Box(
-                    modifier = Modifier.size(48.dp).clip(RoundedCornerShape(14.dp)).background(Surface2),
-                    contentAlignment = Alignment.Center
-                ) { Text(stop.emoji, fontSize = 24.sp) }
-                Spacer(Modifier.width(12.dp))
-                Column(modifier = Modifier.weight(1f)) {
-                    Text(text = stop.name, fontSize = 16.sp, fontWeight = FontWeight.SemiBold, color = Ink, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    Spacer(Modifier.height(5.dp))
-                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                        SpotTag("${stop.duration} 分")
-                        val hoursDisplay = if (tripDate.isNotBlank())
-                            filterBusinessHoursForDate(stop.businessHours, tripDate)
-                        else stop.businessHours
-                        if (hoursDisplay != "未提供") SpotTag("🕐 $hoursDisplay")
-                    }
-                    if (stop.desc.isNotBlank()) {
-                        Spacer(Modifier.height(4.dp))
-                        Text(text = stop.desc, fontSize = 14.sp, color = Ink2, lineHeight = 17.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
-                    }
+            status?.let {
+                Surface(
+                    shape = RoundedCornerShape(999.dp),
+                    color = if (it == "進行中") modeColor(seg.mode) else Surface2
+                ) {
+                    Text(it, modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp), fontSize = 12.sp,
+                        fontWeight = FontWeight.Bold, color = if (it == "進行中") Color.White else Ink2)
                 }
             }
         }
     }
 }
 
+/**
+ * 正在走的那段路，已經走過的部分畫成灰色：把目前位置投影到這段路線上切開。
+ * 獨立一層，定位更新只重畫這裡。離路線超過 400m（還沒出發、走錯路）就不畫。
+ */
 @Composable
-private fun SpotTag(text: String) {
-    Surface(shape = RoundedCornerShape(8.dp), color = Surface2) {
-        Text(text = text, modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp), fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = Ink2)
+@GoogleMapComposable
+private fun CurrentLegProgressLayer(segments: List<List<LatLng>>, location: State<LatLng?>) {
+    val loc = location.value ?: return
+    val path = segments.flatten()
+    val done = donePrefix(path, loc, maxOffsetMeters = 400.0) ?: return
+    if (done.size < 2) return
+    Polyline(points = done, color = RouteDoneColor, width = 16f, zIndex = 2f)
+}
+
+/** 位置投影到折線上，回傳「起點到投影點」那一段；離折線太遠回 null */
+private fun donePrefix(path: List<LatLng>, p: LatLng, maxOffsetMeters: Double): List<LatLng>? {
+    if (path.size < 2) return null
+    val k = kotlin.math.cos(Math.toRadians(p.latitude))
+    var best = -1; var bestT = 0.0; var bestD = Double.MAX_VALUE
+    for (i in 0 until path.size - 1) {
+        val a = path[i]; val b = path[i + 1]
+        val ax = a.longitude * k; val ay = a.latitude; val bx = b.longitude * k; val by = b.latitude
+        val px = p.longitude * k; val py = p.latitude
+        val dx = bx - ax; val dy = by - ay
+        val len2 = dx * dx + dy * dy
+        val t = if (len2 <= 0.0) 0.0 else (((px - ax) * dx + (py - ay) * dy) / len2).coerceIn(0.0, 1.0)
+        val qx = ax + dx * t; val qy = ay + dy * t
+        val d = (px - qx) * (px - qx) + (py - qy) * (py - qy)
+        if (d < bestD) { bestD = d; best = i; bestT = t }
     }
+    if (best < 0) return null
+    val a = path[best]; val b = path[best + 1]
+    val proj = LatLng(a.latitude + (b.latitude - a.latitude) * bestT, a.longitude + (b.longitude - a.longitude) * bestT)
+    if (com.example.travellink_ai.ui.trip.haversineMeters(proj, p) > maxOffsetMeters) return null
+    return path.subList(0, best + 1) + proj
 }
 
 /**

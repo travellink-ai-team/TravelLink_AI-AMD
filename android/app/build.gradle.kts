@@ -7,6 +7,7 @@ plugins {
     alias(libs.plugins.ksp)
     alias(libs.plugins.hilt.android.plugin)
     id("com.google.gms.google-services")
+    id("com.google.firebase.crashlytics")
 }
 
 val localProps = Properties().apply {
@@ -20,6 +21,14 @@ val tdxClientSecret: String = localProps.getProperty("TDX_CLIENT_SECRET", "")
 val cwaApiKey: String = localProps.getProperty("CWA_API_KEY", "")
 // 回顧短片後端 base URL（待組員提供公開位址；空＝功能未啟用）
 val recapApiBase: String = localProps.getProperty("RECAP_API_BASE", "")
+// 正式版簽章：keystore 放在專案外，路徑與密碼只寫在 local.properties（路徑用正斜線）。
+// 四項沒填齊時 release 不簽章（仍可建置，但裝不上手機），debug 不受影響。
+val releaseStoreFile: String = localProps.getProperty("RELEASE_STORE_FILE", "")
+val releaseStorePassword: String = localProps.getProperty("RELEASE_STORE_PASSWORD", "")
+val releaseKeyAlias: String = localProps.getProperty("RELEASE_KEY_ALIAS", "")
+val releaseKeyPassword: String = localProps.getProperty("RELEASE_KEY_PASSWORD", "")
+val hasReleaseSigning = listOf(releaseStoreFile, releaseStorePassword, releaseKeyAlias, releaseKeyPassword)
+    .all { it.isNotBlank() } && file(releaseStoreFile).exists()
 
 android {
     namespace = "com.example.travellink_ai"
@@ -29,8 +38,8 @@ android {
         applicationId = "com.example.travellink_ai"
         minSdk = 26
         targetSdk = 35
-        versionCode = 1
-        versionName = "1.0"
+        versionCode = 3
+        versionName = "1.2"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
@@ -47,8 +56,18 @@ android {
         buildConfigField("String", "RECAP_API_BASE",    "\"$recapApiBase\"")
     }
 
+    signingConfigs {
+        if (hasReleaseSigning) create("release") {
+            storeFile = file(releaseStoreFile)
+            storePassword = releaseStorePassword
+            keyAlias = releaseKeyAlias
+            keyPassword = releaseKeyPassword
+        }
+    }
+
     buildTypes {
         release {
+            if (hasReleaseSigning) signingConfig = signingConfigs.getByName("release")
             isMinifyEnabled = true
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
@@ -92,6 +111,7 @@ dependencies {
     implementation(platform(libs.firebase.bom))
     implementation(libs.firebase.firestore)
     implementation(libs.firebase.analytics)
+    implementation(libs.firebase.crashlytics)
     implementation(libs.firebase.storage.ktx)
     implementation(libs.firebase.auth)
     implementation("com.google.firebase:firebase-functions")

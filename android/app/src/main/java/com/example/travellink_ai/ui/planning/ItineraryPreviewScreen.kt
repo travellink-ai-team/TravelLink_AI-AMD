@@ -27,6 +27,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -56,6 +57,9 @@ import com.example.travellink_ai.data.weather.CwaWeatherService
 import com.example.travellink_ai.data.weather.WeatherInfo
 import com.example.travellink_ai.ui.collab.CollabViewModel
 import com.example.travellink_ai.ui.trip.ongoingTripItems
+import com.example.travellink_ai.ui.onboarding.CoachTour
+import com.example.travellink_ai.ui.onboarding.Tours
+import com.example.travellink_ai.ui.onboarding.coachTarget
 import kotlin.math.roundToInt
 
 // ── 設計語言（與全 App 一致）─────────────────────────────────
@@ -90,8 +94,6 @@ fun ItineraryPreviewScreen(
     viewModel: ItineraryViewModel,
     onConfirm: () -> Unit,
     onCancel: () -> Unit,
-    /** ⋯ 更多 →「匯出行程圖」：跳到插圖頁（沒插圖就開生成對話框） */
-    onExportImage: () -> Unit = {},
     /** 底部按鈕欄（含導覽列間距）的實際高度 px。讓浮在畫面上的隨行管家頭像避開它 */
     onBottomBarHeightChange: (Int) -> Unit = {}
 ) {
@@ -100,6 +102,9 @@ fun ItineraryPreviewScreen(
     val friendVm: com.example.travellink_ai.ui.friends.FriendViewModel = hiltViewModel()
     val agentVm: com.example.travellink_ai.ui.agent.AgentViewModel = hiltViewModel()
     val aiKind by com.example.travellink_ai.data.ai.AiProvider.kind.collectAsState()
+    // 打開行程就先叫醒 AI 後端（5 分鐘內最多一次）：看行程的時間夠它開機，
+    // 之後按「AI 推薦」換景點時通常不用等冷啟動
+    LaunchedEffect(Unit) { viewModel.warmUpAi() }
 
     val itinerary              by viewModel.itinerary.collectAsState()
     val tripProgress           by tripVm.progress.collectAsState()
@@ -192,6 +197,7 @@ fun ItineraryPreviewScreen(
     LaunchedEffect(currentDocId) {
         if (!currentDocId.isNullOrBlank() && currentDocId != "current") {
             collabVm.fetchPinForPreview(currentDocId)
+            viewModel.loadIllustrationMeta()
         }
     }
 
@@ -226,6 +232,58 @@ fun ItineraryPreviewScreen(
     val ongoing = if (tripProgress.isOngoing)
         com.example.travellink_ai.ui.trip.rememberOngoingTrip(viewModel, tripVm)
     else null
+
+    // ── 互動插圖（教授建議 A）：行程頁上一張插圖卡，點開全螢幕；返回一次就回到這頁 ──
+    // 多日行程一天一張：使用者選的那天（null＝自動：進行中看當天，否則第 1 天）
+    var illustrationDay by rememberSaveable { mutableStateOf<Int?>(null) }
+    val illustration = rememberIllustrationData(viewModel, tripVm, illustrationDay)
+    var illustrationOpen by rememberSaveable { mutableStateOf(false) }
+    /** 要開的生成對話框：第一次生成、重新繪製（全部）、只重畫某一天 */
+    class IllustrationAsk(val regenerate: Boolean, val onlyDay: Int? = null)
+    var askIllustration by remember { mutableStateOf<IllustrationAsk?>(null) }
+    val tripDayCount = remember(stops) { stops.map { it.dayIndex }.distinct().size }
+    fun openIllustration() {
+        if (illustration.hasImage) illustrationOpen = true
+        else if (!isViewer && !illustration.generating) askIllustration = IllustrationAsk(regenerate = false)
+    }
+    if (illustrationOpen && illustration.hasImage) {
+        IllustrationFullscreen(
+            data = illustration,
+            viewModel = viewModel,
+            canGenerate = !isViewer,
+            onRegenerate = { askIllustration = IllustrationAsk(regenerate = true) },
+            onRegenerateDay = { day -> askIllustration = IllustrationAsk(regenerate = true, onlyDay = day) },
+            onSelectDay = { illustrationDay = it },
+            onShowOnMap = { stop ->
+                illustrationOpen = false
+                tripVm.mapMode = "plain"
+                tripVm.mapFocusStopId = stop.stopId
+                viewModel.currentScreen = "trip_map"
+            },
+            onDismiss = { illustrationOpen = false }
+        )
+    }
+    askIllustration?.let { ask ->
+        GenerateIllustrationDialog(
+            regenerate = ask.regenerate,
+            dayCount = tripDayCount,
+            onlyDay = ask.onlyDay,
+            onConfirm = { character ->
+                askIllustration = null
+                when {
+                    ask.onlyDay != null -> { illustrationDay = ask.onlyDay; viewModel.regenerateImage(character, ask.onlyDay) }
+                    ask.regenerate -> viewModel.regenerateImage(character)
+                    else -> viewModel.generateImageIfNeeded(character)
+                }
+            },
+            onDismiss = { askIllustration = null }
+        )
+    }
+
+    // ── 首次使用提示：規劃中（景點卡／路線／管家／開始行程）、進行中（打卡／地圖）、打卡後（預計離開）──
+    CoachTour(Tours.PREVIEW, enabled = ongoing == null && stops.isNotEmpty() && !isViewer)
+    CoachTour(Tours.ONGOING, enabled = ongoing != null)
+    CoachTour(Tours.ONGOING_HERE, enabled = ongoing?.here != null)
 
     // ── 🤖 AMD 組：行程進行中的延誤資訊（T4）與主動通知 ──
     // 放在頁面層級而不是清單的某一列：使用者捲到下面時那一列會被回收，通知就發不出來
@@ -528,7 +586,10 @@ fun ItineraryPreviewScreen(
                     }
                     if (tripProgress.isOngoing) {
                         // 進行中的地圖（停車點、廁所、你在這裡）
-                        IconButton(onClick = { tripVm.mapMode = "plain"; viewModel.currentScreen = "trip_map" }) {
+                        IconButton(
+                            onClick = { tripVm.mapMode = "plain"; viewModel.currentScreen = "trip_map" },
+                            modifier = Modifier.coachTarget(Tours.T_ONGOING_MAP)
+                        ) {
                             Icon(Icons.Default.Map, contentDescription = "查看地圖", tint = PIink2)
                         }
                         // 🧪 Debug-only：Demo 模式開關（假 GPS＋demo 時鐘＋demo 工具列），release build 不會出現
@@ -600,7 +661,7 @@ fun ItineraryPreviewScreen(
                         if (stops.isNotEmpty()) {
                             Button(
                                 onClick = { tripVm.startTrip() },
-                                modifier = Modifier.fillMaxWidth().height(48.dp),
+                                modifier = Modifier.fillMaxWidth().height(48.dp).coachTarget(Tours.T_PREVIEW_START),
                                 shape = RoundedCornerShape(14.dp),
                                 colors = ButtonDefaults.buttonColors(
                                     // F5：主要動作用綠 accent（網頁語意），不用橘 accent2
@@ -621,7 +682,7 @@ fun ItineraryPreviewScreen(
 
                             Button(
                                 onClick = onConfirm,
-                                modifier = Modifier.weight(1f),
+                                modifier = Modifier.weight(1f).coachTarget(Tours.T_PREVIEW_ROUTE),
                                 shape = RoundedCornerShape(14.dp),
                                 colors = ButtonDefaults.buttonColors(containerColor = PAccent),
                                 enabled = stops.isNotEmpty()
@@ -658,9 +719,9 @@ fun ItineraryPreviewScreen(
                                     onClick = { moreOpen = false; showMapShare = true }
                                 )
                                 DropdownMenuItem(
-                                    text = { Text("🖼 匯出行程圖") },
-                                    enabled = stops.isNotEmpty(),
-                                    onClick = { moreOpen = false; onExportImage() }
+                                    text = { Text(if (illustration.hasImage) "🎨 行程插圖" else "🎨 生成行程插圖") },
+                                    enabled = stops.isNotEmpty() && (illustration.hasImage || !isViewer),
+                                    onClick = { moreOpen = false; openIllustration() }
                                 )
                             }
                         }
@@ -696,6 +757,19 @@ fun ItineraryPreviewScreen(
                         color = Color(0xFF795548)
                     )
                 }
+            }
+
+            // ── 互動插圖卡：有圖就是預覽（進行中捲到自己的位置），規劃中沒圖是「畫成插圖」邀請 ──
+            if (stops.isNotEmpty() && (illustration.hasImage || illustration.generating || (ongoing == null && !isViewer))) item {
+                IllustrationCard(
+                    data = illustration,
+                    canGenerate = !isViewer && ongoing == null,
+                    onOpen = { illustrationOpen = true },
+                    onGenerate = { askIllustration = IllustrationAsk(regenerate = false) },
+                    onRetry = { viewModel.retryImage() },
+                    onSelectDay = { illustrationDay = it },
+                    modifier = Modifier.padding(bottom = 16.dp)
+                )
             }
 
             // ── 行程摘要卡（進行中改由日程主卡顯示進度與今日天氣）────────
@@ -1096,6 +1170,8 @@ private fun DraggableStopsList(
     val density = LocalDensity.current
     // 量不到實際高度時的備援（卡片 ~110dp）
     val estimatedItemHeightPx = with(density) { 110.dp.toPx() }
+    // 首次使用提示「調整景點」指向第一張可編輯的景點卡（車站不能編輯）
+    val firstEditableIndex = if (isViewer) -1 else stops.indexOfFirst { !it.isStation }
 
     var dragFromIndex by remember { mutableIntStateOf(-1) }
     // 卡片位移＝手指移動量＋拖曳中自動捲動的量（清單往上捲，卡片要往下補回才會留在手指下）
@@ -1244,6 +1320,7 @@ private fun DraggableStopsList(
                             val top = it.positionInParent().y
                             itemBounds[index] = top..(top + it.size.height)
                         }
+                        .then(if (index == firstEditableIndex) Modifier.coachTarget(Tours.T_PREVIEW_STOP) else Modifier)
                         .zIndex(if (isDragging) 2f else 0f)
                         .graphicsLayer {
                             translationY    = if (isDragging) dragOffsetY else animatedShift
@@ -1659,7 +1736,8 @@ private fun StopTimelineRow(
                     val conflictStyle = when (conflict.conflictType) {
                         ItineraryViewModel.ConflictType.BEFORE_OPENING ->
                             Triple(Color(0xFFE3F2FD), Color(0xFF1565C0), Icons.Default.Schedule)
-                        ItineraryViewModel.ConflictType.LONG_DETOUR ->
+                        ItineraryViewModel.ConflictType.LONG_DETOUR,
+                        ItineraryViewModel.ConflictType.CLOSED_TODAY ->
                             Triple(Color(0xFFFCE4EC), Color(0xFFC62828), Icons.Default.Warning)
                         else ->
                             Triple(Color(0xFFFFF3E0), Color(0xFFE65100), Icons.Default.Warning)
@@ -1689,6 +1767,10 @@ private fun StopTimelineRow(
                                     "原定 ${conflict.scheduledTime} 尚未開門，已自動調整至 ${conflict.openingTime}（${conflict.businessHours}）"
                                 ItineraryViewModel.ConflictType.LONG_DETOUR ->
                                     "距前一站 ${conflict.drivingMins} 分鐘車程（超過 60 分），路途較遠，建議評估是否移除"
+                                // 點整張卡會打開編輯，裡面的「換一個景點」只列當天有營業的
+                                ItineraryViewModel.ConflictType.CLOSED_TODAY ->
+                                    if (isViewer) "這一站${conflict.businessHours}"
+                                    else "這一站${conflict.businessHours}，點這裡換一個當天有營業的景點"
                             },
                             fontSize = 12.sp,
                             color = fgColor,

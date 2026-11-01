@@ -531,40 +531,49 @@ private fun filterHoursForDate(businessHours: String, tripDateStr: String): Stri
 
 /**
  * 🎧 語音導覽（對齊網頁 speechSynthesis）：用系統 TextToSpeech 念景點名稱與介紹，再按一次停止。
- * 離開畫面時釋放 TTS 引擎。
+ * 第一次按下才建立 TTS 引擎、離開畫面時釋放：過去一進景點資訊頁（每次打卡都會進來）就建立，
+ * 綁定系統 TTS 服務卡住主執行緒，打卡後明顯頓 1～2 秒，而大多數人根本沒按語音導覽。
  */
 @Composable
 private fun VoiceGuideButton(text: String, onUnsupported: () -> Unit, modifier: Modifier = Modifier) {
     val context = LocalContext.current
     var speaking by remember { mutableStateOf(false) }
-    var ready by remember { mutableStateOf(false) }
-    val tts = remember {
-        var engine: android.speech.tts.TextToSpeech? = null
-        engine = android.speech.tts.TextToSpeech(context.applicationContext) { status ->
-            val e = engine ?: return@TextToSpeech
-            if (status == android.speech.tts.TextToSpeech.SUCCESS) {
-                val r = e.setLanguage(java.util.Locale.TRADITIONAL_CHINESE)
-                ready = r != android.speech.tts.TextToSpeech.LANG_MISSING_DATA &&
-                    r != android.speech.tts.TextToSpeech.LANG_NOT_SUPPORTED
-                e.setOnUtteranceProgressListener(object : android.speech.tts.UtteranceProgressListener() {
-                    override fun onStart(utteranceId: String?) {}
-                    override fun onDone(utteranceId: String?) { speaking = false }
-                    @Deprecated("Deprecated in Java")
-                    override fun onError(utteranceId: String?) { speaking = false }
-                })
-            }
-        }
-        engine
+    var starting by remember { mutableStateOf(false) }
+    var tts by remember { mutableStateOf<android.speech.tts.TextToSpeech?>(null) }
+    DisposableEffect(Unit) { onDispose { tts?.run { stop(); shutdown() } } }
+    fun speak(e: android.speech.tts.TextToSpeech) {
+        e.speak(text, android.speech.tts.TextToSpeech.QUEUE_FLUSH, null, "voice_guide")
+        speaking = true
     }
-    DisposableEffect(Unit) { onDispose { tts.stop(); tts.shutdown() } }
     OutlinedButton(
         onClick = {
+            val engine = tts
             when {
-                speaking -> { tts.stop(); speaking = false }
-                !ready -> onUnsupported()
+                speaking -> { engine?.stop(); speaking = false }
+                engine != null -> speak(engine)
+                starting -> Unit
                 else -> {
-                    tts.speak(text, android.speech.tts.TextToSpeech.QUEUE_FLUSH, null, "voice_guide")
-                    speaking = true
+                    starting = true
+                    var created: android.speech.tts.TextToSpeech? = null
+                    created = android.speech.tts.TextToSpeech(context.applicationContext) { status ->
+                        starting = false
+                        val e = created ?: return@TextToSpeech
+                        val r = if (status == android.speech.tts.TextToSpeech.SUCCESS)
+                            e.setLanguage(java.util.Locale.TRADITIONAL_CHINESE) else android.speech.tts.TextToSpeech.LANG_NOT_SUPPORTED
+                        if (r == android.speech.tts.TextToSpeech.LANG_MISSING_DATA || r == android.speech.tts.TextToSpeech.LANG_NOT_SUPPORTED) {
+                            e.shutdown()
+                            onUnsupported()
+                            return@TextToSpeech
+                        }
+                        e.setOnUtteranceProgressListener(object : android.speech.tts.UtteranceProgressListener() {
+                            override fun onStart(utteranceId: String?) {}
+                            override fun onDone(utteranceId: String?) { speaking = false }
+                            @Deprecated("Deprecated in Java")
+                            override fun onError(utteranceId: String?) { speaking = false }
+                        })
+                        tts = e
+                        speak(e)
+                    }
                 }
             }
         },
@@ -572,5 +581,11 @@ private fun VoiceGuideButton(text: String, onUnsupported: () -> Unit, modifier: 
         shape = RoundedCornerShape(12.dp),
         colors = ButtonDefaults.outlinedButtonColors(contentColor = DesignTokens.Accent),
         border = BorderStroke(1.dp, DesignTokens.Accent)
-    ) { Text(if (speaking) "⏹ 停止導覽" else "🎧 語音導覽", fontSize = 14.sp, fontWeight = FontWeight.Bold) }
+    ) {
+        Text(when {
+            speaking -> "⏹ 停止導覽"
+            starting -> "🎧 準備中…"
+            else -> "🎧 語音導覽"
+        }, fontSize = 14.sp, fontWeight = FontWeight.Bold)
+    }
 }

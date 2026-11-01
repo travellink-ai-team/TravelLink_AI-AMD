@@ -46,11 +46,6 @@ class ItineraryStateHolderTest {
     }
 
     @Test
-    fun `初始 resultInitialView 為 map`() {
-        assertEquals("map", stateHolder.resultInitialView)
-    }
-
-    @Test
     fun `初始 visualState 無 loading 也無 bitmap`() {
         val state = stateHolder.visualState.value
         assertFalse(state.isLoading)

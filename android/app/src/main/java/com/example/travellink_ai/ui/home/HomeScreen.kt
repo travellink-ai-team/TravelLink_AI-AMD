@@ -48,6 +48,8 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import com.example.travellink_ai.data.local.LocalItinerary
 import com.example.travellink_ai.ui.collab.CollabViewModel
 import com.example.travellink_ai.ui.planning.ItineraryViewModel
+import com.example.travellink_ai.ui.onboarding.Tours
+import com.example.travellink_ai.ui.onboarding.coachTarget
 import com.journeyapps.barcodescanner.ScanContract
 import com.journeyapps.barcodescanner.ScanOptions
 import java.text.SimpleDateFormat
@@ -190,7 +192,7 @@ fun HomeScreen(
         topBar = {
             TopAppBar(
                 navigationIcon = {
-                    IconButton(onClick = onMenuClick) {
+                    IconButton(onClick = onMenuClick, modifier = Modifier.coachTarget(Tours.T_HOME_MENU)) {
                         Icon(
                             Icons.Default.Menu,
                             contentDescription = "選單",
@@ -352,6 +354,7 @@ fun HomeScreen(
                         ) {
                             Button(
                                 onClick = { showModeDialog = true },
+                                modifier = Modifier.coachTarget(Tours.T_HOME_CREATE),
                                 colors = ButtonDefaults.buttonColors(containerColor = Color.White),
                                 shape = RoundedCornerShape(14.dp),
                                 contentPadding = PaddingValues(horizontal = 20.dp, vertical = 11.dp),
@@ -375,6 +378,7 @@ fun HomeScreen(
                             // 加入共編：從模式選擇移出來，首頁直接可入
                             OutlinedButton(
                                 onClick = { showJoinDialog = true },
+                                modifier = Modifier.coachTarget(Tours.T_HOME_JOIN),
                                 shape = RoundedCornerShape(14.dp),
                                 border = androidx.compose.foundation.BorderStroke(1.dp, Color.White.copy(alpha = 0.7f)),
                                 colors = ButtonDefaults.outlinedButtonColors(contentColor = Color.White),

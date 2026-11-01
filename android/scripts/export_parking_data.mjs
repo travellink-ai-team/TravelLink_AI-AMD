@@ -1,7 +1,9 @@
-// 從網頁端匯出「臺東縣府公有／民營路外停車場」清單，讓 App 與網頁用同一份停車場資料。
+// 從網頁端匯出臺東縣停車場清單，讓 App 與網頁用同一份停車場資料。
 //
-// 網頁的 parking-data.js 是它自己的爬蟲（crawl:parking＋export:local）整理縣府資料產生的，
-// 約 30 筆、含車位數；TDX 對臺東只登錄了 4 座，App 過去只用 TDX，8 站只找得到 2～3 站。
+// 網頁的 parking-data.js 是它自己的爬蟲（crawl:parking＋export:local）產生的：
+// 縣府公有／民營路外停車場約 30 筆（含車位數）＋ OpenStreetMap 約 170 筆（source: 'osm'）。
+// OSM 那批多半只有座標、名稱就叫「停車場」，少數帶 notes（免費／收費）或 smallSpots。
+// TDX 對臺東只登錄了 4 座，App 過去只用 TDX，8 站只找得到 2～3 站。
 // 這裡直接執行網頁的檔案取出資料，不在 App 端另外爬——網頁資料更新後重跑一次即可。
 //
 // 用法：
@@ -44,6 +46,8 @@ const lots = data.taitungCounty
     motoSpots: num(p.motoSpots),
     largeSpots: num(p.largeSpots),
     source: p.source || 'taitung_gov_parking',
+    // OSM 的收費標籤（免費／收費）；縣府資料沒有這欄
+    notes: p.notes || '',
     // 社群回報點（網頁端 ≥3 位回報者才算正式）；目前資料裡沒有，先照原樣帶著
     reports: num(p.reports)
   }));
@@ -56,4 +60,5 @@ const out = {
   lots
 };
 writeFileSync(OUT, JSON.stringify(out, null, 1) + '\n', 'utf8');
-console.log(`✅ ${lots.length} 座停車場 → ${path.relative(process.cwd(), OUT)}（網頁資料 ${out.webGeneratedAt}）`);
+const bySource = lots.reduce((m, p) => ({ ...m, [p.source]: (m[p.source] || 0) + 1 }), {});
+console.log(`✅ ${lots.length} 座停車場 ${JSON.stringify(bySource)} → ${path.relative(process.cwd(), OUT)}（網頁資料 ${out.webGeneratedAt}）`);

@@ -3,7 +3,7 @@ package com.example.travellink_ai.data.local
 import androidx.room.TypeConverter
 import com.example.travellink_ai.data.model.Stop
 import com.example.travellink_ai.data.model.webCollabStopId
-import com.google.common.reflect.TypeToken
+import com.google.gson.reflect.TypeToken
 import com.google.gson.*
 import java.lang.reflect.Type
 
@@ -17,7 +17,8 @@ class Converters {
 
     @TypeConverter
     fun toStopList(value: String): List<Stop> {
-        val listType = object : TypeToken<List<Stop>>() {}.type
+        // 用 getParameterized，不靠匿名子類別的泛型資訊（release 版混淆會拿掉，讀行程就閃退）
+        val listType = TypeToken.getParameterized(List::class.java, Stop::class.java).type
         return gson.fromJson(value, listType)
     }
 }

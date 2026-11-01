@@ -39,7 +39,7 @@ class MemoryGridRepository @Inject constructor(
 
     private suspend fun loadFromRoom(roomTripId: String): List<PhotoRef> = runCatching {
         val local = database.tripMemoryDao().getByTripId(roomTripId) ?: return emptyList()
-        val type = object : TypeToken<Map<String, SpotMemory>>() {}.type
+        val type = TypeToken.getParameterized(Map::class.java, String::class.java, SpotMemory::class.java).type
         val spots: Map<String, SpotMemory> = gson.fromJson(local.spotsJson, type) ?: emptyMap()
         spots.values.toPhotoRefs()
     }.onFailure { Log.w(tag, "本地照片讀取失敗（$roomTripId）", it) }

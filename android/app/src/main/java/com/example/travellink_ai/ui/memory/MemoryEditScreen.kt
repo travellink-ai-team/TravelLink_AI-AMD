@@ -60,12 +60,40 @@ fun MemoryEditScreen(
     }
     val uploading by viewModel.uploading.collectAsState()
     val error by viewModel.error.collectAsState()
+    val notice by viewModel.notice.collectAsState()
+    val batch by viewModel.batch.collectAsState()
+    val sortReview by viewModel.sortReview.collectAsState()
     val snackbar = remember { SnackbarHostState() }
 
     LaunchedEffect(item.id, item.firestoreDocId) { viewModel.load(item) }
     LaunchedEffect(error) {
         error?.let { snackbar.showSnackbar(it); viewModel.clearError() }
     }
+    LaunchedEffect(notice) {
+        notice?.let { snackbar.showSnackbar(it, duration = SnackbarDuration.Long); viewModel.clearNotice() }
+    }
+
+    // 批次上傳並自動整理：Android 10 起先要 ACCESS_MEDIA_LOCATION（讀照片的拍攝地點），
+    // 拒絕也照樣開選圖，只是只能依拍攝時間分類。
+    // 這裡不用系統的相片挑選器（PickVisualMedia）：它回傳的 content://media/picker/… 網址
+    // 系統不給原檔（setRequireOriginal 直接拋 UnsupportedOperationException），GPS 一律被遮掉。
+    // 改用文件挑選器（OpenMultipleDocuments），回來的文件網址可轉成媒體庫網址再要原檔。
+    val batchPicker = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenMultipleDocuments()
+    ) { uris -> viewModel.batchUpload(uris.take(BATCH_MAX)) }
+    val launchBatchPicker = { batchPicker.launch(arrayOf("image/*")) }
+    val mediaLocationPermission = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { launchBatchPicker() }
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val startBatch = {
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q &&
+            context.checkSelfPermission(android.Manifest.permission.ACCESS_MEDIA_LOCATION) !=
+            android.content.pm.PackageManager.PERMISSION_GRANTED
+        ) mediaLocationPermission.launch(android.Manifest.permission.ACCESS_MEDIA_LOCATION)
+        else launchBatchPicker()
+    }
+    var showStudio by remember { mutableStateOf(false) }
 
     // 相簿多選 launcher（需知道目標站點，用暫存變數傳遞）
     var pickerStopId by remember { mutableStateOf("") }
@@ -89,6 +117,7 @@ fun MemoryEditScreen(
     // 先存好（九宮格/短片讀的是已儲存的照片），再進
     val makeGrid = { viewModel.save(); onMakeGrid() }
     val makeRecap = { viewModel.save(); onMakeRecap() }
+    val tripTitle = memory.tripTitle.ifBlank { item.title.ifBlank { item.aiTitle } }
     val rate = { viewModel.save(); onRate?.invoke(); Unit }
     BackHandler2(onBack = save)
 
@@ -139,27 +168,7 @@ fun MemoryEditScreen(
                     modifier = Modifier.padding(bottom = 4.dp)
                 )
             }
-            item {
-                Surface(
-                    onClick = makeGrid,
-                    shape = RoundedCornerShape(14.dp),
-                    color = DesignTokens.Accent,
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Row(
-                        Modifier.padding(14.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text("🖼", fontSize = 22.sp)
-                        Spacer(Modifier.width(10.dp))
-                        Column(Modifier.weight(1f)) {
-                            Text("製作 IG 九宮格", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 15.sp)
-                            Text("把這趟照片排成主頁大圖", color = Color.White.copy(alpha = 0.85f), fontSize = 12.sp)
-                        }
-                        Text("→", color = Color.White, fontSize = 18.sp)
-                    }
-                }
-            }
+            // 順序對齊網頁旅記：評分 → 批次上傳並自動整理 → 製作旅程回憶
             if (onRate != null) item {
                 OutlinedButton(
                     onClick = rate,
@@ -177,18 +186,51 @@ fun MemoryEditScreen(
                 }
             }
             item {
-                Surface(
-                    onClick = makeRecap,
+                OutlinedButton(
+                    onClick = startBatch,
+                    enabled = batch == null,
+                    modifier = Modifier.fillMaxWidth(),
                     shape = RoundedCornerShape(14.dp),
-                    color = DesignTokens.Accent2,
-                    modifier = Modifier.fillMaxWidth().padding(top = 8.dp)
+                    colors = ButtonDefaults.outlinedButtonColors(contentColor = DesignTokens.Accent),
+                    border = androidx.compose.foundation.BorderStroke(1.dp, DesignTokens.Accent)
+                ) {
+                    val b = batch
+                    if (b != null) {
+                        CircularProgressIndicator(
+                            color = DesignTokens.Accent, strokeWidth = 2.dp, modifier = Modifier.size(16.dp)
+                        )
+                        Spacer(Modifier.width(8.dp))
+                        Text(
+                            if (b.reading) "讀取 ${b.total} 張照片的時間與地點…" else "上傳中 ${b.done}/${b.total}",
+                            fontWeight = FontWeight.Bold
+                        )
+                    } else {
+                        Text("📷 批次上傳並自動整理", fontWeight = FontWeight.Bold)
+                    }
+                }
+                Text(
+                    "一次選多張，依照片的拍攝時間與地點自動放到對應的景點",
+                    fontSize = 12.sp, color = DesignTokens.Ink3,
+                    modifier = Modifier.padding(top = 4.dp, start = 4.dp)
+                )
+            }
+            item {
+                // 九宮格與回顧短片合成一個入口（對齊網頁「✨ 製作旅程回憶」）
+                Surface(
+                    onClick = { showStudio = true },
+                    shape = RoundedCornerShape(14.dp),
+                    color = DesignTokens.Accent,
+                    modifier = Modifier.fillMaxWidth().padding(top = 4.dp)
                 ) {
                     Row(Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
-                        Text("🎬", fontSize = 22.sp)
+                        Text("✨", fontSize = 22.sp)
                         Spacer(Modifier.width(10.dp))
                         Column(Modifier.weight(1f)) {
-                            Text("製作回顧短片", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 15.sp)
-                            Text("路線＋照片自動生成直式短片", color = Color.White.copy(alpha = 0.85f), fontSize = 12.sp)
+                            Text("製作旅程回憶", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 15.sp)
+                            Text(
+                                tripTitle + " · " + if (album.isEmpty()) "尚無照片" else "${album.size} 張照片",
+                                color = Color.White.copy(alpha = 0.85f), fontSize = 12.sp, maxLines = 1
+                            )
                         }
                         Text("→", color = Color.White, fontSize = 18.sp)
                     }
@@ -229,12 +271,18 @@ fun MemoryEditScreen(
     }
 
     previewPhoto?.let { target ->
+        // 這站有兩張以上才需要挑代表照；已經排第一的就是代表照
+        val stopPhotos = photosByStop[target.stopId].orEmpty()
+        val isCover = stopPhotos.size > 1 && stopPhotos.first().dedupKey == target.dedupKey
         PhotoPreviewDialog(
             url = target.url,
             byName = if (target.ownerUid == myUid) null
                      else labels[target.ownerUid] ?: target.ownerName,
             canDelete = canDelete(target),
             canMove = canMove(target) && stops.size > 1,
+            isCover = isCover,
+            canSetCover = canMove(target) && stopPhotos.size > 1 && !isCover && target.stopId in stops.map { it.stopId },
+            onSetCover = { previewPhoto = null; viewModel.setCover(target) },
             onDelete = {
                 previewPhoto = null
                 // 刪別人的照片要再確認一次，寫明是誰的
@@ -287,11 +335,182 @@ fun MemoryEditScreen(
             }
         )
     }
+
+    if (showStudio) {
+        MemoryStudioSheet(
+            title = tripTitle,
+            photoCount = album.size,
+            onGrid = { showStudio = false; makeGrid() },
+            onRecap = { showStudio = false; makeRecap() },
+            onDismiss = { showStudio = false }
+        )
+    }
+
+    if (sortReview.isNotEmpty()) {
+        PhotoSortReviewDialog(
+            items = sortReview,
+            stops = stops,
+            onConfirm = viewModel::confirmSort,
+            onDismiss = viewModel::dismissSort
+        )
+    }
 }
 
-/** 一張照片縮圖；別人的照片右下角標作者。 */
+/** 批次上傳一次最多選幾張（PickMultipleVisualMedia 上限不可超過系統的 100） */
+private const val BATCH_MAX = 30
+
+/** 「製作旅程回憶」：選 IG 個人檔案大圖或旅程回顧短片（對齊網頁 renderMemoryModes） */
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun PhotoThumb(photo: TripPhoto, byName: String?, onClick: () -> Unit) {
+private fun MemoryStudioSheet(
+    title: String,
+    photoCount: Int,
+    onGrid: () -> Unit,
+    onRecap: () -> Unit,
+    onDismiss: () -> Unit
+) {
+    ModalBottomSheet(onDismissRequest = onDismiss, containerColor = DesignTokens.Bg) {
+        Column(Modifier.padding(start = 20.dp, end = 20.dp, bottom = 28.dp)) {
+            Text("製作旅程回憶", fontSize = 20.sp, fontWeight = FontWeight.ExtraBold, color = DesignTokens.Ink)
+            Spacer(Modifier.height(4.dp))
+            Text(
+                "$title · " + if (photoCount == 0) "這趟目前還沒有照片" else "已找到 $photoCount 張照片",
+                fontSize = 14.sp, color = DesignTokens.Ink2
+            )
+            Spacer(Modifier.height(16.dp))
+            MemoryModeCard(
+                icon = "▦",
+                title = "IG 個人檔案大圖",
+                desc = if (photoCount == 0) "至少需要一張照片，先替景點加照片吧"
+                       else "產生 9 張獨立貼文，依順序發布後會在個人檔案組成一張大圖",
+                enabled = photoCount > 0,
+                onClick = onGrid
+            )
+            Spacer(Modifier.height(10.dp))
+            MemoryModeCard(
+                icon = "▶",
+                title = "旅程回顧短片",
+                desc = "用這趟的路線與照片自動生成直式短片",
+                enabled = true,
+                onClick = onRecap
+            )
+        }
+    }
+}
+
+@Composable
+private fun MemoryModeCard(icon: String, title: String, desc: String, enabled: Boolean, onClick: () -> Unit) {
+    Surface(
+        onClick = onClick,
+        enabled = enabled,
+        shape = RoundedCornerShape(16.dp),
+        color = Color.White,
+        border = androidx.compose.foundation.BorderStroke(1.dp, DesignTokens.Border),
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Row(
+            Modifier.padding(16.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Box(
+                Modifier.size(48.dp).clip(RoundedCornerShape(12.dp))
+                    .background(if (enabled) DesignTokens.AccentLight else DesignTokens.Surface2),
+                contentAlignment = Alignment.Center
+            ) {
+                Text(icon, fontSize = 22.sp, color = if (enabled) DesignTokens.Accent else DesignTokens.Ink3)
+            }
+            Spacer(Modifier.width(14.dp))
+            Column(Modifier.weight(1f)) {
+                Text(title, fontSize = 16.sp, fontWeight = FontWeight.Bold,
+                    color = if (enabled) DesignTokens.Ink else DesignTokens.Ink3)
+                Spacer(Modifier.height(2.dp))
+                Text(desc, fontSize = 13.sp, lineHeight = 18.sp, color = DesignTokens.Ink2)
+            }
+            if (enabled) Text("→", fontSize = 18.sp, color = DesignTokens.Accent)
+        }
+    }
+}
+
+/**
+ * 自動分類沒把握的照片：逐張選景點（預設帶最可能的那站）。對齊網頁「確認照片所在景點」，
+ * 但多了「不上傳」選項，網頁是留在本機稍後整理。
+ */
+@Composable
+private fun PhotoSortReviewDialog(
+    items: List<MemoryViewModel.SortItem>,
+    stops: List<Stop>,
+    onConfirm: (Map<android.net.Uri, String>) -> Unit,
+    onDismiss: () -> Unit
+) {
+    // uri → stopId；null＝不上傳這張
+    val choices = remember(items) { mutableStateMapOf<android.net.Uri, String?>().apply { items.forEach { put(it.uri, it.guessStopId) } } }
+    val multiDay = stops.map { it.dayIndex }.distinct().size > 1
+    val label = { s: Stop -> (if (multiDay) "第 ${s.dayIndex} 天 · " else "") + s.name }
+    val chosen = choices.count { it.value != null }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("確認照片所在景點") },
+        text = {
+            Column {
+                Text(
+                    "這些照片缺少拍攝地點，或時間對不上行程，請選擇正確的景點。",
+                    fontSize = 13.sp, color = DesignTokens.Ink2
+                )
+                Spacer(Modifier.height(10.dp))
+                LazyColumn(Modifier.heightIn(max = 420.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    items(items, key = { it.uri.toString() }) { item ->
+                        var open by remember { mutableStateOf(false) }
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            AsyncImage(
+                                model = item.uri, contentDescription = null, contentScale = ContentScale.Crop,
+                                modifier = Modifier.size(64.dp).clip(RoundedCornerShape(10.dp)).background(DesignTokens.Surface2)
+                            )
+                            Spacer(Modifier.width(10.dp))
+                            Column(Modifier.weight(1f)) {
+                                Box {
+                                    val current = choices[item.uri]?.let { id -> stops.firstOrNull { it.stopId == id } }
+                                    Text(
+                                        (current?.let(label) ?: "不上傳這張") + " ▾",
+                                        fontSize = 15.sp, fontWeight = FontWeight.SemiBold,
+                                        color = if (current != null) DesignTokens.Accent else DesignTokens.Ink3,
+                                        modifier = Modifier.clickable { open = true }.padding(vertical = 4.dp)
+                                    )
+                                    DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
+                                        stops.forEach { s ->
+                                            DropdownMenuItem(
+                                                text = { Text(label(s)) },
+                                                onClick = { choices[item.uri] = s.stopId; open = false }
+                                            )
+                                        }
+                                        DropdownMenuItem(
+                                            text = { Text("不上傳這張", color = DesignTokens.Ink3) },
+                                            onClick = { choices[item.uri] = null; open = false }
+                                        )
+                                    }
+                                }
+                                Text(item.hint, fontSize = 12.sp, color = DesignTokens.Ink3)
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(
+                enabled = chosen > 0,
+                onClick = { onConfirm(choices.mapNotNull { (u, s) -> s?.let { u to it } }.toMap()) }
+            ) { Text("上傳 $chosen 張", fontWeight = FontWeight.Bold) }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("全部不上傳") }
+        }
+    )
+}
+
+/** 一張照片縮圖；別人的照片右下角標作者，這站的代表照（短片用）左上角標「代表」。 */
+@Composable
+private fun PhotoThumb(photo: TripPhoto, byName: String?, isCover: Boolean = false, onClick: () -> Unit) {
     Box(
         modifier = Modifier
             .size(84.dp)
@@ -305,6 +524,20 @@ private fun PhotoThumb(photo: TripPhoto, byName: String?, onClick: () -> Unit) {
             contentScale = ContentScale.Crop,
             modifier = Modifier.fillMaxSize()
         )
+        if (isCover) {
+            Text(
+                "★ 代表",
+                fontSize = 10.sp,
+                fontWeight = FontWeight.Bold,
+                color = Color.White,
+                modifier = Modifier
+                    .align(Alignment.TopStart)
+                    .padding(4.dp)
+                    .clip(RoundedCornerShape(6.dp))
+                    .background(DesignTokens.Accent2)
+                    .padding(horizontal = 5.dp, vertical = 1.dp)
+            )
+        }
         if (byName != null) {
             Text(
                 byName,
@@ -403,11 +636,13 @@ private fun SpotMemoryCard(
 
             Spacer(Modifier.height(10.dp))
 
-            // 照片列（整本相簿這一站的照片 + 新增磚）；別人的照片右下角標作者
+            // 照片列（整本相簿這一站的照片 + 新增磚）；別人的照片右下角標作者，
+            // 兩張以上時第一張是代表照（回顧短片每站只用這張）
             LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 items(photos, key = { it.dedupKey }) { photo ->
                     PhotoThumb(
                         photo,
+                        isCover = photos.size > 1 && photo.dedupKey == photos.first().dedupKey,
                         byName = if (photo.ownerUid == myUid) null else labels[photo.ownerUid] ?: photo.ownerName,
                         onClick = { onPhotoClick(photo) }
                     )
@@ -483,6 +718,9 @@ private fun PhotoPreviewDialog(
     byName: String?,
     canDelete: Boolean,
     canMove: Boolean,
+    isCover: Boolean = false,
+    canSetCover: Boolean = false,
+    onSetCover: () -> Unit = {},
     onDelete: () -> Unit,
     onMove: () -> Unit,
     onDismiss: () -> Unit
@@ -502,6 +740,19 @@ private fun PhotoPreviewDialog(
                         modifier = Modifier.align(Alignment.TopEnd)
                     ) {
                         Icon(Icons.Default.Close, contentDescription = "關閉", tint = Color.White)
+                    }
+                }
+                // 代表照：回顧短片每站只用一張（後端契約），用的就是這站排第一的照片
+                if (isCover) {
+                    Text(
+                        "★ 這是這站的代表照，回顧短片會用這張",
+                        fontSize = 13.sp, color = DesignTokens.Accent2Dark, fontWeight = FontWeight.SemiBold,
+                        modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 12.dp)
+                    )
+                } else if (canSetCover) {
+                    TextButton(onClick = onSetCover, modifier = Modifier.padding(start = 4.dp, top = 4.dp)) {
+                        Text("★ 設為這站的代表照（回顧短片用這張）",
+                            color = DesignTokens.Accent2Dark, fontWeight = FontWeight.SemiBold)
                     }
                 }
                 Row(

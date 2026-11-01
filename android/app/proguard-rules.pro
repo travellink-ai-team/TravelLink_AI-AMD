@@ -33,3 +33,13 @@
 -keepclassmembers class com.example.travellink_ai.** {
     public <init>();
 }
+
+# 回顧短片後端的請求／回應（ui/recap/RecapModels.kt）：Gson 以欄位名稱對應 JSON，
+# 不在上面 data.** 的範圍內，混淆後欄位改名，送出的 JSON 與解析結果都會錯
+-keep class com.example.travellink_ai.ui.recap.RecapStop { *; }
+-keep class com.example.travellink_ai.ui.recap.RecapTrip { *; }
+-keep class com.example.travellink_ai.ui.recap.RecapPhoto { *; }
+-keep class com.example.travellink_ai.ui.recap.RecapRenderRequest { *; }
+-keep class com.example.travellink_ai.ui.recap.RecapJobCreated { *; }
+-keep class com.example.travellink_ai.ui.recap.RecapJobStatus { *; }
+-keep class com.example.travellink_ai.ui.recap.CloudRecap { *; }
