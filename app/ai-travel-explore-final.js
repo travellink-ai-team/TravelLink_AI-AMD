@@ -2981,12 +2981,15 @@ async function fetchCoordinateFromGooglePlaces(name, destination) {
   const key = window.TRAVEL_APP_CONFIG && window.TRAVEL_APP_CONFIG.GOOGLE_MAPS_API_KEY;
   if (!key || !name) return null;
   try {
+    // 查詢要帶地區名：只靠 locationBias 不會排除外縣市，「百年夫妻樹」單查只回台南那棵
+    const region = destination ? resolveGeoRegion(destination) : '';
     const body = {
-      textQuery: name,
+      textQuery: region ? `${name} ${region}` : name,
       languageCode: 'zh-TW',
-      maxResultCount: 3
+      maxResultCount: 5
     };
     const destCenter = destination ? getDestinationCenter(destination) : null;
+    const maxDist = getDestinationMaxDistanceMeters(destination) || 55000;
     if (destCenter) {
       body.locationBias = {
         circle: {
@@ -3000,8 +3003,11 @@ async function fetchCoordinateFromGooglePlaces(name, destination) {
       body, 10000, '座標查詢', key);
     const data = await res.json();
     const places = Array.isArray(data.places) ? data.places : [];
-    // 只接受名稱嚴格配對者；找不到就回 null（不要退回 places[0]，避免套到只共用通用後綴的別處地點）
-    const matched = places.find(p => p && p.location && placeNameMatchesQuery(p.displayName && p.displayName.text, name));
+    // 只接受名稱嚴格配對、且在目的地範圍內者；找不到就回 null（不要退回 places[0]，避免套到只共用通用後綴的別處地點，
+    // 或同名的外縣市地點——verifyAndFilterStopsWithPlaces 配不到時會保留這裡補的座標）
+    const matched = places.find(p => p && p.location
+      && placeNameMatchesQuery(p.displayName && p.displayName.text, name)
+      && (!destCenter || getDistanceMeters(destCenter, { lat: p.location.latitude, lng: p.location.longitude }) <= maxDist));
     if (matched && matched.location) {
       return { lat: matched.location.latitude, lng: matched.location.longitude, source: 'google_places' };
     }
@@ -3145,6 +3151,12 @@ async function verifyAndFilterStopsWithPlaces(stops, destination, wizardData = {
       });
 
       if (!matched) {
+        // 既有座標（AI 給的或 enrichMissingCoordinates 補的）已在目的地範圍外 → 留著只會把站畫到外縣市，丟站
+        const existing = getStopCoordinate(stop);
+        if (existing && destCenter && getDistanceMeters(destCenter, existing) > maxDist) {
+          console.info('[verify] 無範圍內配對且既有座標在範圍外，移除：', name, existing);
+          return null;
+        }
         // 找不到名稱嚴格配對者 → 保留該站與 AI 既有座標，不丟站、也不套到錯誤地點（標記未驗證）
         stop.placeVerified = false;
         return stop;
