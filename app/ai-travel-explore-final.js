@@ -4960,6 +4960,15 @@ function authErrorMessage(e, kind) {
   const code = (e && e.code) || '';
   if (code === 'auth/too-many-requests') return '嘗試次數過多，帳號已暫時鎖定，請稍後再試。';
   if (code === 'auth/network-request-failed') return '網路連線異常，請檢查網路後再試。';
+  if (kind === 'social') {
+    // 社群登入錯誤不涉及帳密列舉，依原因給可行動的提示（原本一律顯示「帳號或密碼錯誤」，看不出是設定問題）
+    if (code === 'auth/popup-closed-by-user' || code === 'auth/cancelled-popup-request') return '已取消登入';
+    if (code === 'auth/popup-blocked') return '登入視窗被瀏覽器封鎖，請允許本站彈出視窗後再試。';
+    if (code === 'auth/operation-not-allowed') return '此登入方式目前尚未開放，請改用其他方式登入。';
+    if (code === 'auth/unauthorized-domain') return '此網域尚未被授權使用社群登入，請改用其他方式登入。';
+    if (code === 'auth/account-exists-with-different-credential') return '這個 Email 已用其他方式註冊過，請改用原本的登入方式。';
+    return '社群登入失敗，請稍後再試或改用其他方式登入。';
+  }
   if (kind === 'register') {
     if (code === 'auth/email-already-in-use') return '這個 Email 無法使用，請改用其他信箱，或直接嘗試登入。';
     if (code === 'auth/weak-password') return '密碼強度不足，請使用至少 8 個字元並混合英數。';
@@ -5115,7 +5124,8 @@ async function doSocialLogin(providerName) {
   } catch(e) {
     // 社群登入取消/失敗：也不洩漏原始錯誤（popup-closed-by-user 等由使用者自行重試）
     const code = (e && e.code) || '';
-    showToast(code === 'auth/popup-closed-by-user' ? '已取消登入' : authErrorMessage(e, 'login'), 'red');
+    if (code && code !== 'auth/popup-closed-by-user' && code !== 'auth/cancelled-popup-request') console.warn('社群登入失敗：', code);
+    showToast(authErrorMessage(e, 'social'), code === 'auth/popup-closed-by-user' || code === 'auth/cancelled-popup-request' ? 'orange' : 'red');
   }
 }
 
