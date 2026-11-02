@@ -17,7 +17,8 @@
   'use strict';
 
   var TOTAL_TIMEOUT_MS = 100000;   // 後端 90 秒逾時，再多留一點網路時間
-  var IDLE_TIMEOUT_MS = 45000;     // 兩個事件之間最久等多久（gpt-oss 單次呼叫通常幾秒內）
+  // 兩個事件之間最久等多久。gpt-oss 單次呼叫通常幾秒內；端點變慢時早點退回一般生成，別讓使用者乾等
+  var IDLE_TIMEOUT_MS = 20000;
 
   function urlFlag() {
     try {

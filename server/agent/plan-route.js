@@ -54,7 +54,9 @@ function mountAgentPlan(app, deps) {
   const run = deps.run || runPlanAgent;
   const planLimiter = rateLimit({
     windowMs: 10 * 60 * 1000,
-    max: 10,   // 一次規劃最多 18 次 LLM 呼叫；這裡限的是「規劃次數」
+    // 一次規劃最多 18 次 LLM 呼叫；這裡限的是「規劃次數」。
+    // 展場多人共用同一個對外 IP（場館 Wi-Fi NAT），10 次很快用完，放寬到 60。
+    max: 60,
     standardHeaders: true,
     legacyHeaders: false,
     message: { error: 'rate limited', message: 'AI 規劃代理人使用太頻繁，請稍後再試。' }
