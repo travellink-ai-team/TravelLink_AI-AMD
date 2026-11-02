@@ -9028,3 +9028,52 @@ body.poster-viewer-open { overflow: hidden; }
 .poster-trip-card { height: auto; }
 .poster-card-window { position: relative; inset: auto; max-height: 220px; }
 .poster-trip-card { display: flex; flex-direction: column; } /* 避免空白字元多撐出一行高度，卡片底下才不會多一條空白 */
+
+/* ── 回顧短片：節奏樣板與推薦版本 ── */
+.recap-template-field { border: none; padding: 0; margin: 0 0 12px; }
+.recap-template-field legend { font-size: 13px; font-weight: 700; color: var(--ink2, #4a463f); margin-bottom: 6px; }
+.recap-template-options { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+.recap-template-option {
+  display: grid; gap: 2px; padding: 10px 12px; border-radius: 12px; cursor: pointer;
+  border: 1px solid var(--border, #e0dbd2); background: var(--surface, #fff);
+}
+.recap-template-option input { position: absolute; opacity: 0; pointer-events: none; }
+.recap-template-option.active { border-color: #2e7d6d; background: #edf6f4; box-shadow: 0 0 0 1px #2e7d6d inset; }
+.recap-template-option:focus-within { outline: 2px solid #2e7d6d; outline-offset: 2px; }
+.recap-template-name { font-size: 14px; font-weight: 800; color: var(--ink, #22201d); }
+.recap-template-desc { font-size: 12px; line-height: 1.45; color: var(--ink3, #8a857c); }
+.recap-timeline-preview { margin: 0 0 12px; border: 1px solid var(--border, #e0dbd2); border-radius: 12px; background: var(--surface2, #f6f3ee); }
+.recap-timeline-preview summary { padding: 10px 12px; cursor: pointer; font-size: 13px; font-weight: 700; color: #225f52; }
+.recap-timeline-list { list-style: none; margin: 0; padding: 0 12px 4px; display: grid; gap: 4px; }
+.recap-clip { display: grid; grid-template-columns: 22px minmax(0, 1fr) auto; gap: 6px; align-items: baseline; font-size: 13px; color: var(--ink, #22201d); }
+.recap-clip-text { overflow-wrap: anywhere; }
+.recap-clip-sec { font-variant-numeric: tabular-nums; color: var(--ink3, #8a857c); white-space: nowrap; }
+.recap-timeline-preview .memory-title-hint { padding: 0 12px 10px; margin: 6px 0 0; }
+@media (max-width: 420px) { .recap-template-options { grid-template-columns: 1fr; } }
+
+/* ── 回顧短片：片段卡片編輯器 ── */
+.recap-editor-tools { display: flex; flex-wrap: wrap; gap: 6px; padding: 0 12px 8px; }
+.recap-editor-tools .memory-secondary-btn { white-space: nowrap; font-size: 12px; padding: 6px 10px; }
+.recap-editor-tools .memory-secondary-btn:disabled { opacity: .45; cursor: default; }
+.recap-editor-notice { margin: 0 12px 8px; padding: 6px 10px; border-radius: 8px; font-size: 12px; background: #fdf2ed; color: #b4532a; }
+.recap-clip-cards { list-style: none; margin: 0; padding: 0 12px 4px; display: grid; gap: 6px; }
+.recap-clip-card {
+  display: grid; gap: 6px; padding: 8px 10px; border-radius: 10px;
+  background: var(--surface, #fff); border: 1px solid var(--border, #e0dbd2);
+}
+.recap-card-head { display: grid; grid-template-columns: 22px minmax(0, 1fr); gap: 6px; align-items: baseline; font-size: 13px; color: var(--ink, #22201d); }
+.recap-card-controls { display: flex; align-items: center; gap: 6px; }
+.recap-step-btn {
+  width: 30px; height: 30px; flex: none; border-radius: 8px; cursor: pointer;
+  border: 1px solid var(--border, #e0dbd2); background: var(--surface2, #f6f3ee); font-size: 16px; line-height: 1;
+}
+.recap-card-controls .recap-clip-sec { min-width: 52px; text-align: center; font-size: 13px; font-variant-numeric: tabular-nums; color: var(--ink, #22201d); }
+.recap-remove-btn {
+  margin-left: auto; padding: 5px 10px; border-radius: 8px; cursor: pointer; white-space: nowrap;
+  border: 1px solid #f3c8b1; background: #fdf7f3; color: #b4532a; font-size: 12px; font-weight: 700;
+}
+.recap-caption-input {
+  width: 100%; box-sizing: border-box; padding: 7px 10px; border-radius: 8px; font-size: 13px;
+  border: 1px solid var(--border, #e0dbd2); background: var(--surface2, #f6f3ee); color: var(--ink, #22201d);
+}
+.recap-caption-input:focus { outline: 2px solid #2e7d6d; outline-offset: 0; background: var(--surface, #fff); }

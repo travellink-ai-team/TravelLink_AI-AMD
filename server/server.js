@@ -1499,8 +1499,23 @@ app.post('/api/overpass', overpassLimiter, express.text({ type: '*/*', limit: '8
   res.json({ ok: false, error: 'all overpass endpoints failed' });
 });
 
+// 回顧短片封面（A1）：行程插圖 micro_trips/{id}.imageUrl（多日行程＝第 1 天那張）。
+// 和 bind-trip 同一套成員檢查——不檢查的話，知道別人 tripId 就能把對方的插圖印進自己的影片。
+async function loadTripCover(user, tripId) {
+  if (!adminReady) return null;
+  const snap = await adminDb.collection('micro_trips').doc(tripId).get();
+  if (!snap.exists) return null;
+  const data = snap.data() || {};
+  const email = normalizeEmail(user.email || '');
+  const allowed = isTripOwner(user, data)
+    || (email && (data.memberEmails || []).map(normalizeEmail).includes(email))
+    || (email && (data.editorEmails || []).map(normalizeEmail).includes(email));
+  if (!allowed) return null;
+  return typeof data.imageUrl === 'string' && data.imageUrl ? data.imageUrl : null;
+}
+
 // 回顧短片渲染 job 端點（需登入 + 每人每小時 5 次 + 序列化渲染）
-mountRecapJobs(app, { requireFirebaseUser, rateLimit, ipKeyGenerator });
+mountRecapJobs(app, { requireFirebaseUser, rateLimit, ipKeyGenerator, loadTripCover });
 
 // 全域錯誤處理：必須排在所有路由之後。沒有它時 Express 會回預設 HTML 錯誤頁，
 // 未設 NODE_ENV=production 就連 stack trace（含本機路徑）一起經 nginx 送到公網。

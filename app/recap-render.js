@@ -14,6 +14,11 @@
   var EMOJI = '"Segoe UI Emoji","Noto Color Emoji",sans-serif';
   var SANS = '"Noto Sans TC",sans-serif';
 
+  // IG 安全區（A3，以 1920 高計）：上方約 250px 是帳號列、下方約 400px 是說明文字與按鈕、Reels 右側約 120px 是按鈕。
+  // 約略值，待實機確認；文字一律放在 SAFE.top ～ H - SAFE.bottom 之間、右邊留 SAFE.right。
+  var SAFE = { top: 260, bottom: 420, right: 130, left: 84 };
+  function safeBottom(H) { return H - SAFE.bottom * (H / 1920); }
+
   // ── 幾何小工具 ──
   function rr(ctx, a, b, w, h, r) {
     r = Math.min(r, w / 2, h / 2);
@@ -117,27 +122,38 @@
     for (var i = 0; i < n; i++) {
       depart[i] = arrive[i] + (hold ? hold[i] : (i > 0 && i < n - 1 ? tl.dwellMs : 0));
     }
-    var routeStart = tl.coverMs;
-    var routeEnd = tl.totalMs - tl.statsMs;
+    var routeStart = tl.routeStartMs !== undefined ? tl.routeStartMs : tl.coverMs;
+    var routeEnd = tl.routeEndMs !== undefined ? tl.routeEndMs : tl.totalMs - tl.statsMs;
     return { arrive: arrive, depart: depart, routeStart: routeStart, routeEnd: routeEnd, segs: segs, dayBreaks: Array.isArray(tl.dayBreaks) ? tl.dayBreaks : [] };
   }
 
   // 媒體照片：預載 manifest.media[].src（後端為 data URL，前端可為 https/blob）
+  function loadImage(src, onload) {
+    return new Promise(function (res) {
+      if (!src || typeof Image === 'undefined') return res();
+      var img = new Image();
+      if (/^https?:/i.test(src)) img.crossOrigin = 'anonymous';
+      img.onload = function () { onload(img); res(); };
+      img.onerror = function () { res(); };
+      img.src = src;
+    });
+  }
+  // images[stopIndex]＝該站第一張（舊版用）；items[k]＝media[k] 的圖（第 2 版一站多張）；cover＝封面圖
   function preloadMedia(manifest) {
-    var byStop = {}, images = {};
+    var byStop = {}, images = {}, items = [], out = { byStop: byStop, images: images, items: items, cover: null };
     var list = Array.isArray(manifest.media) ? manifest.media : [];
-    var proms = list.map(function (m) {
-      byStop[m.stopIndex] = m;
-      return new Promise(function (res) {
-        if (!m.src || typeof Image === 'undefined') return res();
-        var img = new Image();
-        if (/^https?:/i.test(m.src)) img.crossOrigin = 'anonymous';
-        img.onload = function () { images[m.stopIndex] = img; res(); };
-        img.onerror = function () { res(); };
-        img.src = m.src;
+    var proms = list.map(function (m, k) {
+      if (!byStop[m.stopIndex]) byStop[m.stopIndex] = m;
+      items[k] = null;
+      return loadImage(m.src, function (img) {
+        items[k] = img;
+        if (!images[m.stopIndex] || !(m.photoIndex > 0)) images[m.stopIndex] = img;
       });
     });
-    return { byStop: byStop, images: images, ready: Promise.all(proms) };
+    var cover = manifest.cover || {};
+    proms.push(loadImage(cover.src, function (img) { out.cover = img; }));
+    out.ready = Promise.all(proms);
+    return out;
   }
 
   // 真實 2D 地圖底圖：預載 OSM 圖磚（data URL）
@@ -231,7 +247,8 @@
     for (var i = 1; i < n; i++) {
       var d0 = timing.depart[i - 1], a1 = timing.arrive[i];
       if (tMs < a1) { // 在第 i 段移動中：沿折線走 progLen
-        var f = ease((tMs - d0) / Math.max(1, a1 - d0));
+        var raw = clamp((tMs - d0) / Math.max(1, a1 - d0), 0, 1);
+        var f = (manifest.template && manifest.template.segmentEase === 'linear') ? raw : ease(raw);
         var dist = segStart[i - 1] + (segStart[i] - segStart[i - 1]) * f;
         var pm = at(dist);
         return { x: pm.x, y: pm.y, ang: pm.ang, reached: i - 1, heading: i, dwelling: false, pulse: 0, progLen: dist };
@@ -251,7 +268,9 @@
     var fit = { cx: world.center.x, cy: world.center.y, scale: world.fitScale };
     var follow = { cx: carPos.x, cy: carPos.y, scale: world.followScale };
     var cam;
-    if (tMs < timing.routeStart) {
+    if (tMs < timing.routeStart && manifest.cover && manifest.cover.style === 'photoCut') {
+      cam = fit;
+    } else if (tMs < timing.routeStart) {
       // 開頭：從台灣全景「俯衝」到整條行程路線（fit）。前 18% 停在全景讓觀眾看清楚，再一路 zoom in。
       // 終點停在路線全景（而非鑽到單一站）→ 落點是清晰的路線細圖，避免中段鑽太深只剩放大的低倍圖。
       var tw = world.taiwan || fit;
@@ -399,6 +418,26 @@
     drawShape(ctx, mode, col); ctx.restore();
   }
 
+  function drawCoverPhoto(ctx, img, m, W, H, progress) {
+    ctx.save();
+    ctx.fillStyle = '#0a1214'; ctx.fillRect(0, 0, W, H);
+    var z = 1.04 + progress * 0.06;
+    var s = Math.max(W / img.width, H / img.height) * z;
+    var dw = img.width * s, dh = img.height * s;
+    ctx.drawImage(img, (W - dw) / 2, (H - dh) / 2, dw, dh);
+    var g = ctx.createLinearGradient(0, H * 0.55, 0, H);
+    g.addColorStop(0, 'rgba(0,0,0,0)'); g.addColorStop(1, 'rgba(0,0,0,.72)');
+    ctx.fillStyle = g; ctx.fillRect(0, H * 0.55, W, H * 0.45);
+    ctx.textAlign = 'left';
+    ctx.shadowColor = 'rgba(0,0,0,.6)'; ctx.shadowBlur = 18;
+    // 標題放在下方安全區之上（A3）
+    var ty = safeBottom(H) - 150;
+    ctx.fillStyle = '#fff'; ctx.font = '800 112px ' + SANS; ctx.fillText(m.trip.title, SAFE.left, ty, W - SAFE.left - SAFE.right);
+    var sub = [m.trip.region, m.trip.dateLabel].filter(Boolean).join(' · ');
+    if (sub) { ctx.fillStyle = '#9fe3c8'; ctx.font = '600 52px ' + SANS; ctx.fillText(sub, SAFE.left, ty + 84, W - SAFE.left - SAFE.right); }
+    ctx.restore();
+  }
+
   // ── 字卡 ──
   function titleCard(ctx, m, W, H, a) {
     ctx.save(); ctx.globalAlpha = a; ctx.textAlign = 'center';
@@ -416,12 +455,15 @@
       ctx.fillStyle = '#fff'; ctx.font = '800 96px ' + SANS; ctx.fillText(it[0], W / 2, y);
       ctx.fillStyle = 'rgba(255,255,255,.7)'; ctx.font = '500 44px ' + SANS; ctx.fillText(it[1], W / 2, y + 56); y += 190;
     });
-    ctx.fillStyle = '#63d6aa'; ctx.font = '700 46px ' + SANS; ctx.fillText('TravelLink AI', W / 2, H * 0.93); ctx.textAlign = 'left'; ctx.restore();
+    ctx.fillStyle = '#63d6aa'; ctx.font = '700 46px ' + SANS; ctx.fillText('TravelLink AI', W / 2, safeBottom(H) - 40); ctx.textAlign = 'left'; ctx.restore();
   }
+  // 舊樣板把起點當第 0 站（第 i／n-1 站）；Reels 每一站都算（第 i+1／n 站，和旅程收束、攻略卡的景點數一致）
   function stopChip(ctx, m, carScreen, idx, W) {
     var s = m.stops[Math.min(idx, m.stops.length - 1)];
     ctx.font = '700 46px ' + SANS; var nameW = ctx.measureText(s.name).width;
-    var label = '第 ' + idx + ' / ' + (m.stops.length - 1) + ' 站';
+    var label = Array.isArray(m.timeline.phases)
+      ? '第 ' + (Math.min(idx, m.stops.length - 1) + 1) + '／' + m.stops.length + ' 站'
+      : '第 ' + idx + ' / ' + (m.stops.length - 1) + ' 站';
     ctx.font = '500 34px ' + SANS; var numW = ctx.measureText(label).width;
     var bw = Math.max(nameW, numW) + 64, bh = 138, bx = Math.max(24, Math.min(W - bw - 24, carScreen.x - bw / 2)), by = carScreen.y - bh - 72;
     ctx.save(); ctx.shadowColor = 'rgba(0,0,0,.45)'; ctx.shadowBlur = 26; ctx.fillStyle = 'rgba(14,20,22,.92)'; rr(ctx, bx, by, bw, bh, 18); ctx.fill(); ctx.restore();
@@ -435,23 +477,261 @@
     var MODE_LABEL = { taxi: '計程車', car: '開車', scooter: '機車', walk: '步行', ferry: '渡輪' };
     var mm = (mode || m.transportMode || 'car').toLowerCase();
     var ic = MODE_ICON[mm] || '🚗', lab = MODE_LABEL[mm] || '交通';
-    ctx.fillStyle = 'rgba(255,255,255,.92)'; ctx.font = '700 54px ' + SANS; ctx.fillText(m.trip.title + '  ·  ' + m.trip.region, 84, 150);
-    ctx.fillStyle = 'rgba(255,255,255,.5)'; ctx.font = '500 38px ' + SANS; ctx.fillText(m.trip.dateLabel + '  ·  ' + m.trip.people, 84, 210);
-    ctx.font = '600 40px ' + SANS; var lw = ctx.measureText(lab).width; var cw = lw + 128, ch = 64, cx0 = 84, cy0 = 250;
+    // 標題列移進上方安全區（A3：原本 y=150 會被 IG 帳號列蓋住）
+    var y0 = SAFE.top + 70;
+    ctx.fillStyle = 'rgba(255,255,255,.92)'; ctx.font = '700 54px ' + SANS; ctx.fillText(m.trip.title + '  ·  ' + m.trip.region, SAFE.left, y0, 1080 - SAFE.left - SAFE.right);
+    ctx.fillStyle = 'rgba(255,255,255,.5)'; ctx.font = '500 38px ' + SANS; ctx.fillText(m.trip.dateLabel + '  ·  ' + m.trip.people, SAFE.left, y0 + 60);
+    ctx.font = '600 40px ' + SANS; var lw = ctx.measureText(lab).width; var cw = lw + 128, ch = 64, cx0 = SAFE.left, cy0 = y0 + 100;
     ctx.fillStyle = 'rgba(99,214,170,.16)'; rr(ctx, cx0, cy0, cw, ch, 32); ctx.fill(); ctx.strokeStyle = 'rgba(99,214,170,.5)'; ctx.lineWidth = 2; rr(ctx, cx0, cy0, cw, ch, 32); ctx.stroke();
     ctx.textAlign = 'left'; ctx.textBaseline = 'middle'; ctx.font = '46px ' + EMOJI; ctx.fillStyle = '#ffe08a'; ctx.fillText(ic, cx0 + 26, cy0 + ch / 2 + 2);
     ctx.fillStyle = '#bff0dc'; ctx.font = '600 40px ' + SANS; ctx.fillText(lab, cx0 + 86, cy0 + ch / 2 + 2); ctx.textBaseline = 'alphabetic';
   }
 
+  // 字幕條：畫面下方置中，前後各 180ms 淡入淡出（字幕軌由 recap-timeline.js attachCaptions 產生）
+  function drawCaption(ctx, m, W, H, tMs) {
+    var list = Array.isArray(m.captions) ? m.captions : [];
+    var c = null;
+    for (var i = 0; i < list.length; i++) { if (tMs >= list[i].startMs && tMs < list[i].endMs) { c = list[i]; break; } }
+    if (!c || !c.text) return;
+    var a = Math.max(0, Math.min(1, Math.min((tMs - c.startMs) / 180, (c.endMs - tMs) / 180)));
+    ctx.save();
+    ctx.globalAlpha = a;
+    ctx.font = '700 56px ' + SANS;
+    var tw = Math.min(ctx.measureText(c.text).width, W - 200);
+    var bw = tw + 88, bh = 104, bx = (W - bw) / 2, by = H * 0.70 - bh / 2;   // A3：86% 會被 IG 說明文字蓋住
+    ctx.fillStyle = 'rgba(8,14,16,.72)'; rr(ctx, bx, by, bw, bh, 26); ctx.fill();
+    ctx.fillStyle = '#fff'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillText(c.text, W / 2, by + bh / 2 + 2, W - 200);
+    ctx.restore();
+  }
+
+  // ════ structure 'anchors'（Reels）：依 timeline.phases 逐段畫（IG 分享優化提案 A1～A10，「基本」風格）════
+
+  function phaseAt(m, tMs) {
+    var list = m.timeline.phases || [];
+    var hit = null;
+    for (var i = 0; i < list.length; i++) {
+      var p = list[i];
+      if (tMs >= p.startMs && tMs < p.endMs) {
+        if (p.type === 'photo' || p.type === 'focus') return p;   // 照片／聚焦疊在整段 drive 上，優先
+        if (!hit) hit = p;
+      }
+    }
+    return hit || list[list.length - 1] || { type: 'outro', startMs: 0, endMs: 1 };
+  }
+
+  function stopsReachedAt(world, dist) {
+    var r = 0;
+    for (var i = 0; i < world.segStartLen.length; i++) if (world.segStartLen[i] <= dist + 1e-9) r = i;
+    return r;
+  }
+
+  function fixedCam(cx, cy, scale, viewport) {
+    return { toScreen: function (p) { return { x: (p.x - cx) * scale + viewport.w / 2, y: (p.y - cy) * scale + viewport.h / 2 }; } };
+  }
+
+  // 滿版照片（A6，「基本」風格）：9:16 置中裁切，推近方向輪流變化（放大、縮小、左移、右移），幅度小以免切到主體
+  function drawFullPhoto(ctx, img, W, H, progress, variant) {
+    var z0 = 1.0, z1 = 1.06, dx = 0;
+    if (variant === 1) { z0 = 1.06; z1 = 1.0; }
+    else if (variant === 2) { z0 = z1 = 1.06; dx = (0.5 - progress) * W * 0.04; }
+    else if (variant === 3) { z0 = z1 = 1.06; dx = (progress - 0.5) * W * 0.04; }
+    var z = lerp(z0, z1, ease(progress));
+    var s = Math.max(W / img.width, H / img.height) * z;
+    var dw = img.width * s, dh = img.height * s;
+    ctx.drawImage(img, (W - dw) / 2 + dx, (H - dh) / 2, dw, dh);
+    // 上下各一層漸層，讓安全區內的白字讀得清楚
+    var g = ctx.createLinearGradient(0, 0, 0, SAFE.top + 260);
+    g.addColorStop(0, 'rgba(0,0,0,.55)'); g.addColorStop(1, 'rgba(0,0,0,0)');
+    ctx.fillStyle = g; ctx.fillRect(0, 0, W, SAFE.top + 260);
+    var g2 = ctx.createLinearGradient(0, H * 0.58, 0, H);
+    g2.addColorStop(0, 'rgba(0,0,0,0)'); g2.addColorStop(1, 'rgba(0,0,0,.5)');
+    ctx.fillStyle = g2; ctx.fillRect(0, H * 0.58, W, H * 0.42);
+  }
+
+  function pill(ctx, x, y, text, fill, color) {
+    ctx.font = '700 40px ' + SANS;
+    var w = ctx.measureText(text).width + 56, h = 64;
+    ctx.fillStyle = fill; rr(ctx, x, y, w, h, 32); ctx.fill();
+    ctx.fillStyle = color; ctx.textBaseline = 'middle'; ctx.fillText(text, x + 28, y + h / 2 + 2); ctx.textBaseline = 'alphabetic';
+    return w;
+  }
+
+  // 照片上的文字（全部在上方安全區下緣）：「第 2 天」標籤（A10，只在當天第一張）、「第 3／8 站」、站名
+  function photoLabels(ctx, m, W, stopIndex, dayLabel, alpha) {
+    var y = SAFE.top + 20;
+    ctx.save(); ctx.globalAlpha = alpha; ctx.textAlign = 'left';
+    ctx.shadowColor = 'rgba(0,0,0,.55)'; ctx.shadowBlur = 16;
+    if (dayLabel) {
+      var region = m.trip.region ? '・' + m.trip.region : '';
+      pill(ctx, SAFE.left, y, '第 ' + dayLabel + ' 天' + region, 'rgba(99,214,170,.92)', '#08201a');
+      y += 92;
+    }
+    ctx.fillStyle = 'rgba(255,255,255,.82)'; ctx.font = '600 40px ' + SANS;
+    ctx.fillText('第 ' + (stopIndex + 1) + '／' + m.stops.length + ' 站', SAFE.left, y + 40);
+    ctx.fillStyle = '#fff'; ctx.font = '800 76px ' + SANS;
+    ctx.fillText(m.stops[stopIndex].name, SAFE.left, y + 128, W - SAFE.left - SAFE.right);
+    ctx.restore();
+  }
+
+  function dayNightLabel(days) {
+    return days <= 1 ? '一日遊' : days + ' 天 ' + (days - 1) + ' 夜';
+  }
+
+  // 旅程收束：完整路線＋真實數據（景點數、天數、總路程）
+  function drawSummaryText(ctx, m, W, H, a) {
+    ctx.save(); ctx.globalAlpha = a; ctx.textAlign = 'center';
+    ctx.shadowColor = 'rgba(0,0,0,.7)'; ctx.shadowBlur = 20;
+    var y = safeBottom(H) - 170;
+    ctx.fillStyle = '#fff'; ctx.font = '800 88px ' + SANS;
+    ctx.fillText(m.stops.length + ' 個景點・' + dayNightLabel(m.trip.dayCount), W / 2, y, W - 2 * SAFE.right);
+    if (m.trip.distanceKm) {
+      ctx.fillStyle = '#9fe3c8'; ctx.font = '600 50px ' + SANS;
+      ctx.fillText('總路程 ' + Math.round(m.trip.distanceKm * 10) / 10 + ' 公里', W / 2, y + 80);
+    }
+    ctx.restore();
+  }
+
+  var MODE_TEXT = { taxi: '計程車', car: '開車', scooter: '機車', walk: '步行', ferry: '渡輪' };
+
+  // 攻略卡（A4）：天數、景點數、每人花費、交通方式、最推薦的一站；底部網頁網址與 App 下載頁（QR code 待補）
+  function drawGuideCard(ctx, m, W, H, a) {
+    ctx.save(); ctx.globalAlpha = a;
+    ctx.fillStyle = 'rgba(8,14,16,.9)'; ctx.fillRect(0, 0, W, H);
+    var x = SAFE.left, right = W - SAFE.right, y = SAFE.top + 60;
+    ctx.textAlign = 'left';
+    ctx.fillStyle = '#9fe3c8'; ctx.font = '700 48px ' + SANS; ctx.fillText('這趟攻略', x, y);
+    ctx.fillStyle = '#fff'; ctx.font = '800 92px ' + SANS; ctx.fillText(m.trip.title || '旅程', x, y + 110, right - x);
+    var rows = [
+      ['天數', dayNightLabel(m.trip.dayCount)],
+      ['景點', m.stops.length + ' 個'],
+      m.trip.costPerPerson ? ['每人花費', '約 NT$ ' + String(m.trip.costPerPerson).replace(/\B(?=(\d{3})+(?!\d))/g, ',')] : null,
+      ['交通', MODE_TEXT[String(m.transportMode || '').toLowerCase()] || '自由行'],
+      m.trip.highlightName ? ['最推薦', m.trip.highlightName] : null
+    ].filter(Boolean);
+    var ry = y + 230;
+    rows.forEach(function (r) {
+      ctx.fillStyle = 'rgba(255,255,255,.08)'; rr(ctx, x, ry, right - x, 112, 22); ctx.fill();
+      ctx.fillStyle = 'rgba(255,255,255,.6)'; ctx.font = '500 40px ' + SANS; ctx.fillText(r[0], x + 36, ry + 70);
+      ctx.fillStyle = '#fff'; ctx.font = '700 48px ' + SANS; ctx.textAlign = 'right';
+      ctx.fillText(r[1], right - 36, ry + 72, right - x - 260); ctx.textAlign = 'left';
+      ry += 132;
+    });
+    var brand = m.brand || {};
+    var by = safeBottom(H) - 230;
+    ctx.fillStyle = '#63d6aa'; ctx.font = '800 54px ' + SANS; ctx.fillText('TravelLink AI', x, by);
+    ctx.fillStyle = 'rgba(255,255,255,.85)'; ctx.font = '500 40px ' + SANS;
+    if (brand.webUrl) ctx.fillText('網頁版　' + brand.webUrl, x, by + 70, right - x);
+    if (brand.appUrl) ctx.fillText('App 下載　' + brand.appUrl, x, by + 128, right - x);
+    ctx.restore();
+  }
+
+  function renderAnchorFrame(ctx, m, world, timing, tMs, viewport, media, basemap) {
+    var W = viewport.w, H = viewport.h;
+    var ph = phaseAt(m, tMs);
+    var local = clamp((tMs - ph.startMs) / Math.max(1, ph.endMs - ph.startMs), 0, 1);
+    var fit = fixedCam(world.center.x, world.center.y, world.fitScale, viewport);
+
+    if (ph.type === 'cover') {
+      var cimg = media && media.cover;
+      if (cimg) drawCoverPhoto(ctx, cimg, m, W, H, local);
+      else { drawBg(ctx, W, H, world, fit, basemap); drawRouteBase(ctx, world, fit); titleCard(ctx, m, W, H, 1); }
+      return;
+    }
+
+    if (ph.type === 'photo') {
+      var items = (m.media || []).map(function (mm, k) { return { mm: mm, img: media && media.items ? media.items[k] : null, k: k }; })
+        .filter(function (it) { return it.mm.stopIndex === ph.stopIndex; });
+      var cur = null;
+      items.forEach(function (it) { if (tMs >= it.mm.atMs) cur = it; });
+      cur = cur || items[0];
+      if (cur && cur.img) {
+        var p = clamp((tMs - cur.mm.atMs) / Math.max(1, cur.mm.durationMs), 0, 1);
+        ctx.fillStyle = '#0a1214'; ctx.fillRect(0, 0, W, H);
+        drawFullPhoto(ctx, cur.img, W, H, p, cur.k % 4);
+        var first = cur === items[0];
+        photoLabels(ctx, m, W, ph.stopIndex, first ? ph.dayLabel : 0, 1);
+        return;
+      }
+      // 照片抓不到：退回地圖上的站名卡
+      var sp = world.points[ph.stopIndex];
+      var camP = fixedCam(sp.x, sp.y, world.followScale, viewport);
+      drawBg(ctx, W, H, world, camP, basemap);
+      drawRouteBase(ctx, world, camP);
+      drawRouteProgress(ctx, world, camP, world.segStartLen[ph.stopIndex], null);
+      drawStops(ctx, world.points.map(function (q) { return camP.toScreen(q); }), ph.stopIndex);
+      stopChip(ctx, m, camP.toScreen(sp), ph.stopIndex, W);
+      return;
+    }
+
+    if (ph.type === 'summary' || ph.type === 'outro') {
+      drawBg(ctx, W, H, world, fit, basemap);
+      drawRouteBase(ctx, world, fit);
+      drawRouteProgress(ctx, world, fit, world.fullLen, null);
+      drawStops(ctx, world.points.map(function (q) { return fit.toScreen(q); }), m.stops.length - 1);
+      if (ph.type === 'summary') drawSummaryText(ctx, m, W, H, Math.min(1, (tMs - ph.startMs) / 300));
+      else drawGuideCard(ctx, m, W, H, Math.min(1, (tMs - ph.startMs) / 400));
+      return;
+    }
+
+    if (ph.type === 'reveal') {
+      // 路線揭曉：鏡頭看全景，路線由起點畫到終點
+      var revealLen = world.fullLen * ease(local);
+      var tip = polyAt(world.full, world.fullCum, revealLen);
+      drawBg(ctx, W, H, world, fit, basemap);
+      drawRouteBase(ctx, world, fit);
+      drawRouteProgress(ctx, world, fit, revealLen, fit.toScreen(tip));
+      drawStops(ctx, world.points.map(function (q) { return fit.toScreen(q); }), stopsReachedAt(world, revealLen));
+      header(ctx, m, m.transportMode);
+      return;
+    }
+
+    // hop／drive／focus：地圖跟拍。hop 沿弧長從 from 走到 to；drive／focus 用既有的抵達／停留時間
+    var car;
+    if (ph.type === 'hop') {
+      var d0 = world.segStartLen[ph.fromIndex], d1 = world.segStartLen[ph.toIndex];
+      var dist = lerp(d0, d1, ease(local));
+      var at = polyAt(world.full, world.fullCum, dist);
+      car = { x: at.x, y: at.y, ang: at.ang, progLen: dist, reached: stopsReachedAt(world, dist), heading: Math.min(stopsReachedAt(world, dist) + 1, m.stops.length - 1), dwelling: false };
+    } else {
+      car = posAtTime(m, world, timing, tMs);
+    }
+    var cam = fixedCam(car.x, car.y, world.fitScale * 1.35, viewport);
+    drawBg(ctx, W, H, world, cam, basemap);
+    drawRouteBase(ctx, world, cam);
+    var carScreen = cam.toScreen({ x: car.x, y: car.y });
+    drawRouteProgress(ctx, world, cam, car.progLen, carScreen);
+    drawStops(ctx, world.points.map(function (q) { return cam.toScreen(q); }), car.reached);
+    var mode = (m.stops[Math.min(car.heading, m.stops.length - 1)].mode) || m.transportMode;
+    drawVehicle(ctx, carScreen, car.ang, mode);
+    // 經過的站名依序閃過：顯示正要抵達（或聚焦中）的那一站
+    stopChip(ctx, m, carScreen, ph.type === 'focus' ? ph.stopIndex : (car.dwelling ? car.reached : car.heading), W);
+    header(ctx, m, mode);
+  }
+
   // ── 主入口：對某時刻畫一整幀 ──
   function renderFrameAtMs(ctx, m, world, timing, tMs, viewport, media, basemap) {
     var W = viewport.w, H = viewport.h, tl = m.timeline;
+    if (Array.isArray(tl.phases)) {
+      renderAnchorFrame(ctx, m, world, timing, tMs, viewport, media, basemap);
+      drawCaption(ctx, m, W, H, tMs);
+      drawAttribution(ctx, W, H, basemap);
+      return;
+    }
     var car = posAtTime(m, world, timing, tMs);
     var cam = cameraAt(m, world, timing, car, tMs, viewport);
     drawBg(ctx, W, H, world, cam, basemap);   // 底圖需要鏡頭，故先算 car/cam
     var screenPts = world.points.map(function (p) { return cam.toScreen(p); });
     var carScreen = cam.toScreen({ x: car.x, y: car.y });
-    if (tMs < tl.coverMs) {
+    var coverImg = (m.cover && m.cover.style === 'photoCut' && media && media.images) ? media.images[m.cover.photoStopIndex] : null;
+    if (tMs < tl.coverMs && coverImg && tMs < m.cover.photoMs) {
+      // 電影感開場：實景照片 → 在 photoMs 硬切（不淡出）
+      drawCoverPhoto(ctx, coverImg, m, W, H, tMs / Math.max(1, m.cover.photoMs));
+    } else if (tMs < tl.coverMs && m.cover && m.cover.style === 'photoCut') {
+      // 硬切後停半拍：只有地圖與淡淡的路線底，路線還沒開始畫（照片抓不到時這段也當開場）
+      drawRouteBase(ctx, world, cam);
+      if (!coverImg) titleCard(ctx, m, W, H, 1);
+    } else if (tMs < tl.coverMs) {
       drawRouteBase(ctx, world, cam);
       var ca = tMs < 400 ? tMs / 400 : (tMs > tl.coverMs - 400 ? Math.max(0, (tl.coverMs - tMs) / 400) : 1);
       titleCard(ctx, m, W, H, ca);
@@ -484,15 +764,19 @@
       drawStops(ctx, screenPts, m.stops.length - 1);
       statsCard(ctx, m, W, H, Math.min(1, (tMs - timing.routeEnd) / 500));
     }
-    // 地圖來源標註（OSM 授權要求）
-    if (basemap && basemap.tiles && basemap.tiles.length && basemap.attribution) {
-      ctx.save();
-      ctx.textAlign = 'right'; ctx.font = '400 24px ' + SANS;
-      ctx.fillStyle = 'rgba(255,255,255,.5)';
-      ctx.shadowColor = 'rgba(0,0,0,.6)'; ctx.shadowBlur = 8;
-      ctx.fillText(basemap.attribution, W - 18, H - 18);
-      ctx.textAlign = 'left'; ctx.restore();
-    }
+    drawCaption(ctx, m, W, H, tMs);
+    drawAttribution(ctx, W, H, basemap);
+  }
+
+  // 地圖來源標註（OSM 授權要求）
+  function drawAttribution(ctx, W, H, basemap) {
+    if (!(basemap && basemap.tiles && basemap.tiles.length && basemap.attribution)) return;
+    ctx.save();
+    ctx.textAlign = 'right'; ctx.font = '400 24px ' + SANS;
+    ctx.fillStyle = 'rgba(255,255,255,.5)';
+    ctx.shadowColor = 'rgba(0,0,0,.6)'; ctx.shadowBlur = 8;
+    ctx.fillText(basemap.attribution, W - 18, H - 18);
+    ctx.textAlign = 'left'; ctx.restore();
   }
 
   // ── 便利 session（前端預覽用）──
