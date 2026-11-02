@@ -6,6 +6,7 @@ import android.content.Intent
 import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.core.view.WindowCompat
@@ -211,6 +212,16 @@ class MainActivity : ComponentActivity() {
                             i.action = null
                         }
                     }
+                    // 點「你的回顧短片好了」通知（C7）：用排程當下的行程快照開回顧短片頁
+                    LaunchedEffect(currentIntent) {
+                        val i = currentIntent
+                        if (i?.action == com.example.travellink_ai.ui.recap.AutoRecap.ACTION_OPEN_RECAP) {
+                            val key = i.getStringExtra(com.example.travellink_ai.ui.recap.AutoRecap.EXTRA_KEY)
+                            val item = key?.let { com.example.travellink_ai.ui.recap.AutoRecapStore(this@MainActivity).snapshot(it) }
+                            if (item != null) vm.openRecap(item)
+                            i.action = null
+                        }
+                    }
                     // 點「預計離開時間到了」通知：跳到那一站的景點資訊頁（行程要是目前開著的那趟）
                     LaunchedEffect(currentIntent) {
                         val i = currentIntent
@@ -244,6 +255,20 @@ class MainActivity : ComponentActivity() {
                     val isFullScreen = vm.currentScreen in fullScreenScreens
 
                     if (isFullScreen) {
+                        // 系統返回鍵：沒有攔截的頁面按返回會直接離開 App，所以走跟畫面上返回按鈕同一條路。
+                        // 自己有攔截的頁（result、stop_detail、group_setup、memory_edit、memory_grid）
+                        // 比這裡晚註冊、會優先處理，這裡不重複列
+                        val screenBack: (() -> Unit)? = when (vm.currentScreen) {
+                            "preview" -> { { vm.currentScreen = vm.previewReturnScreen } }
+                            "feedback" -> { { feedbackVm.resetFeedback(); vm.currentScreen = vm.feedbackReturnScreen } }
+                            "pref_onboarding" -> { { vm.currentScreen = "home" } }
+                            "preferences", "about", "feedback_history", "profile", "notifications" ->
+                                { { vm.currentScreen = vm.pageReturnScreen } }
+                            "trip_map" -> { { vm.currentScreen = "preview" } }
+                            "memory_recap" -> { { vm.currentScreen = "memory_edit" } }
+                            else -> null
+                        }
+                        BackHandler(enabled = screenBack != null) { screenBack?.invoke() }
                         when (vm.currentScreen) {
                             "preview" -> Box(Modifier.fillMaxSize()) {
                                 // 預覽頁底部按鈕欄（開始行程等）的高度，機器人頭像要停在它上方
@@ -266,12 +291,12 @@ class MainActivity : ComponentActivity() {
                                 viewModel = feedbackVm,
                                 onDone = {
                                     feedbackVm.resetFeedback()
-                                    vm.currentScreen = "home"
+                                    vm.currentScreen = vm.feedbackReturnScreen
                                 }
                             )
                             "preferences" -> PreferencesScreen(
                                 viewModel = vm,
-                                onBack = { vm.currentScreen = "home" }
+                                onBack = { vm.currentScreen = vm.pageReturnScreen }
                             )
                             "pref_onboarding" -> PreferencesScreen(
                                 viewModel = vm,
@@ -279,15 +304,15 @@ class MainActivity : ComponentActivity() {
                                 onboarding = true
                             )
                             "about" -> AboutScreen(
-                                onBack = { vm.currentScreen = "home" }
+                                onBack = { vm.currentScreen = vm.pageReturnScreen }
                             )
                             "feedback_history" -> FeedbackHistoryScreen(
                                 historyList = historyList,
-                                onBack = { vm.currentScreen = "home" }
+                                onBack = { vm.currentScreen = vm.pageReturnScreen }
                             )
                             "profile" -> ProfileScreen(
                                 authViewModel = authVm,
-                                onBack = { vm.currentScreen = "home" }
+                                onBack = { vm.currentScreen = vm.pageReturnScreen }
                             )
                             // ── 通知中心 ──────────────────────────────────
                             "notifications" -> {
@@ -299,7 +324,7 @@ class MainActivity : ComponentActivity() {
                                         onFeedbackClick = { item -> vm.loadForFeedback(item) },
                                         onOpenFriends = { vm.currentScreen = "friends" },
                                         onOpenTrip = { tripId -> collabVm.openCollabTrip(tripId) },
-                                        onBack = { vm.currentScreen = "home" }
+                                        onBack = { vm.currentScreen = vm.pageReturnScreen }
                                     )
                                 } else {
                                     LaunchedEffect(Unit) { vm.currentScreen = "home" }
@@ -396,7 +421,7 @@ class MainActivity : ComponentActivity() {
                         // 初始 tab 直接依 currentScreen 推導：從全螢幕頁（如 preview）返回時，
                         // 本框架會重新組合，若寫死 0 會先閃一格首頁再被修正成歷史頁。
                         var selectedTab by rememberSaveable {
-                            mutableIntStateOf(when (vm.currentScreen) { "history" -> 2; "friends" -> 3; else -> 0 })
+                            mutableIntStateOf(when (vm.currentScreen) { "explore" -> 1; "history" -> 2; "friends" -> 3; else -> 0 })
                         }
                         var showPlanningSheet by remember { mutableStateOf(false) }
                         // 側欄「輸入邀請碼加入」→ 首頁的加入對話框
@@ -433,12 +458,18 @@ class MainActivity : ComponentActivity() {
                         if (vm.currentScreen != lastSyncedScreen) {
                             lastSyncedScreen = vm.currentScreen
                             when (vm.currentScreen) {
+                                "explore" -> selectedTab = 1
                                 "history" -> selectedTab = 2
                                 "friends" -> selectedTab = 3
                                 "home"    -> selectedTab = 0
                             }
                         }
 
+                        // 系統返回鍵：先關側欄，其他分頁回首頁，只有在首頁才離開 App
+                        BackHandler(enabled = drawerState.isOpen || selectedTab != 0) {
+                            if (drawerState.isOpen) scope.launch { drawerState.close() }
+                            else { selectedTab = 0; vm.currentScreen = "home" }
+                        }
                         ModalNavigationDrawer(
                             drawerState = drawerState,
                             drawerContent = {
@@ -478,7 +509,7 @@ class MainActivity : ComponentActivity() {
                                     )
                                     NavigationBarItem(
                                         selected = selectedTab == 1,
-                                        onClick = { selectedTab = 1 },
+                                        onClick = { selectedTab = 1; vm.currentScreen = "explore" },
                                         icon = { Icon(Icons.Default.Explore, null) },   // B2：羅盤（探索語意），取代放大鏡
                                         label = { Text("探索", fontSize = 12.sp) },
                                         colors = NavigationBarItemDefaults.colors(
@@ -535,18 +566,18 @@ class MainActivity : ComponentActivity() {
                                             viewModel = vm,
                                             pendingFeedbacks = pendingFeedbacks,
                                             onStartPlanning = { showPlanningSheet = true },
-                                            onViewAllHistory = { selectedTab = 2 },
+                                            onViewAllHistory = { selectedTab = 2; vm.currentScreen = "history" },
                                             onHistoryItemClick = { vm.loadFromHistory(it) },
                                             onFeedbackClick = { item -> vm.loadForFeedback(item) },
                                             onMenuClick = { scope.launch { drawerState.open() } },
                                             currentUserName  = authProfile?.name  ?: "旅人",
                                             currentUserEmoji = authProfile?.emoji ?: "🌟",
-                                            onSearch = { q -> exploreQuery = q; selectedTab = 1 },
+                                            onSearch = { q -> exploreQuery = q; selectedTab = 1; vm.currentScreen = "explore" },
                                             openJoinDialog = requestJoinDialog,
                                             onJoinDialogOpened = { requestJoinDialog = false },
                                             openModeDialog = requestModeDialog,
                                             onModeDialogOpened = { requestModeDialog = false },
-                                            onOpenExplore = { selectedTab = 1 }
+                                            onOpenExplore = { selectedTab = 1; vm.currentScreen = "explore" }
                                         )
                                         1 -> ExploreScreen(
                                             viewModel = vm,
@@ -564,7 +595,7 @@ class MainActivity : ComponentActivity() {
                                         )
                                         2 -> ItineraryHistoryScreen(
                                             viewModel = vm,
-                                            onBack = { selectedTab = 0 },
+                                            onBack = { selectedTab = 0; vm.currentScreen = "home" },
                                             currentUserName = authProfile?.name ?: "旅人",
                                             onMenuClick = { scope.launch { drawerState.open() } }
                                         )
@@ -685,6 +716,7 @@ class MainActivity : ComponentActivity() {
                     NotificationManager.IMPORTANCE_DEFAULT
                 ).apply { description = "出發前一天與當天早上提醒您的行程" }
             )
+            com.example.travellink_ai.ui.recap.AutoRecap.ensureChannel(this)
         }
     }
 }

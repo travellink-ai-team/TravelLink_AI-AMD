@@ -326,6 +326,9 @@ fun ItineraryHistoryScreen(
         selectedKeys = emptySet()
     }
 
+    // 系統返回鍵：選取模式中先退出選取，不要直接跳回首頁
+    androidx.activity.compose.BackHandler(enabled = isSelectMode) { exitSelectMode() }
+
     fun toggleSelection(item: LocalItinerary) {
         selectedKeys = if (item.createdAt in selectedKeys) {
             selectedKeys - item.createdAt

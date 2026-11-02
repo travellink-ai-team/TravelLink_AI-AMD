@@ -19,9 +19,11 @@ import com.example.travellink_ai.data.model.Stop
  * 同名的站（起點＝終點、隔天的住宿）只放一個標記，編號寫成「1／9」。
  */
 internal object PosterLayout {
-    /** 版面座標系（9:16）；疊字時依底圖實際大小縮放 */
+    /** 預設版面座標系（9:16，Gemini）；疊字時依底圖實際大小縮放。OpenAI 只有 2:3，用 [OPENAI_W]×[OPENAI_H] */
     const val W = 900f
     const val H = 1600f
+    const val OPENAI_W = 1024f
+    const val OPENAI_H = 1536f
     private const val TOP = 0.20f      // 第一站的高度（上面留給標題）
     private const val BOTTOM = 0.90f   // 最後一站的高度（下面留給站名標籤）
     private const val SKETCH_DOT = 26f
@@ -40,12 +42,15 @@ internal object PosterLayout {
         val label: String get() = numbers.joinToString("／")
     }
 
-    /** [order]＝每一站對應的 places 索引（依行程順序） */
-    class Layout(val places: List<Place>, val order: List<Int>)
+    /** [order]＝每一站對應的 places 索引（依行程順序）；[w]×[h]＝版面座標系，草稿也畫這個大小 */
+    class Layout(val places: List<Place>, val order: List<Int>, val w: Float = W, val h: Float = H) {
+        /** 給 AI 的比例描述 */
+        val ratioText: String get() = if (w * 3 == h * 2) "2:3 直式" else "9:16 直式"
+    }
 
     fun nameKey(name: String) = name.replace("臺", "台").replace(Regex("\\s+"), "").lowercase()
 
-    fun build(stops: List<Stop>): Layout {
+    fun build(stops: List<Stop>, w: Float = W, h: Float = H): Layout {
         val keys = mutableListOf<String>()
         val first = mutableListOf<Stop>()
         val numbers = mutableListOf<MutableList<Int>>()
@@ -60,11 +65,11 @@ internal object PosterLayout {
         }
         val n = keys.size
         val places = (0 until n).map { k ->
-            val y = H * if (n == 1) 0.5f else TOP + (BOTTOM - TOP) * k / (n - 1)
-            val x = W * when { n == 1 -> 0.5f; k % 2 == 0 -> 0.28f; else -> 0.72f }
+            val y = h * if (n == 1) 0.5f else TOP + (BOTTOM - TOP) * k / (n - 1)
+            val x = w * when { n == 1 -> 0.5f; k % 2 == 0 -> 0.28f; else -> 0.72f }
             Place(first[k].name.trim().ifBlank { "景點" }, first[k].emoji, first[k].stopType, numbers[k], ids[k], x, y)
         }
-        return Layout(places, order)
+        return Layout(places, order, w, h)
     }
 
     /**
@@ -77,7 +82,7 @@ internal object PosterLayout {
     }
 
     fun sketch(layout: Layout): Bitmap {
-        val bmp = Bitmap.createBitmap(W.toInt(), H.toInt(), Bitmap.Config.ARGB_8888)
+        val bmp = Bitmap.createBitmap(layout.w.toInt(), layout.h.toInt(), Bitmap.Config.ARGB_8888)
         val c = Canvas(bmp)
         c.drawColor(0xFFF4F1EA.toInt())
         val line = Paint(Paint.ANTI_ALIAS_FLAG).apply {
@@ -151,7 +156,7 @@ internal object PosterLayout {
             "附圖說明：紅色編號圓點是各站的位置，灰色虛線是行程路線。",
             "",
             "【位置】每一站的小插圖，中心必須正好畫在草稿上對應圓點的位置：不要往外移、不要移到畫面中央、也不要和其他站交換位置。路線用一條連續的手繪虛線，沿著草稿虛線依序連接各站，可以有自然的彎曲。畫面最上方約八分之一留給標題，只畫天空或背景、不要放站點插圖。",
-            "【內容】背景是俯瞰的手繪示意地圖，依「$area」一帶的特色畫出地形（例如海岸線與海、山脈、綠地、街道或道路；地名只是讓你知道地形，不要寫出來）。每一站畫一個符合下列描述的小插圖。主角是可愛的卡通「$who」，在其中兩三站旁邊當嚮導或旅伴。日式雜誌插畫風格，可愛、清新，比例 9:16 直式。",
+            "【內容】背景是俯瞰的手繪示意地圖，依「$area」一帶的特色畫出地形（例如海岸線與海、山脈、綠地、街道或道路；地名只是讓你知道地形，不要寫出來）。每一站畫一個符合下列描述的小插圖。主角是可愛的卡通「$who」，在其中兩三站旁邊當嚮導或旅伴。日式雜誌插畫風格，可愛、清新，比例 ${layout.ratioText}。",
             "【絕對禁止】整張圖不能有任何文字：不要任何中文（繁體或簡體）、英文、數字、編號、標題或標籤；建築物的招牌、匾額、包裝畫成空白或圖案。也不要畫空白的標籤框、文字底板、圖例或紅色圓點。編號與站名之後會由程式另外疊上，圖上只要有插畫。",
             "",
             "各圓點要畫的內容：",
@@ -166,7 +171,7 @@ internal object PosterLayout {
         val out = base.copy(Bitmap.Config.ARGB_8888, true)
         val c = Canvas(out)
         val w = out.width.toFloat(); val h = out.height.toFloat()
-        val sx = w / W; val sy = h / H; val s = minOf(sx, sy)
+        val sx = w / layout.w; val sy = h / layout.h; val s = minOf(sx, sy)
         val crowded = layout.places.size > 10
         val bold = Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)
         val fill = Paint(Paint.ANTI_ALIAS_FLAG)

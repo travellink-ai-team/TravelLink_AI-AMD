@@ -1,13 +1,9 @@
-<?xml version="1.0" encoding="utf-8"?><!--
-   Sample backup rules file; uncomment and customize as necessary.
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+   Android 11 以下的自動備份規則（Android 12 以上看 data_extraction_rules.xml）。
    See https://developer.android.com/guide/topics/data/autobackup
-   for details.
-   Note: This file is ignored for devices older than API 31
-   See https://developer.android.com/about/versions/12/backup-restore
 -->
 <full-backup-content>
-    <!--
-   <include domain="sharedpref" path="."/>
-   <exclude domain="sharedpref" path="device.xml"/>
--->
+    <!-- 使用者自備的 AI 金鑰只屬於這支手機，不進雲端備份 -->
+    <exclude domain="sharedpref" path="illustration_byok.xml"/>
 </full-backup-content>

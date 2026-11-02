@@ -62,10 +62,17 @@ python scripts/auto_discover.py --dry-run
 
 ### Cloud Functions (`functions/main.py`)
 
-Three HTTP-callable functions:
-- `generate_itinerary()` — calls Gemini 2.5 Flash with a structured prompt; returns JSON `{title, stops[], aiReply}`
-- `generate_image()` — calls Imagen 3.0 to produce hand-drawn style 16:9 travel illustrations
-- `_build_itinerary_prompt()` — internal helper that constructs the Gemini prompt
+- `generate_content()` — callable proxy for every App Gemini call (text and image; login required, model whitelist). Enforces the per-user daily free quota.
+- `get_ai_quota()` — returns today's quota `{date, exempt, limits, used}` (the App checks it before drawing illustrations).
+- `detect_stop_boxes()` — finds each stop's box on an illustration and caches it in `micro_trips/{id}.imageStopBoxes`.
+- `cleanup_deleted_trip_photo` — Firestore trigger that removes the Storage file of a deleted shared-album photo.
+
+**Daily free quota:**
+- Counts live in `usage_daily/{uid}_{YYYY-MM-DD}` (Taiwan date). Kinds are `trip`, `image` (one per picture), `chat`, `swap`, and `text` (total of all text calls).
+- The web proxy writes the same doc, so both clients share one count. Only the Admin SDK writes it; no rule opens it to clients.
+- Limits and `exemptUids` live in `config/ai_quota`; defaults are in `DEFAULT_QUOTA_LIMITS`.
+- The App tags text calls with `quotaKind` (`callGemini(quotaKind = AiQuota.TRIP/SWAP/CHAT)`). Images are counted server-side.
+- If the model call fails, the count is refunded.
 
 Runtime: Python 3.14, timeout 120–300s, max 10 instances.
 

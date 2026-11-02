@@ -17,8 +17,11 @@ import com.example.travellink_ai.data.model.generateInviteCode
 import com.example.travellink_ai.data.model.isWebCollabDoc
 import com.example.travellink_ai.data.model.normalizeDaysField
 import com.example.travellink_ai.data.model.parseDayIndex
+import com.example.travellink_ai.data.model.parseToiletLocations
 import com.example.travellink_ai.data.model.parseWalkNext
 import com.example.travellink_ai.data.model.parseManualMin
+import com.example.travellink_ai.data.model.parseMergedCoords
+import com.example.travellink_ai.data.model.parseMergedSubSpots
 import com.example.travellink_ai.data.model.parseIsStation
 import com.example.travellink_ai.data.model.sanitizeEmailKey
 import com.example.travellink_ai.data.model.stableStopId
@@ -1152,7 +1155,6 @@ class CollabViewModel @Inject constructor(
                     // id 一次算整個陣列（缺 id 的站要用陣列位置推導、碰撞要加後綴，與網頁同一套）
                     val stopIds = com.example.travellink_ai.data.model.stableStopIds(stopsRaw)
                     val parsedStops = stopsRaw.mapIndexedNotNull { i, raw -> (raw as? Map<*, *>)?.let { i to it } }.map { (i, s) ->
-                        val toiletsRaw = s["nearbyToiletLocations"] as? List<*> ?: emptyList<Any>()
                         Stop(
                             name          = s["name"]  as? String ?: "",
                             time          = s["time"]  as? String ?: "",
@@ -1163,7 +1165,7 @@ class CollabViewModel @Inject constructor(
                                             ?: (s["stayMin"] as? Number)?.toLong() ?: 0L,
                             order         = (s["order"]    as? Number)?.toLong() ?: 0L,
                             businessHours = s["businessHours"] as? String ?: "未提供",
-                            nearbyToiletLocations = toiletsRaw.filterIsInstance<Map<String, String>>(),
+                            nearbyToiletLocations = parseToiletLocations(s["nearbyToiletLocations"]),
                             searchKeyword = s["searchKeyword"] as? String ?: "",
                             placeId       = s["placeId"] as? String ?: "",
                             stopId        = stopIds[i],
@@ -1177,7 +1179,10 @@ class CollabViewModel @Inject constructor(
                             dayIndex      = parseDayIndex(s),
                             walkNext      = parseWalkNext(s),
                             manualStartMin = parseManualMin(s, "manualStartMin"),
-                            manualEndMin   = parseManualMin(s, "manualEndMin")
+                            manualEndMin   = parseManualMin(s, "manualEndMin"),
+                            mergedSubSpots = parseMergedSubSpots(s),
+                            mergedRadiusMeters = (s["mergedRadiusMeters"] as? Number)?.toInt() ?: 0,
+                            mergedMemberCoords = parseMergedCoords(s)
                         )
                     }.sortedBy { it.order }
 
@@ -1819,7 +1824,10 @@ class CollabViewModel @Inject constructor(
                                     dayIndex = parseDayIndex(s),
                                     walkNext = parseWalkNext(s),
                                     manualStartMin = parseManualMin(s, "manualStartMin"),
-                                    manualEndMin   = parseManualMin(s, "manualEndMin")
+                                    manualEndMin   = parseManualMin(s, "manualEndMin"),
+                                    mergedSubSpots = parseMergedSubSpots(s),
+                                    mergedRadiusMeters = (s["mergedRadiusMeters"] as? Number)?.toInt() ?: 0,
+                                    mergedMemberCoords = parseMergedCoords(s)
                                 )
                             }
                         }

@@ -33,8 +33,19 @@ data class AssistantRec(
 data class AssistantAction(
     val type: String,        // "add_stop" | "remove_stop" | "replace_stop"
     val name: String = "",   // 新景點名（add / replace 用）
-    val target: String = ""  // 要刪或被換掉的現有景點名（remove / replace 用）
+    val target: String = "", // 要刪或被換掉的現有景點名（remove / replace 用）
+    // ── 加站的位置（add_stop）：AI 依使用者的話填（「今晚」「明天」「入住後」），沒講是 null；
+    //    修改卡算好位置後寫回這兩個欄位，按「套用」就照卡上顯示的位置加 ──
+    val day: Int? = null,
+    val afterCheckIn: Boolean? = null,
+    /** 卡上顯示的位置：「第 1 天 19:05（入住後）」；算不出來（不在本地資料）是空字串 */
+    val placeLabel: String = "",
+    /** 可以改到哪裡（多日、或有住宿時才有多個） */
+    val slotOptions: List<SlotOption> = emptyList()
 )
+
+/** 修改卡上可選的加站位置 */
+data class SlotOption(val day: Int, val afterCheckIn: Boolean, val label: String)
 
 /**
  * 「已為您刪除」「已把 A 換成 B」→「建議刪除」「建議把 A 換成 B」。

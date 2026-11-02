@@ -16,7 +16,9 @@ import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import java.text.SimpleDateFormat
 import java.util.Calendar
+import java.util.Date
 import java.util.Locale
+import java.util.TimeZone
 
 /**
  * 行程日期的天氣預報摘要（C5），顯示於行程預覽摘要卡。
@@ -117,7 +119,8 @@ object CwaWeatherService {
                     parameter("LocationName", township.name)
                     parameter("format", "JSON")
                 }.bodyAsText()
-                parseForecast(body, township.name, tripDate).also {
+                val datePrefix = tripDate.replace("/", "-")  // CWA 時間格式 yyyy-MM-ddTHH:mm:ss
+                parseForecast(body, township.name, tripDate) { it.startsWith(datePrefix) }.also {
                     if (it == null) Log.w(TAG, "🌦 CWA $dataset 解析無結果（回應 ${body.length} 字元）：${body.take(200)}")
                 }
             } catch (e: Exception) {
@@ -131,6 +134,47 @@ object CwaWeatherService {
             }
         }
         return null
+    }
+
+    /**
+     * 接下來 [hours] 小時的天氣（「現在去哪」用）。
+     * [fetchForecast] 的降雨機率是整天的最大值，「早上晴、晚上才下雨」也會被算成會下雨；
+     * 這裡只取現在所在的 3 小時時段起、到 [hours] 小時後的預報。同一鄉鎮一小時內沿用快取。
+     */
+    suspend fun fetchNextHours(lat: Double, lng: Double, hours: Int = 6): WeatherInfo? {
+        if (apiKey.isBlank()) { Log.w(TAG, "🌦 CWA 略過：CWA_API_KEY 空白"); return null }
+        val township = nearestTownship(lat, lng)
+        val now = System.currentTimeMillis()
+        val cacheKey = "$DATASET_3HR|${township.name}|next|${now / 3_600_000L}"
+        cache[cacheKey]?.let { return it }
+        val today = SimpleDateFormat("yyyy/MM/dd", Locale.getDefault()).format(Date(now))
+        val from = now - 3 * 3_600_000L   // 一段 3 小時：往前 3 小時才包得到「現在」所在的那一段
+        val to = now + hours * 3_600_000L
+        Log.d(TAG, "🌦 CWA 查詢：接下來 $hours 小時 鄉鎮=${township.name}")
+        val info = try {
+            val body = client.get("$BASE_URL/$DATASET_3HR") {
+                parameter("Authorization", apiKey)
+                parameter("LocationName", township.name)
+                parameter("format", "JSON")
+            }.bodyAsText()
+            parseForecast(body, township.name, today) { start ->
+                val t = parseCwaTime(start)
+                t != null && t >= from && t < to
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "🌦 CWA 接下來幾小時請求失敗：${e.message}")
+            null
+        }
+        return info?.also { cache[cacheKey] = it }
+    }
+
+    /** CWA 時間 `2026-11-01T15:00:00+08:00` → epoch 毫秒 */
+    private fun parseCwaTime(s: String): Long? = try {
+        SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss", Locale.US)
+            .apply { timeZone = TimeZone.getTimeZone("Asia/Taipei") }
+            .parse(s.take(19))?.time
+    } catch (e: Exception) {
+        null
     }
 
     private fun nearestTownship(lat: Double, lng: Double): Township =
@@ -155,7 +199,10 @@ object CwaWeatherService {
     private fun JsonObject.firstOf(vararg keys: String): JsonElement? =
         keys.firstNotNullOfOrNull { this[it] }
 
-    private fun parseForecast(body: String, townshipName: String, tripDate: String): WeatherInfo? {
+    /** [accept]：時段起點（CWA 時間字串）要不要算進來 */
+    private fun parseForecast(
+        body: String, townshipName: String, tripDate: String, accept: (String) -> Boolean
+    ): WeatherInfo? {
         return try {
             val root = json.parseToJsonElement(body).jsonObject
             val records = root.firstOf("records")?.jsonObject ?: return null
@@ -165,8 +212,6 @@ object CwaWeatherService {
                 ?.jsonArray?.firstOrNull()?.jsonObject ?: return null
             val elements = location.firstOf("WeatherElement", "weatherElement")
                 ?.jsonArray ?: return null
-
-            val targetDatePrefix = tripDate.replace("/", "-")  // CWA 時間格式 yyyy-MM-ddTHH:mm:ss
 
             val temps = mutableListOf<Int>()
             val pops = mutableListOf<Int>()
@@ -180,7 +225,7 @@ object CwaWeatherService {
                     val tObj = t.jsonObject
                     val start = tObj.firstOf("DataTime", "dataTime", "StartTime", "startTime")
                         ?.jsonPrimitive?.content ?: continue
-                    if (!start.startsWith(targetDatePrefix)) continue
+                    if (!accept(start)) continue
                     val valueObj = tObj.firstOf("ElementValue", "elementValue")
                         ?.jsonArray?.firstOrNull()?.jsonObject ?: continue
                     // 新舊 schema 的值欄位名不同（Temperature / value / Weather...），取所有 primitive 值判斷

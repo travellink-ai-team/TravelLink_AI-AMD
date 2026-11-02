@@ -918,7 +918,7 @@ private fun TripToolRow(
         if (showParking) {
             OutlinedButton(
                 onClick = onParking,
-                modifier = Modifier.weight(1f).height(46.dp),
+                modifier = Modifier.weight(1f).height(46.dp).coachTarget(Tours.T_ONGOING_PARKING),
                 shape = RoundedCornerShape(12.dp),
                 colors = ButtonDefaults.outlinedButtonColors(contentColor = DesignTokens.Accent),
                 border = BorderStroke(1.dp, DesignTokens.Border)

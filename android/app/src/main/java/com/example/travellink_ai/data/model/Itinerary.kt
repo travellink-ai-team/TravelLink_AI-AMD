@@ -47,8 +47,17 @@ data class Stop(
      * App 不編輯它，只負責讀進來、存檔時原樣寫回，送旅程應變 Agent 時換算成 timeLocked（T4 規格第 4 節）。
      */
     val manualStartMin: Int? = null,
-    val manualEndMin: Int? = null
-)
+    val manualEndMin: Int? = null,
+    // ── 大景區合併（與網頁同欄位，見 SubSpotMerge）─────────────────────
+    /** 併進這一站的小景點名稱；空＝不是合併站。Firestore 另寫 isMergedAttraction */
+    val mergedSubSpots: List<String> = emptyList(),
+    /** 地圖上畫的範圍半徑（公尺）；0＝不畫 */
+    val mergedRadiusMeters: Int = 0,
+    /** 各小景點座標（`{lat, lng}`），網頁用來畫範圍 */
+    val mergedMemberCoords: List<Map<String, Double>> = emptyList()
+) {
+    val isMergedAttraction: Boolean get() = mergedSubSpots.isNotEmpty()
+}
 
 /**
  * 這趟行程共幾天：取 stops 的最大 dayIndex。

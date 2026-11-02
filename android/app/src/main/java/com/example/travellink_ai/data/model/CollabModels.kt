@@ -137,6 +137,45 @@ fun stableStopIds(stops: List<*>): List<String> {
 /** 網頁手動鎖定時間（從 0 點起算的分鐘，null＝沒鎖）：App 原樣保留、存檔時原樣寫回 */
 fun parseManualMin(s: Map<*, *>, key: String): Int? = (s[key] as? Number)?.toInt()
 
+/** 大景區合併的子景點（網頁 isMergedAttraction＝false 時一律當沒有） */
+fun parseMergedSubSpots(s: Map<*, *>): List<String> =
+    if (s["isMergedAttraction"] == false) emptyList()
+    else (s["mergedSubSpots"] as? List<*>)?.mapNotNull { (it as? String)?.takeIf { n -> n.isNotBlank() } } ?: emptyList()
+
+fun parseMergedCoords(s: Map<*, *>): List<Map<String, Double>> =
+    (s["mergedMemberCoords"] as? List<*>)?.mapNotNull { c ->
+        val m = c as? Map<*, *> ?: return@mapNotNull null
+        val lat = (m["lat"] as? Number)?.toDouble() ?: return@mapNotNull null
+        val lng = (m["lng"] as? Number)?.toDouble() ?: return@mapNotNull null
+        mapOf("lat" to lat, "lng" to lng)
+    } ?: emptyList()
+
+/**
+ * Firestore 的 nearbyToiletLocations：網頁寫的 lat/lng 是數字。
+ * 不能用 filterIsInstance<Map<String, String>>()（型別抹除照樣放行，取值時才丟 ClassCastException，
+ * 2026-11-02 地圖開廁所閃退），每個值都轉成字串。
+ */
+fun parseToiletLocations(raw: Any?): List<Map<String, String>> =
+    (raw as? List<*>)?.mapNotNull { t ->
+        (t as? Map<*, *>)?.entries
+            ?.mapNotNull { (k, v) -> (k as? String)?.let { key -> v?.let { key to it.toString() } } }
+            ?.toMap()
+    } ?: emptyList()
+
+/** 寫回 Firestore 的大景區欄位（與網頁同名；不是合併站就清成網頁取消合併時的樣子） */
+fun mergedFields(stop: Stop): Map<String, Any?> =
+    if (stop.isMergedAttraction) mapOf(
+        "isMergedAttraction" to true,
+        "mergedSubSpots" to stop.mergedSubSpots,
+        "mergedRadiusMeters" to stop.mergedRadiusMeters.takeIf { it > 0 },
+        "mergedMemberCoords" to stop.mergedMemberCoords.takeIf { it.isNotEmpty() }
+    ) else mapOf(
+        "isMergedAttraction" to false,
+        "mergedSubSpots" to null,
+        "mergedRadiusMeters" to null,
+        "mergedMemberCoords" to null
+    )
+
 /** 網頁端用 type: "start"/"end" 標記車站站點，App 用 isStation */
 fun parseIsStation(s: Map<*, *>): Boolean =
     s["isStation"] as? Boolean
