@@ -43,6 +43,8 @@ const { parseDelayRequest } = require('./agent/delay');
 const { mountRecapJobs } = require('./recap-jobs');
 // 行程生成 Agent（方案 C，一日遊）：POST /api/agent/plan，獨立模組
 const { mountAgentPlan } = require('./agent/plan-route');
+// 零散文字 AI 任務的統一入口 /api/ai/task（方案 E，見 docs/amd-agent/ai-task-inventory.md）
+const { mountAiTasks } = require('./ai-tasks');
 
 const PORT = Number(process.env.PORT) || 3001;
 const VERTEX_API_KEY = (process.env.VERTEX_API_KEY || '').trim();
@@ -1523,6 +1525,9 @@ mountRecapJobs(app, { requireFirebaseUser, rateLimit, ipKeyGenerator, loadTripCo
 
 // 行程生成 Agent 端點（需登入 + 每 IP 10 次／10 分鐘 + SSE；usage 記到 generation_runs）
 mountAgentPlan(app, { requireFirebaseUser, rateLimit, genRuns, amdLlm });
+
+// 文字 AI 小任務（標題、描述、版面…）：需登入 + 限流；AI_PROVIDER=amd 走 gpt-oss-120b 結構化輸出
+mountAiTasks(app, { requireFirebaseUser, rateLimit, vertexUpstream: VERTEX_UPSTREAM, vertexApiKey: VERTEX_API_KEY });
 
 // 全域錯誤處理：必須排在所有路由之後。沒有它時 Express 會回預設 HTML 錯誤頁，
 // 未設 NODE_ENV=production 就連 stack trace（含本機路徑）一起經 nginx 送到公網。

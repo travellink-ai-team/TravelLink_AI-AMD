@@ -4616,6 +4616,25 @@
     const fallback = () => places.forEach((pl) => { pl.desc = posterGenericDescription(pl); });
     const vertex = getVertexConfig();
     if (!vertex.ready) { fallback(); return; }
+    // 方案 E：代理模式改走 /api/ai/task（prompt 與 schema 在 server/ai-tasks.js），失敗照舊用通用描述
+    if (window.WAI_AI_TASK && WAI_AI_TASK.enabled()) {
+      try {
+        const r = await WAI_AI_TASK.request('poster_place_descriptions', {
+          area, places: places.map((pl) => ({ n: pl.numbers[0], name: pl.name, type: pl.type }))
+        }, { headers: await vertexAuthHeaders(), timeoutMs: 25000 });
+        const map = {};
+        ((r.output && r.output.descriptions) || []).forEach((d) => { map[String(d.n)] = d.desc; });
+        places.forEach((pl) => {
+          const d = String(map[String(pl.numbers[0])] || '').trim();
+          pl.desc = d ? d.slice(0, 40) : posterGenericDescription(pl);
+        });
+        return r;
+      } catch (e) {
+        console.warn('[互動插圖] 畫面描述失敗，改用通用描述：', e && e.message);
+        fallback();
+        return null;
+      }
+    }
     const list = places.map((pl) => `${pl.numbers[0]}. ${pl.name}${pl.type ? `（${pl.type}）` : ''}`).join('\n');
     const prompt = `以下是一趟「${area}」旅遊行程的地點。請為每個地點寫一句 20 字以內的「畫面描述」，描述它的外觀、景觀或代表性食物，讓插畫家不看名字也畫得出來。描述裡不能出現任何專有名詞（地名、店名、景點名）、文字、數字或招牌。如果不確定這個地點實際長什麼樣子，就依類型寫通用的描述，不要猜測特定細節。回傳 JSON 物件，鍵是編號字串、值是描述，例如 {"1": "有屋簷與月台的鐵路車站"}。\n${list}`;
     try {
@@ -4858,7 +4877,7 @@
       ? (portrait ? buildPosterLayout(schedule, 1024, 1536) : buildPosterLayout(schedule, 1536, 1024))
       : (portrait ? buildPosterLayout(schedule, 900, 1600) : buildPosterLayout(schedule, 1600, 900));
     const area = currentTripRegion || currentTripTitle || '這趟旅程的目的地';
-    await describePosterPlaces(layout.places, area);
+    const descMeta = await describePosterPlaces(layout.places, area);
     const sketchDataUrl = renderPosterSketch(layout);
     const prompt = buildPosterBasePrompt(layout, character, area);
     console.log(`[行程圖 Prompt${dayLabel ? '・' + dayLabel : ''}]`, prompt);
@@ -4875,6 +4894,7 @@
       baseDataUrl = await generatePosterWithDefault(prompt, vertex, apiKey, sketchDataUrl, aspect);
       label = '由 Gemini 生成（TravelLinkAI 提供）';
     }
+    if (window.WAI_AI_TASK && WAI_AI_TASK.isAmd(descMeta)) label += '・地點描述由 AMD gpt-oss-120b 撰寫';
     const composed = await composePosterImage(baseDataUrl, layout, schedule, dayLabel);
     const snapshot = schedule.map((s) => ({ stopId: posterStopIdOf(s), name: String(s.name || '') }));
     return {
@@ -8242,6 +8262,7 @@
             onkeydown="if(event.key==='Enter'){event.preventDefault();memoryAiEdit();}">
           <button type="button" class="memory-ai-btn" onclick="memoryAiEdit()">送出</button>
         </div>
+        <div class="memory-ai-meta" id="memoryAiMeta">${window.WAI_AI_TASK ? WAI_AI_TASK.badgeHtml(memoryStudioState.aiMeta) : ''}</div>
         <div class="memory-photo-head"><strong>底圖 ${selected.size >= 1 ? 1 : 0} 張 · 小卡 ${Math.max(0, selected.size - 1)}/${memoryStudioState.layout.cards.length}</strong><span>★ 底圖鋪滿整張大圖，小卡疊在上面</span></div>
         <div class="memory-photo-list" aria-label="這趟旅程的照片">
           <div class="memory-photo-slot">
@@ -9020,7 +9041,7 @@
     if (!ideas || !(ideas.titles || []).length) { box.innerHTML = ''; return; }
     box.innerHTML = `<div class="recap-idea-row">${ideas.titles.map((t, i) =>
       `<button type="button" class="recap-idea-chip" onclick="memoryUseTitleIdea(${i})">${escapeHtml(t)}</button>`).join('')}</div>
-      <p class="recap-idea-hint">${ideas.source === 'ai' ? 'AI 建議' : '離線建議'}：點一下套到標題帶，套用後還能再點標題修改；hashtag 會在「一次分享」時帶上。</p>`;
+      <p class="recap-idea-hint">${window.WAI_AI_TASK ? WAI_AI_TASK.badgeHtml(ideas) : ''}${ideas.source === 'ai' ? 'AI 建議' : '離線建議'}：點一下套到標題帶，套用後還能再點標題修改；hashtag 會在「一次分享」時帶上。</p>`;
   }
 
   function memoryUseTitleIdea(index) {
@@ -9083,6 +9104,19 @@
     try {
       const usedCards = Math.max(0, Math.min(state.layout.cards.length, selectedMemoryPhotos().length - 1));
       const payload = { cards: state.layout.cards.slice(0, usedCards), titleBand: state.layout.title };
+      // 方案 E：代理模式改走 /api/ai/task（prompt 與 schema 在 server/ai-tasks.js，AMD 時為結構化輸出）
+      if (window.WAI_AI_TASK && WAI_AI_TASK.enabled()) {
+        const r = await WAI_AI_TASK.request('memory_layout_edit', { instruction, usedCards, layout: payload }, { headers: await vertexAuthHeaders() });
+        if (memoryStudioState !== state) return;
+        applyAiMemoryLayout(r.output || {});
+        state.aiMeta = { provider: r.provider, model: r.model };
+        const meta = document.getElementById('memoryAiMeta');
+        if (meta) meta.innerHTML = WAI_AI_TASK.badgeHtml(state.aiMeta);
+        if (input) input.value = '';
+        paintMemoryEditorCanvas(true);
+        feedbackToast('已依你的描述調整版面', 'green');
+        return;
+      }
       const endpoint = `${VERTEX_API_BASE}/publishers/google/models/${GEMINI_MODEL}:generateContent?key=${encodeURIComponent(vertex.apiKey)}`;
       const res = await fetch(endpoint, {
         method: 'POST',
@@ -9890,6 +9924,23 @@
     var trip = collectRecapTrip();
     var vertex = (typeof getVertexConfig === 'function') ? getVertexConfig() : { ready: false };
     if (!vertex.ready) return recapTemplateIdeas(trip);
+    // 方案 E：代理模式改走 /api/ai/task（prompt 與 schema 在 server/ai-tasks.js），失敗照舊退回離線範本
+    if (window.WAI_AI_TASK && WAI_AI_TASK.enabled()) {
+      try {
+        var r = await WAI_AI_TASK.request('recap_ideas', {
+          kind: kind === 'grid' ? 'grid' : 'video',
+          region: trip.region || '', days: recapDayCount(trip), dateLabel: trip.dateLabel || '',
+          transportMode: trip.transportMode || '',
+          stops: (trip.stops || []).map(function (s) { return s.name; }).filter(Boolean)
+        }, { headers: await vertexAuthHeaders(), timeoutMs: 45000 });
+        var aiTitles = ((r.output && r.output.titles) || []).filter(Boolean).slice(0, 3);
+        if (!aiTitles.length) return recapTemplateIdeas(trip);
+        var aiTags = (r.output && r.output.hashtags) || [];
+        return { titles: aiTitles, hashtags: aiTags.length ? aiTags : recapTemplateIdeas(trip).hashtags, source: 'ai', provider: r.provider, model: r.model };
+      } catch (_e) {
+        return recapTemplateIdeas(trip);
+      }
+    }
     try {
       var names = (trip.stops || []).map(function (s) { return s.name; }).filter(Boolean);
       var what = kind === 'grid' ? 'IG 九宮格大圖中間標題帶的標題（要短、好讀）' : '短影片標題';
@@ -9928,7 +9979,7 @@
     box.innerHTML = '<div class="recap-idea-row">' + chips + '</div>'
       + (tags ? '<div class="recap-idea-tags"><span class="recap-idea-tagtext">' + escapeHtml(tags) + '</span>'
         + '<button type="button" class="memory-secondary-btn recap-idea-copy" onclick="recapCopyHashtags()">複製 hashtag</button></div>' : '')
-      + '<p class="recap-idea-hint">' + (ideas.source === 'ai' ? 'AI 建議' : '離線建議') + '：點標題即套用；hashtag 分享時也會自動帶上。</p>';
+      + '<p class="recap-idea-hint">' + (window.WAI_AI_TASK ? WAI_AI_TASK.badgeHtml(ideas) : '') + (ideas.source === 'ai' ? 'AI 建議' : '離線建議') + '：點標題即套用；hashtag 分享時也會自動帶上。</p>';
   }
   window.recapSuggestIdeas = async function () {
     var btn = document.getElementById('recapIdeaBtn');
