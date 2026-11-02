@@ -76,7 +76,20 @@ private class StopDeserializer : JsonDeserializer<Stop> {
             isLodging             = obj.get("isLodging")?.asBoolean ?: false,
             walkNext              = obj.get("walkNext")?.asBoolean  ?: false,
             manualStartMin        = obj.get("manualStartMin")?.takeIf { !it.isJsonNull }?.asInt,
-            manualEndMin          = obj.get("manualEndMin")?.takeIf { !it.isJsonNull }?.asInt
+            manualEndMin          = obj.get("manualEndMin")?.takeIf { !it.isJsonNull }?.asInt,
+            mergedSubSpots        = try {
+                obj.get("mergedSubSpots")?.takeIf { it.isJsonArray }?.asJsonArray
+                    ?.mapNotNull { it.takeIf { e -> e.isJsonPrimitive }?.asString } ?: emptyList()
+            } catch (_: Exception) { emptyList() },
+            mergedRadiusMeters    = obj.get("mergedRadiusMeters")?.takeIf { !it.isJsonNull }?.asInt ?: 0,
+            mergedMemberCoords    = try {
+                obj.get("mergedMemberCoords")?.takeIf { it.isJsonArray }?.asJsonArray?.mapNotNull { e ->
+                    val o = e.takeIf { it.isJsonObject }?.asJsonObject ?: return@mapNotNull null
+                    val lat = o.get("lat")?.asDouble ?: return@mapNotNull null
+                    val lng = o.get("lng")?.asDouble ?: return@mapNotNull null
+                    mapOf("lat" to lat, "lng" to lng)
+                } ?: emptyList()
+            } catch (_: Exception) { emptyList() }
         )
     }
 }

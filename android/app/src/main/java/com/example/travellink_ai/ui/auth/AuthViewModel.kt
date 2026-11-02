@@ -134,6 +134,8 @@ class AuthViewModel @Inject constructor(
     }
 
     fun signOut() {
+        // 自備的 AI 金鑰只屬於登入中的這個人：登出一併清除（與網頁相同）
+        com.example.travellink_ai.data.ai.IllustrationByok.clearAll()
         auth.signOut()
         _authState.value = AuthState.Unauthenticated
     }

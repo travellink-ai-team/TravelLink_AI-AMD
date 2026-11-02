@@ -100,7 +100,9 @@ fun ItineraryResultScreen(
                 .fillMaxSize()
                 .padding(paddingValues)
         ) {
-            ItineraryMapScreen(viewModel = viewModel, stops = stops)
+            // onBack 要給：地圖左上的返回按鈕只在有 onBack 時才畫（2026-11-02 測試回報按鈕不見）
+            // topInset：右上「邀請共編／編輯行程」那排的高度，聚焦路段的提示條往下讓（2026-11-02 測試回報重疊）
+            ItineraryMapScreen(viewModel = viewModel, stops = stops, onBack = { viewModel.goBackToPreview() }, topInset = 46.dp)
 
             // ── 載入中 spinner ───────────────────────────────────
             if (visualState.isLoading) {

@@ -31,6 +31,11 @@ data class RemoteTripMeta(
  * Activity 範圍內多個 ViewModel 共用的可變狀態。
  * 以 Hilt Singleton 注入，確保所有 VM 持有同一份實例。
  */
+/** 有底部導覽的四個分頁（探索分頁也有自己的名字，返回才回得去） */
+private val MAIN_SCREENS = setOf("home", "explore", "history", "friends")
+/** 從側欄或首頁頂欄打開、返回要回到原分頁的頁面 */
+private val PAGE_SCREENS = setOf("preferences", "about", "feedback_history", "profile", "notifications")
+
 @Singleton
 class ItineraryStateHolder @Inject constructor() {
 
@@ -66,6 +71,12 @@ class ItineraryStateHolder @Inject constructor() {
         private set
     var memoryReturnScreen = "home"
         private set
+    /** 側欄頁（個人喜好、關於、個人資料…）與通知中心的返回目的地：開啟它的那個分頁 */
+    var pageReturnScreen = "home"
+        private set
+    /** 回饋頁的返回目的地（首頁、通知、歷史、旅遊回憶、行程頁都可能進來） */
+    var feedbackReturnScreen = "home"
+        private set
     var currentScreen: String
         get() = _currentScreen.value
         set(requested) {
@@ -74,14 +85,17 @@ class ItineraryStateHolder @Inject constructor() {
             val from = _currentScreen.value
             when (value) {
                 "preview"     -> previewReturnScreen = when (from) {
-                    "home", "history" -> from
-                    // 從行程頁點進去的子頁（景點資訊、進行中地圖、旅程回憶）回來，返回目標維持原樣
-                    "preview", "stop_detail", "trip_map", "memory_edit" -> previewReturnScreen
+                    "home", "history", "friends", "explore", "notifications" -> from
+                    // 從行程頁點進去的子頁（景點資訊、進行中地圖、旅程回憶、完成後的回饋）回來，返回目標維持原樣
+                    "preview", "stop_detail", "trip_map", "memory_edit", "result", "feedback" -> previewReturnScreen
                     else -> "home"
                 }
-                // 九宮格/短片返回旅遊回憶是「內部返回」，不能把返回目標記成它們，
+                // 九宮格/短片/回饋返回旅遊回憶是「內部返回」，不能把返回目標記成它們，
                 // 否則旅遊回憶再返回又跳回去，無限來回。
-                "memory_edit" -> if (from != "memory_grid" && from != "memory_recap") memoryReturnScreen = from
+                "memory_edit" -> if (from !in setOf("memory_grid", "memory_recap", "feedback")) memoryReturnScreen = from
+                // 從子頁（例如通知裡點回饋）回來時維持原本的返回目標
+                in PAGE_SCREENS -> if (from in MAIN_SCREENS) pageReturnScreen = from
+                "feedback" -> if (from != "feedback") feedbackReturnScreen = from
             }
             _currentScreen.value = value
         }

@@ -25,7 +25,7 @@ object LocalAlternatives {
      * 本地資料裡歸成「景點」、但不是可以取代景點的設施。實測富岡地質公園的第一個候選是
      * 0.2 公里外的「小野柳遊客中心」、三仙台是「三仙台遊客中心」——等於沒換。
      */
-    private val NOT_A_SIGHT = listOf("遊客中心", "資訊站", "服務站", "公車站", "轉運站", "航空站", "休息區")
+    internal val NOT_A_SIGHT = listOf("遊客中心", "資訊站", "服務站", "公車站", "轉運站", "航空站", "休息區")
 
     private val MEAL_TYPES = setOf("餐廳", "咖啡廳")
 
@@ -55,7 +55,9 @@ object LocalAlternatives {
             ?: return emptyList()
 
         val wantMeal = isMealStop(target)
-        val usedKeys = stops.map { CostReference.normKey(it.name) }
+        // 合併站裡的小景點也算已經在行程裡（森林公園那站含活水湖，就不該再推活水湖）
+        val usedKeys = stops.flatMap { listOf(it.name) + it.mergedSubSpots }.map { CostReference.normKey(it) }
+        val usedAreas = stops.mapNotNull { SubSpotMerge.areaOf(it.name) }.toSet()
         val arriveMins = hhmmToMins(target.time)
 
         return places.asSequence()
@@ -65,7 +67,8 @@ object LocalAlternatives {
             }
             .filter { p ->
                 val k = CostReference.normKey(p.name)
-                usedKeys.none { u -> u.isNotEmpty() && (k == u || k.contains(u) || u.contains(k)) }
+                usedKeys.none { u -> u.isNotEmpty() && (k == u || k.contains(u) || u.contains(k)) } &&
+                    SubSpotMerge.areaOf(p.name).let { it == null || it !in usedAreas }
             }
             .map { p -> Candidate(p, haversineKm(origin.first, origin.second, p.lat, p.lng)) }
             .filter { it.distanceKm <= maxKm }
@@ -94,8 +97,42 @@ object LocalAlternatives {
             bestTime = "",
             stopType = place.typeName,
             lat = place.lat,
-            lng = place.lng
+            lng = place.lng,
+            mergedSubSpots = emptyList(),
+            mergedRadiusMeters = 0,
+            mergedMemberCoords = emptyList()
         )
+    }
+
+    /** 換景點時使用者可以點的想法（點了加進輸入框） */
+    val SWAP_WISH_TAGS = listOf("室內", "便宜一點", "適合拍照", "親子", "少走路")
+
+    /** 點標籤：輸入框已有就拿掉，沒有就用「、」接在後面（使用者自己打的字保留） */
+    fun toggleWishTag(wish: String, tag: String): String {
+        val parts = wish.split("、").map { it.trim() }.filter { it.isNotEmpty() }
+        val next = if (tag in parts) parts - tag else parts + tag
+        return next.joinToString("、")
+    }
+
+    /**
+     * 換景點 AI 候選清單的一行。使用者有寫想法時才用：附上類型、室內外、費用、評分、距離，
+     * 「室內」「便宜一點」這類條件 AI 才有依據挑，不必只看名字猜。
+     */
+    fun describeForAi(c: Candidate): String {
+        val p = c.place
+        val tags = listOfNotNull(
+            p.typeName.takeIf { it.isNotBlank() },
+            com.example.travellink_ai.ui.explore.QuickPick.classify(p).label.takeIf { it.isNotBlank() },
+            when {
+                p.fee == 0 -> "免費"
+                p.fee != null -> "門票 \$${p.fee}"
+                else -> null
+            },
+            p.costPerPerson?.let { "餐費約 \$$it" } ?: p.costNote.takeIf { it.isNotBlank() }?.let { "餐費 $it" },
+            p.rating.takeIf { it > 0 }?.let { "評分 %.1f".format(it) },
+            "距離 %.1f km".format(c.distanceKm)
+        )
+        return "${p.name}（${tags.joinToString("、")}）"
     }
 
     /** 行程的 days（`yyyy/MM/dd HH:mm - …`）→ 第 [day] 天（1-based）的日期；解析不出回空字串 */

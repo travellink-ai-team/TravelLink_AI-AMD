@@ -109,21 +109,33 @@ object Lodging {
     /** 使用者填的入住時間 "HH:mm" → 分鐘；空白或格式不對回 null（表示沒有指定） */
     fun parseCheckIn(text: String): Int? = DayPlanner.parseHhMm(text.trim())
 
+    /** 沒填入住時間時，最早幾點入住（台灣飯店多半 15:00～16:00 起，2026-10-21 使用者定 16:00） */
+    const val DEFAULT_CHECK_IN_MINS = 16 * 60
+
+    /**
+     * 入住最早幾點：使用者填的入住時間（存在 manualStartMin，與網頁「手動鎖定時間」同欄位、同規則
+     * start = max(manualStartMin, 抵達)），沒填就是 [DEFAULT_CHECK_IN_MINS]。
+     */
+    fun earliestCheckIn(stop: Stop): Int =
+        stop.manualStartMin?.let { m -> if (m >= 1440) m - (stop.dayIndex - 1) * 1440 else m } ?: DEFAULT_CHECK_IN_MINS
+
     /**
      * 第 1 天最後一站的入住站。
      *
-     * 抵達時間與使用者指定的入住時間取晚的：飯店入住通常 15:00 起，太早到要等；
-     * 沒指定時間就用抵達時間，不擅自假設一個入住時刻。
+     * 抵達時間與入住時間取晚的：太早到要等。使用者填了入住時間就用它（寫進 manualStartMin，
+     * 之後加減站重算時間也記得；多日的 manualStartMin 帶 (第幾天−1)×1440，與網頁相同），
+     * 沒填就是 16:00。
      */
     fun checkInStop(
         name: String, lat: Double, lng: Double,
         arrivalMins: Int, requestedCheckInMins: Int?, dayIndex: Int
     ): Stop {
-        val at = maxOf(arrivalMins, requestedCheckInMins ?: arrivalMins)
+        val at = maxOf(arrivalMins, requestedCheckInMins ?: DEFAULT_CHECK_IN_MINS)
         return Stop(
             name = name, time = DayPlanner.hhmmOf(at), desc = "入住", emoji = "🏨",
             duration = CHECK_IN_STAY_MINS.toLong(), order = 0L, isStation = true,
-            stopType = "住宿", lat = lat, lng = lng, dayIndex = dayIndex, isLodging = true
+            stopType = "住宿", lat = lat, lng = lng, dayIndex = dayIndex, isLodging = true,
+            manualStartMin = requestedCheckInMins?.let { it + (dayIndex - 1) * 1440 }
         )
     }
 

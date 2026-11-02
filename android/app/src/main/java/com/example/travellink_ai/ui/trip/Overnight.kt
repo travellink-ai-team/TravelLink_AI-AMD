@@ -78,7 +78,8 @@ internal fun overnightState(
         nextFirst = dayStops.firstOrNull { !it.isStation && !it.isLodging } ?: next,
         nextDayCount = dayStops.count { !it.isStation && !it.isLodging },
         doneCount = finished.count { !it.isStation && it.stopId in progress.checkIns },
-        lodging = finished.lastOrNull()?.takeIf { it.isLodging }
+        // 入住後還可以再出門（晚上加的站排在入住之後），住宿不一定是當天最後一站
+        lodging = finished.lastOrNull { it.isLodging }
     )
 }
 

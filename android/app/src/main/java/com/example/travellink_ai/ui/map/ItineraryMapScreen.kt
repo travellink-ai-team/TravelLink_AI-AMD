@@ -170,6 +170,7 @@ fun ItineraryMapScreen(
     focusStopId: String? = null,               // 進場聚焦這一站並打開景點卡（互動插圖「在地圖上看」）
     onConfirmParking: ((LatLng, String) -> Unit)? = null, // 非 null＝停車編輯模式（可拖曳+備註+確認）
     onBack: (() -> Unit)? = null,              // 獨立畫面時的返回；null＝內嵌於預覽頁
+    topInset: androidx.compose.ui.unit.Dp = 0.dp, // 呼叫端在上方疊了按鈕（查看路線的「邀請共編／編輯行程」）：上方浮動條往下讓這麼多
     progress: com.example.travellink_ai.ui.trip.TripProgress = com.example.travellink_ai.ui.trip.TripProgress(), // 行程進行中的打卡狀態：已完成路段/景點淡化顯示
     // 🧪 Debug-only 假 GPS（demo 用）：開著時地圖上的「目前位置」改吃模擬座標，不吃真實 GPS
     demoModeOn: Boolean = false,
@@ -207,6 +208,10 @@ fun ItineraryMapScreen(
     // 聚焦的那一段路（roadSegments 的索引；null＝全部路線）。與網頁 activeRouteStage 相同：
     // 點某一段只顯示那一段與它頭尾兩站，再點一次恢復全部；點景點聚焦「從這站出發」的那一段
     var topSegmentIdx   by remember { mutableStateOf<Int?>(null) }
+    // 系統返回鍵：先關景點資訊卡，再取消聚焦的路段，都沒有才離開地圖
+    androidx.activity.compose.BackHandler(enabled = selectedStop != null || topSegmentIdx != null) {
+        if (selectedStop != null) selectedStop = null else topSegmentIdx = null
+    }
 
     val cameraPositionState = rememberCameraPositionState()
     val coroutineScope = rememberCoroutineScope()
@@ -372,6 +377,26 @@ fun ItineraryMapScreen(
     LaunchedEffect(parkingMarker, focusParking) {
         if (focusParking && parkingMarker != null) {
             cameraPositionState.animate(CameraUpdateFactory.newLatLngZoom(parkingMarker, 17f))
+        }
+    }
+
+    // 廁所按鈕導入：公廁載入後，鏡頭框住「我」（沒定位就用下一站）和最近的那間，並打開它的名稱卡。
+    // 只做一次，之後使用者自己拖地圖不再被拉回（2026-11-01 測試者回報只開圖層、找不到廁所在哪）
+    var focusedToilet by remember { mutableStateOf<LatLng?>(null) }
+    LaunchedEffect(stopToilets) {
+        if (!initialShowToilets || focusedToilet != null) return@LaunchedEffect
+        val origin = userLocation.value ?: tripFocus?.nextLatLng ?: tripFocus?.fromLatLng ?: return@LaunchedEffect
+        // 跟畫面上一樣：下一站模式只看得到下一站附近的
+        val nearest = stopToilets
+            .filter { (stopName, _) -> tripFocus == null || !tripFocus.nextOnly || stopName == tripFocus.nextName }
+            .values.flatten()
+            .minByOrNull { walkDistanceMeters(origin, it.latLng) } ?: return@LaunchedEffect
+        focusedToilet = nearest.latLng
+        try {
+            val b = com.google.android.gms.maps.model.LatLngBounds.builder().include(origin).include(nearest.latLng)
+            cameraPositionState.animate(CameraUpdateFactory.newLatLngBounds(b.build(), 200))
+        } catch (e: Exception) {
+            cameraPositionState.animate(CameraUpdateFactory.newLatLngZoom(nearest.latLng, 16f))
         }
     }
 
@@ -558,6 +583,19 @@ fun ItineraryMapScreen(
             // ── 全螢幕地圖 ────────────────────────────────────
             // 地圖底圖先出來，載入完成後才加路線與標記：過去兩件事擠在同一個畫面裡，第一次進地圖掉幀 0.8 秒
             var mapLoaded by remember { mutableStateOf(false) }
+            // 大景區合併站的範圍：站點座標同 marker（網頁以 marker 位置為中心）；OSM 邊界在背景抓，抓到才換上
+            val mergedAreaStops = remember(stops, stopLocations) {
+                stops.filter { it.isMergedAttraction && (it.mergedSubSpots.isNotEmpty() || it.mergedRadiusMeters > 0) }
+                    .mapNotNull { s ->
+                        (stopLocations[s.name] ?: s.lat?.let { la -> s.lng?.let { LatLng(la, it) } })?.let { s to it }
+                    }
+            }
+            var osmAreas by remember { mutableStateOf<Map<String, List<LatLng>>>(emptyMap()) }
+            LaunchedEffect(mergedAreaStops) {
+                mergedAreaStops.forEach { (s, center) ->
+                    MergedArea.fetchBoundary(context, s, center)?.let { osmAreas = osmAreas + (s.stopId to it) }
+                }
+            }
             // 網路慢或離線時底圖可能很久都載不完：最多等 1.5 秒就照樣畫路線
             LaunchedEffect(Unit) { kotlinx.coroutines.delay(1_500L); mapLoaded = true }
             GoogleMap(
@@ -579,12 +617,13 @@ fun ItineraryMapScreen(
                         draggable = onConfirmParking != null,
                         title = "🚗 我的停車點",
                         snippet = parkingNote.ifBlank { null },
-                        icon = com.google.android.gms.maps.model.BitmapDescriptorFactory
-                            .defaultMarker(com.google.android.gms.maps.model.BitmapDescriptorFactory.HUE_ORANGE)
+                        icon = MapMarkerIcons.pin("🚗", null, MapMarkerIcons.Style.UPCOMING, density.density, MapMarkerIcons.PIN_ORANGE),
+                        anchor = MapMarkerIcons.PIN_ANCHOR
                     )
                 }
 
-                // 景點標點：已打卡／已跳過的站淡化。行程進行中只顯示今天的站，改用帶編號的小圓點（下一站大而醒目）。
+                // 景點標點：網頁同款水滴大頭針（站的 emoji＋右上角編號）。已打卡／已跳過的站灰色淡化；
+                // 行程進行中只顯示今天的站，下一站是放大的橘色針。
                 // MarkerState 用 remember 記住：過去每次重畫都 new 一個，等於所有標記重新設定一次
                 stops.forEachIndexed { index, stop ->
                     val latLng = stopLocations[stop.name] ?: return@forEachIndexed
@@ -600,18 +639,29 @@ fun ItineraryMapScreen(
                             state = state,
                             title = "${index + 1}. ${stop.name}",
                             snippet = stop.desc,
-                            icon = tripFocus?.let {
-                                MapMarkerIcons.stop("${index + 1}", when {
+                            icon = MapMarkerIcons.pin(
+                                stop.emoji.ifBlank { if (stop.isStation) "🚉" else "📍" },
+                                "${index + 1}",
+                                when {
                                     isNext -> MapMarkerIcons.Style.NEXT
                                     isStopDone -> MapMarkerIcons.Style.DONE
                                     else -> MapMarkerIcons.Style.UPCOMING
-                                }, density.density)
-                            },
-                            anchor = if (tripFocus != null) androidx.compose.ui.geometry.Offset(0.5f, 0.5f)
-                                else androidx.compose.ui.geometry.Offset(0.5f, 1f),
+                                },
+                                density.density
+                            ),
+                            anchor = MapMarkerIcons.PIN_ANCHOR,
                             alpha = if (isStopDone) 0.45f else 1f,
                             zIndex = if (isNext) 2f else 1f,
-                            onClick = { selectedStop = stop; focusStop(index); true }
+                            onClick = {
+                                selectedStop = stop
+                                // 下一站模式：其他站的路段是隱藏的，點標點只開景點卡、鏡頭移過去，不把那段路叫出來
+                                // （2026-11-02 測試回報點了沒顯示的路線還是會被聚焦）
+                                val seg = segmentForStop(index)
+                                if (tripFocus?.nextOnly == true && (seg == null || seg !in tripFocus.currentLeg)) {
+                                    coroutineScope.launch { cameraPositionState.animate(CameraUpdateFactory.newLatLng(latLng)) }
+                                } else focusStop(index)
+                                true
+                            }
                         )
                     }
                 }
@@ -643,8 +693,12 @@ fun ItineraryMapScreen(
                                 state = state,
                                 title = "🅿 ${lot.name}",
                                 snippet = (spacesText + walkText).ifBlank { null },
-                                icon = com.google.android.gms.maps.model.BitmapDescriptorFactory
-                                    .defaultMarker(com.google.android.gms.maps.model.BitmapDescriptorFactory.HUE_BLUE)
+                                // 網頁同款藍色膠囊「🅿️ 停車場名」（名稱超過 7 字截斷）
+                                icon = MapMarkerIcons.pill(
+                                    "🅿️ ${if (lot.name.length > 7) lot.name.take(7) + "…" else lot.name.ifBlank { "停車場" }}",
+                                    0xFF1D4ED8.toInt(), density.density
+                                ),
+                                anchor = androidx.compose.ui.geometry.Offset(0.5f, 0.5f)
                             )
                         }
                     }
@@ -658,17 +712,42 @@ fun ItineraryMapScreen(
                         toilets.forEach { t ->
                             key("wc", stopName, t.latLng) {
                                 val state = remember(t.latLng) { MarkerState(position = t.latLng) }
+                                LaunchedEffect(focusedToilet) { if (focusedToilet == t.latLng) state.showInfoWindow() }
                                 Marker(
                                     state = state,
                                     title = "🚻 ${t.name}",
                                     snippet = "鄰近 $stopName",
-                                    icon = com.google.android.gms.maps.model.BitmapDescriptorFactory
-                                        .defaultMarker(com.google.android.gms.maps.model.BitmapDescriptorFactory.HUE_VIOLET)
+                                    // 網頁同款水滴針放 🚻；用紫色和景點的綠針分開
+                                    icon = MapMarkerIcons.pin("🚻", null, MapMarkerIcons.Style.UPCOMING, density.density, MapMarkerIcons.PIN_VIOLET),
+                                    anchor = MapMarkerIcons.PIN_ANCHOR
                                 )
                             }
                         }
                     }
                 }
+
+                // 大景區合併站：半透明範圍（網頁同色、同樣 70% 透明），看得出這一站涵蓋哪一片。
+                // 先畫成員外擴的近似區塊，OSM 真實邊界抓到後換掉、描邊加深（同網頁）
+                mergedAreaStops
+                    .filter { (s, _) -> tripFocus == null || s.dayIndex == tripFocus.day }
+                    .forEach { (s, center) ->
+                        key("area", s.stopId) {
+                            val real = osmAreas[s.stopId]
+                            val approx = remember(s.mergedMemberCoords, center, s.mergedRadiusMeters) {
+                                MergedArea.approxPath(
+                                    center,
+                                    s.mergedMemberCoords.mapNotNull { c -> c["lat"]?.let { la -> c["lng"]?.let { LatLng(la, it) } } },
+                                    s.mergedRadiusMeters
+                                )
+                            }
+                            Polygon(
+                                points = real ?: approx,
+                                fillColor = Color(0x4D4A90D9),
+                                strokeColor = if (real != null) Color(0xF21F5F9E) else Color(0x992F6FB0),
+                                strokeWidth = if (real != null) 5f else 3f
+                            )
+                        }
+                    }
 
                 // 停車場→景點步行虛線（僅 car 模式；下一站模式只畫下一站那段）
                 if (transportMode == "car") {
@@ -702,6 +781,7 @@ fun ItineraryMapScreen(
                     }
                     indices
                 }
+                val arrowSegs = mutableListOf<Pair<Int, Color>>()
                 renderOrder.forEach { idx ->
                     val points = roadSegments.getOrNull(idx) ?: return@forEach
                     if (points.isEmpty()) return@forEach
@@ -727,18 +807,51 @@ fun ItineraryMapScreen(
                         isSegmentDone -> 9f
                         else -> 11f
                     }
+                    // 下一站模式的淡灰背景線不能點（2026-11-02 測試者回報點到沒顯示的路段也會被聚焦）
+                    val tappable = color != RouteDimColor
+                    if (tappable && color != RouteDoneColor) arrowSegs += idx to color
                     Polyline(
                         points = points,
                         color = color,
                         width = width,
                         zIndex = if (isCurrentLeg) 1f else 0f,
-                        clickable = true,
+                        clickable = tappable,
                         onClick = {
                             // 再點一次同一段 → 恢復全部路線（與網頁相同）
                             if (topSegmentIdx == idx) topSegmentIdx = null
                             else { topSegmentIdx = idx; fitSegment(idx) }
                         }
                     )
+                }
+
+                // 方向箭頭（網頁同款）：只畫有上色的路段；間距跟著縮放層級（取整數，拖地圖時不重算）
+                val zoomLevel by remember { derivedStateOf { cameraPositionState.position.zoom.toInt() } }
+                arrowSegs.forEach { (idx, color) ->
+                    val pts = roadSegments.getOrNull(idx) ?: return@forEach
+                    val arrows = remember(pts, zoomLevel) {
+                        RouteArrows.place(pts, RouteArrows.SPACING_DP * RouteArrows.metersPerDp(zoomLevel.toFloat(), pts[0].latitude))
+                    }
+                    val icon = MapMarkerIcons.arrow(
+                        android.graphics.Color.argb(255, (color.red * 255).toInt(), (color.green * 255).toInt(), (color.blue * 255).toInt()),
+                        density.density
+                    )
+                    arrows.forEachIndexed { i, a ->
+                        key("arrow", idx, zoomLevel, i) {
+                            Marker(
+                                state = remember(a.position) { MarkerState(position = a.position) },
+                                icon = icon,
+                                rotation = a.bearing,
+                                flat = true,
+                                anchor = androidx.compose.ui.geometry.Offset(0.5f, 0.5f),
+                                zIndex = 3f,
+                                onClick = {
+                                    if (topSegmentIdx == idx) topSegmentIdx = null
+                                    else { topSegmentIdx = idx; fitSegment(idx) }
+                                    true
+                                }
+                            )
+                        }
+                    }
                 }
 
                 // 正在走的那段：已經走過的部分畫灰色（依 GPS 位置投影到路線上切開，同網頁 completedRouteRenderers）
@@ -780,7 +893,7 @@ fun ItineraryMapScreen(
                     modifier = Modifier
                         .align(Alignment.TopCenter)
                         .statusBarsPadding()
-                        .padding(top = if (tripFocus != null) 60.dp else 12.dp, start = 72.dp, end = 72.dp)
+                        .padding(top = topInset + if (tripFocus != null) 60.dp else 12.dp, start = 72.dp, end = 72.dp)
                         .clip(RoundedCornerShape(999.dp))
                         .clickable { topSegmentIdx = null },
                     shape = RoundedCornerShape(999.dp),
@@ -802,7 +915,7 @@ fun ItineraryMapScreen(
                     modifier = Modifier
                         .align(Alignment.TopCenter)
                         .statusBarsPadding()
-                        .padding(top = 12.dp)
+                        .padding(top = topInset + 12.dp)
                         .clip(RoundedCornerShape(999.dp))
                         .background(Surface.copy(alpha = 0.95f))
                         .padding(3.dp)
@@ -1133,7 +1246,7 @@ private fun donePrefix(path: List<LatLng>, p: LatLng, maxOffsetMeters: Double): 
  * 有座標用 turn-by-turn 導航 URI；無座標 fallback 用景點名稱搜尋。
  * 未安裝 Google Maps 時退回一般 geo URI 交給其他地圖 App。
  */
-private fun launchNavigation(context: android.content.Context, stopName: String, latLng: LatLng?) {
+internal fun launchNavigation(context: android.content.Context, stopName: String, latLng: LatLng?) {
     val navUri = if (latLng != null)
         Uri.parse("google.navigation:q=${latLng.latitude},${latLng.longitude}&mode=d")
     else

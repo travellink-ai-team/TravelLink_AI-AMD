@@ -11,6 +11,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.foundation.lazy.LazyColumn
@@ -47,6 +48,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -264,10 +266,14 @@ fun ItineraryPreviewScreen(
         )
     }
     askIllustration?.let { ask ->
+        // 每次打開都重查今天還能畫幾張（可能剛在別的行程或網頁畫過）
+        LaunchedEffect(ask) { viewModel.refreshAiQuota() }
+        val aiQuota by viewModel.aiQuota.collectAsState()
         GenerateIllustrationDialog(
             regenerate = ask.regenerate,
             dayCount = tripDayCount,
             onlyDay = ask.onlyDay,
+            imagesLeft = aiQuota?.left(com.example.travellink_ai.data.ai.AiQuota.IMAGE),
             onConfirm = { character ->
                 askIllustration = null
                 when {
@@ -284,6 +290,14 @@ fun ItineraryPreviewScreen(
     CoachTour(Tours.PREVIEW, enabled = ongoing == null && stops.isNotEmpty() && !isViewer)
     CoachTour(Tours.ONGOING, enabled = ongoing != null)
     CoachTour(Tours.ONGOING_HERE, enabled = ongoing?.here != null)
+    // 插圖：有圖、沒開全螢幕時跳；規劃頁導覽要先看完（重播教學時就接在它後面），檢視者與進行中沒有那組導覽
+    val seenTours by com.example.travellink_ai.ui.onboarding.Onboarding.seenTours.collectAsState()
+    val previewTourApplies = ongoing == null && !isViewer
+    CoachTour(
+        Tours.ILLUSTRATION,
+        enabled = illustration.hasImage && !illustration.generating && !illustrationOpen &&
+            (!previewTourApplies || Tours.PREVIEW.id in seenTours)
+    )
 
     // ── 🤖 AMD 組：行程進行中的延誤資訊（T4）與主動通知 ──
     // 放在頁面層級而不是清單的某一列：使用者捲到下面時那一列會被回收，通知就發不出來
@@ -768,7 +782,7 @@ fun ItineraryPreviewScreen(
                     onGenerate = { askIllustration = IllustrationAsk(regenerate = false) },
                     onRetry = { viewModel.retryImage() },
                     onSelectDay = { illustrationDay = it },
-                    modifier = Modifier.padding(bottom = 16.dp)
+                    modifier = Modifier.padding(bottom = 16.dp).coachTarget(Tours.T_PREVIEW_ILLUSTRATION)
                 )
             }
 
@@ -888,7 +902,8 @@ fun ItineraryPreviewScreen(
                 PrimaryVehicleRow(
                     mode = transportMode,
                     // 離島不能開車上島（與精靈同規則）
-                    options = PRIMARY_VEHICLE_OPTIONS.filter { !(isIsland && it.first == "car") },
+                    // 步行不再讓人選（舊行程原本是步行的照樣顯示，見 PrimaryVehicleRow 的 label）
+                    options = PRIMARY_VEHICLE_OPTIONS.filter { it.first != "walking" && !(isIsland && it.first == "car") },
                     onChange = { viewModel.setTripTransportMode(it) }
                 )
             }
@@ -1104,8 +1119,8 @@ fun ItineraryPreviewScreen(
                     suggestions          = aiSuggestions,
                     isLoadingSuggestions = isLoadingSug,
                     suggestionError      = suggestionErr,
-                    onFetchSuggestions   = {
-                        viewModel.fetchStopSuggestions(stops.indexOfFirst { it.stopId == stopId })
+                    onFetchSuggestions   = { _, wish ->
+                        viewModel.fetchStopSuggestions(stops.indexOfFirst { it.stopId == stopId }, wish)
                     },
                     onExploreNearby = {
                         // 探索這附近：先關編輯 sheet，延遲讓其退場後再開探索 sheet
@@ -1364,7 +1379,7 @@ private fun OverrunRow(o: Overrun, onAskAi: (() -> Unit)?) {
         verticalArrangement = Arrangement.spacedBy(6.dp)
     ) {
         Text(
-            "⚠️ 預計 ${DayPlanner.hhmmOf(o.plannedEnd)} 結束，比你設定的 ${DayPlanner.hhmmOf(o.userEnd)} 晚 ${o.overMin} 分鐘",
+            "⚠️ 預計 ${DayPlanner.clockLabel(o.plannedEnd)} 結束，比你設定的 ${DayPlanner.hhmmOf(o.userEnd)} 晚 ${o.overMin} 分鐘",
             fontSize = 13.sp, fontWeight = FontWeight.Bold, color = Color(0xFF8A4B00)
         )
         Text(
@@ -1647,6 +1662,11 @@ private fun StopTimelineRow(
                         )
                         if (stop.desc.isNotBlank()) {
                             Text(stop.desc, fontSize = 14.sp, color = PIink2, maxLines = 1)
+                        }
+                        // 大景區合併站：列出裡面的小景點（與網頁「（含 …）」相同）
+                        if (stop.isMergedAttraction) {
+                            Text("含 ${stop.mergedSubSpots.joinToString("、")}", fontSize = 13.sp,
+                                color = PAccentDark, maxLines = 2, overflow = TextOverflow.Ellipsis)
                         }
                     }
                     // ≡ 拖曳 handle（viewer 或車站隱藏）
@@ -2259,7 +2279,7 @@ private fun EditStopSheet(
     suggestions: List<ItineraryViewModel.StopSuggestion>,
     isLoadingSuggestions: Boolean,
     suggestionError: String?,
-    onFetchSuggestions: (timeHint: String) -> Unit,
+    onFetchSuggestions: (timeHint: String, wish: String) -> Unit,
     onExploreNearby: () -> Unit,
     onSave: (Stop) -> Unit,
     onDelete: (() -> Unit)?,
@@ -2272,6 +2292,7 @@ private fun EditStopSheet(
     var duration      by remember { mutableLongStateOf(existingStop?.duration ?: 120L) }
     var businessHours by remember { mutableStateOf(existingStop?.businessHours ?: "未提供") }
     var sugVisible    by remember { mutableStateOf(false) }
+    var wish          by remember { mutableStateOf("") }
     var confirmDelete by remember { mutableStateOf(false) }
 
     // 刪除前確認（對齊網頁 #deletePlaceOverlay 文案）
@@ -2491,7 +2512,7 @@ private fun EditStopSheet(
                         }
                     }
                     Button(
-                        onClick = { sugVisible = true; onFetchSuggestions(time) },
+                        onClick = { sugVisible = true; onFetchSuggestions(time, wish) },
                         colors = ButtonDefaults.buttonColors(containerColor = PAccent),
                         shape = RoundedCornerShape(10.dp),
                         contentPadding = PaddingValues(horizontal = 14.dp, vertical = 8.dp),
@@ -2510,6 +2531,40 @@ private fun EditStopSheet(
                             Spacer(Modifier.width(4.dp))
                             Text("取得建議", fontSize = 14.sp)
                         }
+                    }
+                }
+
+                // 使用者的想法（選填）：AI 從附近清單裡優先挑符合的
+                Spacer(Modifier.height(10.dp))
+                OutlinedTextField(
+                    value = wish,
+                    onValueChange = { if (it.length <= 100) wish = it },
+                    modifier = Modifier.fillMaxWidth(),
+                    label = { Text("想換成什麼樣的？（選填）") },
+                    placeholder = { Text("例：想吃小吃、要有冷氣…", color = PIink2) },
+                    singleLine = true,
+                    shape = RoundedCornerShape(12.dp),
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedBorderColor = PAccent, unfocusedBorderColor = PBorder,
+                        focusedContainerColor = Color.White, unfocusedContainerColor = Color.White
+                    )
+                )
+                Row(
+                    modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(top = 6.dp),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    LocalAlternatives.SWAP_WISH_TAGS.forEach { tag ->
+                        val on = tag in wish.split("、").map { it.trim() }
+                        FilterChip(
+                            selected = on,
+                            onClick = { wish = LocalAlternatives.toggleWishTag(wish, tag) },
+                            label = { Text(tag, fontSize = 13.sp) },
+                            colors = FilterChipDefaults.filterChipColors(
+                                containerColor = Color.White,
+                                selectedContainerColor = PAccent,
+                                selectedLabelColor = Color.White
+                            )
+                        )
                     }
                 }
 
@@ -2628,19 +2683,8 @@ private fun EditStopSheet(
             }
             Button(
                 onClick = {
-                    onSave(
-                        Stop(
-                            name          = name.trim(),
-                            // 網頁格式的共編景點沒有 time，留空時沿用原值，由時間重算補齊
-                            time          = time.trim().ifBlank { existingStop?.time ?: "" },
-                            desc          = desc.trim(),
-                            emoji         = emoji.ifBlank { "📍" },
-                            duration      = duration,
-                            order         = existingStop?.order ?: 99L,
-                            businessHours = businessHours,
-                            nearbyToiletLocations = existingStop?.nearbyToiletLocations ?: emptyList()
-                        )
-                    )
+                    // 在原本那一站上改（保留第幾天、識別碼等），見 StopEdit
+                    onSave(StopEdit.apply(existingStop, name, time, desc, emoji, duration, businessHours))
                 },
                 modifier = Modifier.weight(1f),
                 shape = RoundedCornerShape(14.dp),

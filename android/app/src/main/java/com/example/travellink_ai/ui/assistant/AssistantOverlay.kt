@@ -40,6 +40,7 @@ import com.example.travellink_ai.BuildConfig
 import com.example.travellink_ai.data.agent.AgentRouting
 import com.example.travellink_ai.data.ai.AiProvider
 import com.example.travellink_ai.data.assistant.AssistantMessage
+import com.example.travellink_ai.data.assistant.SlotOption
 import com.example.travellink_ai.ui.agent.AgentRunView
 import com.example.travellink_ai.ui.agent.AgentViewModel
 import com.example.travellink_ai.ui.agent.DemoControls
@@ -90,6 +91,8 @@ fun AssistantOverlay(viewModel: ItineraryViewModel, bottomReservedPx: Int = 0) {
         LaunchedEffect(maxY) { posY = posY.coerceIn(marginPx, maxY) }
 
         // ── 聊天面板 ──────────────────────────────────────────────
+        // 系統返回鍵先關聊天室，不要直接離開所在的頁面
+        androidx.activity.compose.BackHandler(enabled = open) { viewModel.setAssistantOpen(false) }
         if (open) {
             AssistantChatPanel(
                 viewModel = viewModel,
@@ -281,7 +284,8 @@ private fun AssistantChatPanel(
                                 recState = recState,
                                 onAddStop = { viewModel.addRecommendedStop(it) },
                                 onApply = { viewModel.applyAssistantProposal(m.id) },
-                                onDismiss = { viewModel.dismissAssistantProposal(m.id) }
+                                onDismiss = { viewModel.dismissAssistantProposal(m.id) },
+                                onPickSlot = { i, opt -> viewModel.chooseAssistantSlot(m.id, i, opt) }
                             )
                         }
                         is ChatItem.Agent -> AgentBubble(item.e, agentRun, agentVm)
@@ -358,7 +362,8 @@ private fun MessageBubble(
     recState: Map<String, ItineraryViewModel.RecAddState> = emptyMap(),
     onAddStop: (String) -> Unit,
     onApply: () -> Unit = {},
-    onDismiss: () -> Unit = {}
+    onDismiss: () -> Unit = {},
+    onPickSlot: (Int, SlotOption) -> Unit = { _, _ -> }
 ) {
     val isUser = m.role == "user"
     Column(
@@ -401,7 +406,7 @@ private fun MessageBubble(
         // 修改卡：AI 提議的行程修改，使用者按「套用」才改（與網頁隨行管家同一套）
         if (m.actions.isNotEmpty()) {
             Spacer(Modifier.height(6.dp))
-            ActionCard(m, onApply, onDismiss, onAddStop, recState)
+            ActionCard(m, onApply, onDismiss, onAddStop, recState, onPickSlot)
         }
     }
 }
@@ -410,10 +415,12 @@ private fun MessageBubble(
  * 修改卡：AI 提議的修改（附上推薦理由），下方再列其餘推薦（可單獨加入）。
  * 推薦與修改說的常是同一批地點，分兩塊顯示會像講了兩次，所以合成一張。
  */
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun ActionCard(
     m: AssistantMessage, onApply: () -> Unit, onDismiss: () -> Unit, onAddStop: (String) -> Unit,
-    recState: Map<String, ItineraryViewModel.RecAddState> = emptyMap()
+    recState: Map<String, ItineraryViewModel.RecAddState> = emptyMap(),
+    onPickSlot: (Int, SlotOption) -> Unit = { _, _ -> }
 ) {
     fun reasonOf(name: String) = m.recommendations.firstOrNull { it.name.trim() == name.trim() }?.reason.orEmpty()
     val actionNames = m.actions.map { it.name.trim() }.toSet()
@@ -428,7 +435,7 @@ private fun ActionCard(
         verticalArrangement = Arrangement.spacedBy(6.dp)
     ) {
         Text("📝 修改行程", fontSize = 13.sp, fontWeight = FontWeight.Bold, color = Ink)
-        m.actions.forEach { a ->
+        m.actions.forEachIndexed { index, a ->
             val line = when (a.type) {
                 "add_stop" -> "＋ 加入「${a.name}」"
                 "remove_stop" -> "－ 刪除「${a.target.ifBlank { a.name }}」"
@@ -438,6 +445,29 @@ private fun ActionCard(
             Text(line, fontSize = 14.sp, color = Ink)
             reasonOf(a.name).takeIf { it.isNotBlank() }?.let {
                 Text(it, fontSize = 12.sp, color = Ink2, modifier = Modifier.padding(start = 18.dp))
+            }
+            // 加站會排在哪；還沒套用前可以改到別天、入住前或入住後
+            if (a.type == "add_stop" && a.placeLabel.isNotBlank()) {
+                Text("📍 會排在${a.placeLabel}", fontSize = 12.sp, color = AccentDark, modifier = Modifier.padding(start = 18.dp))
+                if (state == AssistantMessage.ActionState.PENDING && a.slotOptions.size > 1) {
+                    FlowRow(
+                        modifier = Modifier.padding(start = 18.dp),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        a.slotOptions.forEach { opt ->
+                            val selected = opt.day == a.day && opt.afterCheckIn == a.afterCheckIn
+                            Text(
+                                opt.label, fontSize = 12.sp,
+                                color = if (selected) Color.White else AccentDark,
+                                modifier = Modifier.clip(RoundedCornerShape(12.dp))
+                                    .background(if (selected) Accent else DesignTokens.AccentLight)
+                                    .clickable(enabled = !selected) { onPickSlot(index, opt) }
+                                    .padding(horizontal = 10.dp, vertical = 5.dp)
+                            )
+                        }
+                    }
+                }
             }
         }
         when (state) {

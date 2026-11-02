@@ -12,6 +12,7 @@ class TravelLinkApp : Application() {
         super.onCreate()
         setupCrashlytics()
         AiProvider.init(this)
+        com.example.travellink_ai.data.ai.IllustrationByok.init(this)
         com.example.travellink_ai.data.ai.ShowcaseMode.init(this)
         com.example.travellink_ai.ui.onboarding.Onboarding.init(this)
         warmUpMaps()
