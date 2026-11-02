@@ -818,9 +818,9 @@ async function doRegister() {
 }
 
 // Facebook 登入在 Firebase/Meta 端尚未驗證完成，按鈕預設隱藏（markup 已 display:none）。
-// 驗證通過後在 weather.env.js 的 TRAVEL_APP_CONFIG 設 ENABLE_FACEBOOK_LOGIN: true 即可開啟。
+// 驗證通過後在 weather.env.js 的 TRAVEL_APP_CONFIG 設 FACEBOOK_LOGIN_ENABLED: true 即可開啟。
 function isFacebookLoginEnabled() {
-  return window.TRAVEL_APP_CONFIG?.ENABLE_FACEBOOK_LOGIN === true;
+  return window.TRAVEL_APP_CONFIG?.FACEBOOK_LOGIN_ENABLED === true;
 }
 function applyAuthProviderFlags() {
   if (!isFacebookLoginEnabled()) return;
