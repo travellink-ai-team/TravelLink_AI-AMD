@@ -43,9 +43,25 @@ class LodgingTest {
     }
 
     @Test
-    fun `沒指定入住時間就用抵達時間不擅自假設`() {
-        val s = Lodging.checkInStop("鮪魚飯店", 22.75, 121.15, mins(14, 12), null, 1)
-        assertEquals("14:12", s.time)
+    fun `沒指定入住時間就不早於下午4點`() {
+        // 2026-10-21 使用者決定：入住時間有限制，住宿站不要早於 16:00
+        assertEquals("16:00", Lodging.checkInStop("鮪魚飯店", 22.75, 121.15, mins(14, 12), null, 1).time)
+        assertEquals("17:20", Lodging.checkInStop("鮪魚飯店", 22.75, 121.15, mins(17, 20), null, 1).time)
+    }
+
+    @Test
+    fun `使用者填的入住時間存進 manualStartMin，重算時也記得`() {
+        val filled = Lodging.checkInStop("鮪魚飯店", 22.75, 121.15, mins(13, 30), mins(15, 0), 1)
+        assertEquals(mins(15, 0), filled.manualStartMin)
+        assertEquals(mins(15, 0), Lodging.earliestCheckIn(filled))
+        // 沒填：不寫 manualStartMin，最早 16:00
+        val none = Lodging.checkInStop("鮪魚飯店", 22.75, 121.15, mins(13, 30), null, 1)
+        assertEquals(null, none.manualStartMin)
+        assertEquals(mins(16, 0), Lodging.earliestCheckIn(none))
+        // 多日的 manualStartMin 帶 (第幾天−1)×1440（與網頁相同），讀回來要扣掉
+        val day2 = Lodging.checkInStop("鮪魚飯店", 22.75, 121.15, mins(13, 30), mins(15, 30), 2)
+        assertEquals(1440 + mins(15, 30), day2.manualStartMin)
+        assertEquals(mins(15, 30), Lodging.earliestCheckIn(day2))
     }
 
     // ── 旗標：決定它會不會被當成景點 ──────────────────────────────

@@ -183,7 +183,7 @@ fun DrawerContent(
             DrawerItem(
                 icon = Icons.Default.Tune,
                 label = "修改個人喜好",
-                subtitle = "興趣、節奏、飲食禁忌與預設值",
+                subtitle = "興趣、節奏、飲食需求與預設值",
                 onClick = { onClose(); viewModel.currentScreen = "preferences" }
             )
             if (profile != null && isPasswordAccount) {
@@ -226,6 +226,17 @@ fun DrawerContent(
                 onText = "出發前一天與當天早上提醒",
                 enabled = userPrefs.upcomingTripNotificationEnabled,
                 onToggle = { viewModel.toggleUpcomingTripNotification(it) }
+            )
+            // 旅程結束自動做回顧短片（C7）：與回顧短片頁同一個設定，每個帳號各自、只在這支手機
+            val recapCtx = androidx.compose.ui.platform.LocalContext.current
+            val recapUid = com.google.firebase.auth.FirebaseAuth.getInstance().currentUser?.uid
+            val autoRecapStore = remember { com.example.travellink_ai.ui.recap.AutoRecapStore(recapCtx) }
+            var autoRecapOn by remember(recapUid) { mutableStateOf(autoRecapStore.isEnabled(recapUid)) }
+            if (recapUid != null) DrawerNotificationToggle(
+                title = "回顧短片",
+                onText = "旅程結束後自動做好並通知",
+                enabled = autoRecapOn,
+                onToggle = { autoRecapStore.setEnabled(recapUid, it); autoRecapOn = it }
             )
             DrawerItem(
                 icon = Icons.Default.Lightbulb,
@@ -698,7 +709,7 @@ fun PreferencesScreen(
                         Icon(Icons.Default.Lightbulb, null, tint = Accent, modifier = Modifier.size(16.dp))
                         Text(
                             // 說明文字對齊網頁「設定個人喜好」
-                            "這些長期偏好會成為每趟行程的預設值與 AI 規劃的參考；飲食禁忌則會套用到所有行程。建立行程時仍可為單趟自由調整。",
+                            "這些長期偏好會成為每趟行程的預設值與 AI 規劃的參考；飲食需求則會套用到所有行程。建立行程時仍可為單趟自由調整。",
                             fontSize = 14.sp,
                             color = AccentDark,
                             fontWeight = FontWeight.SemiBold
@@ -779,14 +790,15 @@ fun PreferencesScreen(
 
             // ②b 飲食禁忌 / 想避免的事物（對齊網頁「設定個人喜好」）
             item {
-                PrefCard(title = "飲食禁忌 / 想避免的事物") {
+                // 過去標題是「飲食禁忌 / 想避免的事物」，底下的「素食」會被讀成「不要素食」
+                PrefCard(title = "飲食需求與想避開的") {
                     Text(
                         "選填，每趟行程都會自動套用",
                         fontSize = 13.sp, color = Ink2,
                         modifier = Modifier.padding(bottom = 8.dp)
                     )
                     AvoidTagGroup(
-                        groupLabel = "飲食",
+                        groupLabel = "飲食需求",
                         tags = com.example.travellink_ai.data.model.AVOID_TAGS_DIET,
                         selected = selectedAvoidTags,
                         onToggle = { tag ->
@@ -797,7 +809,7 @@ fun PreferencesScreen(
                     )
                     Spacer(Modifier.height(10.dp))
                     AvoidTagGroup(
-                        groupLabel = "行程",
+                        groupLabel = "行程想避開",
                         tags = com.example.travellink_ai.data.model.AVOID_TAGS_TRIP,
                         selected = selectedAvoidTags,
                         onToggle = { tag ->
@@ -811,7 +823,7 @@ fun PreferencesScreen(
                         value = avoidNote,
                         onValueChange = { avoidNote = it; showSaved = false },
                         placeholder = {
-                            Text("其他想避免的（自由填寫）…例：想避開夜市、不愛人擠人…",
+                            Text("其他想避開的（自由填寫）…例：想避開夜市、不愛人擠人…",
                                 fontSize = 13.sp, color = Border)
                         },
                         modifier = Modifier.fillMaxWidth(),
@@ -885,7 +897,7 @@ fun AvoidTagGroup(
                         contentAlignment = Alignment.Center
                     ) {
                         Text(
-                            tag, fontSize = 13.sp,
+                            avoidTagLabel(tag), fontSize = 13.sp,
                             fontWeight = if (sel) FontWeight.Bold else FontWeight.Normal,
                             color = if (sel) AccentDark else Ink,
                             textAlign = TextAlign.Center
@@ -897,6 +909,15 @@ fun AvoidTagGroup(
             Spacer(Modifier.height(8.dp))
         }
     }
+}
+
+/**
+ * 標籤的顯示文字。存的值與網頁 avoid-tags.js 共用不能改，只改顯示：
+ * 「素食」放在飲食需求底下仍會被讀成「不要素食」（2026-11-01 測試者回報），顯示成「吃素」。
+ */
+private fun avoidTagLabel(tag: String): String = when (tag) {
+    "素食" -> "吃素"
+    else -> tag
 }
 
 @Composable

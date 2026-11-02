@@ -60,17 +60,14 @@ private val Surface2    = DesignTokens.Surface2
 private val Border      = DesignTokens.Border
 
 // ── 資料 ──────────────────────────────────────────────────
+// 只放台東縣：景點資料、天氣、船班都只有台東（2026-11-01 測試者回報選得到其他縣市）
 private val popularDestinations = listOf(
     "🏝️" to "台東",
     "🐠" to "綠島",
     "🛶" to "蘭嶼",
-    "🌊" to "花蓮",
-    "🏙️" to "台北",
-    "🌿" to "南投",
-    "☀️" to "墾丁",
-    "🌆" to "台中",
-    "🌃" to "高雄",
-    "🌾" to "宜蘭",
+    "🌾" to "池上",
+    "♨️" to "知本",
+    "🌊" to "成功",
 )
 
 
@@ -320,6 +317,17 @@ fun PlanningBottomSheet(
     // Step 1
     var destination by remember { mutableStateOf(seed?.destination ?: "台東") }
     var customDestInput by remember { mutableStateOf(seed?.destination ?: "") }
+    // 目的地只支援台東縣：自由輸入的要在鄉鎮或本機景點資料裡找得到（TaitungAreas）。
+    // 清空輸入框時 destination 會留著上次打的字，所以兩者一起看
+    val placesCtx = LocalContext.current
+    val localPlaces by produceState(emptyList<PlaceCost>()) {
+        value = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+            runCatching { CostReference.get(placesCtx).places }.getOrDefault(emptyList())
+        }
+    }
+    val destUnsupported = customDestInput.ifBlank { destination }.let {
+        it.isNotBlank() && !TaitungAreas.isSupported(it, localPlaces)
+    }
 
     // Step 2 — 日期預設今天，當天來回
     val todayStr = remember {
@@ -430,7 +438,7 @@ fun PlanningBottomSheet(
     val safeStepIndex = currentStepIndex.coerceIn(0, stepSequence.lastIndex)
     val currentStepId = stepSequence[safeStepIndex]
     val canNext = when (currentStepId) {
-        0 -> destination.isNotBlank()
+        0 -> destination.isNotBlank() && !destUnsupported
         1 -> startDate.isNotBlank()
         2, 3 -> true
         else -> false
@@ -497,6 +505,11 @@ fun PlanningBottomSheet(
                 window.setSoftInputMode(adjust)
             }
             onDispose { }
+        }
+        // 系統返回鍵：第 2 步之後回上一步（同「上一步」按鈕）；第 1 步才走離開確認。
+        // 要放在 sheet 內容裡：sheet 是獨立視窗，外面的 BackHandler 收不到
+        androidx.activity.compose.BackHandler(enabled = safeStepIndex > 0) {
+            currentStepIndex = safeStepIndex - 1
         }
         Column(
             modifier = Modifier
@@ -588,6 +601,7 @@ fun PlanningBottomSheet(
                             customInput = customDestInput,
                             onSelect = { destination = it; customDestInput = it },
                             onCustomInput = { customDestInput = it; if (it.isNotBlank()) destination = it },
+                            destUnsupported = destUnsupported,
                             people = people,
                             onPeopleChange = { people = it.coerceIn(1, 20) }
                         )
@@ -979,7 +993,8 @@ private fun Step1Destination(
     destination: String,
     customInput: String,
     onSelect: (String) -> Unit,
-    onCustomInput: (String) -> Unit
+    onCustomInput: (String) -> Unit,
+    destUnsupported: Boolean = false
 ) {
     val focusRequester = remember { FocusRequester() }
     // 停用自動聚焦以避免軟鍵盤彈起造成視窗調整與 Sheet 滑動動畫
@@ -1015,7 +1030,11 @@ private fun Step1Destination(
             value = customInput,
             onValueChange = onCustomInput,
             label = { Text("自由輸入目的地", color = Ink2) },
-            placeholder = { Text("例：台東、京都…", color = Border) },
+            placeholder = { Text("例：都蘭、鹿野、太麻里…", color = Border) },
+            isError = destUnsupported,
+            supportingText = if (destUnsupported) {
+                { Text("目前只支援台東縣（含綠島、蘭嶼），請輸入台東的鄉鎮或景點") }
+            } else null,
             modifier = Modifier
                 .fillMaxWidth()
                 .focusRequester(focusRequester)
@@ -1343,6 +1362,7 @@ private fun Step1DestinationAndPeople(
     customInput: String,
     onSelect: (String) -> Unit,
     onCustomInput: (String) -> Unit,
+    destUnsupported: Boolean,
     people: Int,
     onPeopleChange: (Int) -> Unit
 ) {
@@ -1350,7 +1370,8 @@ private fun Step1DestinationAndPeople(
         Step1Destination(
             tripName = tripName, onTripNameChange = onTripNameChange,
             destination = destination, customInput = customInput,
-            onSelect = onSelect, onCustomInput = onCustomInput
+            onSelect = onSelect, onCustomInput = onCustomInput,
+            destUnsupported = destUnsupported
         )
         HorizontalDivider(color = Border.copy(alpha = 0.4f))
         PeopleSection(people, onPeopleChange)
@@ -1437,18 +1458,16 @@ private fun TransportSection(
     onSelectMode: (String) -> Unit,
     isIsland: Boolean = false
 ) {
-    // 選項與網頁端對齊（汽車為預設故置頂），步行為 App 額外支援。
-    // 離島不提供自行開車：車無法隨船過去，島上就是租機車。
+    // 選項與網頁端對齊（汽車為預設故置頂）。步行不再當主要交通工具（2026-11-01 測試者回報），
+    // 單段改走路（walkNext）仍在行程頁。離島不提供自行開車：車無法隨船過去，島上就是租機車。
     val transportOptions = buildList {
         if (isIsland) {
             add(Triple("scooter", "🛵 機車", "島上主要交通，環島公路一圈即可繞完"))
             add(Triple("taxi",    "🚕 計程車", "島上有少量計程車，費用較高"))
-            add(Triple("walking", "🚶 步行",   "僅適合港口周邊，環島步行不可行"))
         } else {
             add(Triple("car",     "🚗 汽車", "自己開車，規劃有停車場的景點"))
             add(Triple("taxi",    "🚕 計程車", "彈性靈活，不限景點距離"))
             add(Triple("scooter", "🛵 機車",   "行動彈性，跨區景點皆可安排"))
-            add(Triple("walking", "🚶 步行",   "悠閒漫步，景點集中於同區域"))
         }
     }
     Column(verticalArrangement = Arrangement.spacedBy(20.dp)) {
@@ -2202,12 +2221,11 @@ private fun Step6Transport(
     selectedMode: String,
     onSelect: (String) -> Unit
 ) {
-    // 選項與網頁端對齊（計程車/機車/汽車），步行為 App 額外支援
+    // 選項與網頁端對齊（計程車/機車/汽車）
     val options = listOf(
         Triple("taxi",    "🚕 計程車", "彈性靈活，不限景點距離"),
         Triple("scooter", "🛵 機車",   "行動彈性，跨區景點皆可安排"),
-        Triple("car", "🚗 汽車", "自己開車，規劃有停車場的景點"),
-        Triple("walking", "🚶 步行",   "悠閒漫步，景點集中於同區域")
+        Triple("car", "🚗 汽車", "自己開車，規劃有停車場的景點")
     )
     Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
         Column {

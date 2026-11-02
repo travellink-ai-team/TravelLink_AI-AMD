@@ -6,6 +6,7 @@ import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -24,6 +25,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import com.example.travellink_ai.data.ai.IllustrationByok
 import com.example.travellink_ai.data.model.IllustrationStopBoxes
 import com.example.travellink_ai.data.model.Stop
 import com.example.travellink_ai.ui.map.filterBusinessHoursForDate
@@ -414,10 +416,18 @@ internal fun GenerateIllustrationDialog(
     regenerate: Boolean,
     dayCount: Int,
     onlyDay: Int?,
+    /** 今天還能畫幾張（每日免費額度）；不限或還沒查到是 null */
+    imagesLeft: Int?,
     onConfirm: (String) -> Unit,
     onDismiss: () -> Unit
 ) {
     var character by remember { mutableStateOf("") }
+    val byok by IllustrationByok.state.collectAsState()
+    var testing by remember { mutableStateOf(false) }
+    val needed = if (onlyDay != null) 1 else dayCount.coerceAtLeast(1)
+    // 每日免費額度只管預設的畫圖服務；用自己的金鑰不算
+    val notEnough = byok.provider == null && imagesLeft != null && imagesLeft < needed
+    val canDraw = !notEnough && !byok.missingKey && !testing
     AlertDialog(
         onDismissRequest = onDismiss,
         title = {
@@ -428,7 +438,8 @@ internal fun GenerateIllustrationDialog(
             }, fontWeight = FontWeight.Bold)
         },
         text = {
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            // 選了自己的金鑰時內容變多（金鑰欄位、說明），小螢幕要能捲
+            Column(Modifier.verticalScroll(androidx.compose.foundation.rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text(
                     when {
                         onlyDay != null -> "只重畫第 $onlyDay 天這一張，其他天保留。約 30～60 秒。"
@@ -438,6 +449,17 @@ internal fun GenerateIllustrationDialog(
                         else -> "AI 會把這趟畫成一張手繪旅遊地圖，約 30～60 秒。"
                     },
                     fontSize = 14.sp, color = DesignTokens.Ink2
+                )
+                IllustrationEngineSection(byok, testing, onTesting = { testing = it })
+                if (byok.provider == null && imagesLeft != null) Text(
+                    when {
+                        imagesLeft == 0 -> "今天的免費插圖用完了，明天再畫。"
+                        notEnough -> "今天只能再畫 $imagesLeft 張，這趟要 $needed 張，明天再畫" +
+                            (if (regenerate) "；或打開插圖從 ⋮ 只重畫其中一天。" else "。")
+                        else -> "今天還能畫 $imagesLeft 張。"
+                    },
+                    fontSize = 13.sp,
+                    color = if (notEnough) MaterialTheme.colorScheme.error else DesignTokens.Ink3
                 )
                 OutlinedTextField(
                     value = character,
@@ -450,12 +472,103 @@ internal fun GenerateIllustrationDialog(
             }
         },
         confirmButton = {
-            TextButton(onClick = { onConfirm(character.trim()) }) {
-                Text(if (regenerate || onlyDay != null) "重新繪製" else "開始生成", color = DesignTokens.Accent, fontWeight = FontWeight.Bold)
+            TextButton(onClick = { onConfirm(character.trim()) }, enabled = canDraw) {
+                Text(if (regenerate || onlyDay != null) "重新繪製" else "開始生成",
+                    color = if (canDraw) DesignTokens.Accent else DesignTokens.Ink3, fontWeight = FontWeight.Bold)
             }
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("取消") } }
     )
+}
+
+/**
+ * 「畫圖服務」：預設（我們的後端）／我自己的 Gemini 金鑰／我自己的 OpenAI 金鑰（與網頁 renderPosterByokPanel 相同）。
+ * 選了自己的金鑰但還沒存：貼上金鑰 →「測試並儲存」（只呼叫免費的列出模型）。
+ */
+@Composable
+private fun IllustrationEngineSection(state: IllustrationByok.State, testing: Boolean, onTesting: (Boolean) -> Unit) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    var menuOpen by remember { mutableStateOf(false) }
+    var draftKey by remember(state.provider) { mutableStateOf("") }
+    var error by remember(state.provider) { mutableStateOf<String?>(null) }
+    val provider = state.provider
+    fun nameOf(p: IllustrationByok.Provider?) = if (p == null) "預設（TravelLinkAI 提供）" else "用我自己的 ${p.label} 金鑰"
+
+    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text("畫圖服務", fontSize = 13.sp, color = DesignTokens.Ink2)
+            Spacer(Modifier.width(8.dp))
+            Box {
+                TextButton(onClick = { menuOpen = true }, enabled = !testing, contentPadding = PaddingValues(horizontal = 8.dp)) {
+                    Text("${nameOf(provider)} ▾", fontSize = 13.sp, color = DesignTokens.Accent)
+                }
+                DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+                    (listOf<IllustrationByok.Provider?>(null) + IllustrationByok.Provider.entries).forEach { p ->
+                        DropdownMenuItem(text = { Text(nameOf(p)) }, onClick = {
+                            menuOpen = false
+                            IllustrationByok.setProvider(p)
+                        })
+                    }
+                }
+            }
+        }
+        if (provider == null) return@Column
+        val entry = state.saved[provider]
+        if (entry != null) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text("已儲存 ${IllustrationByok.mask(entry.key)} · ${entry.model.ifBlank { provider.label }}",
+                    fontSize = 13.sp, color = DesignTokens.Ink2, modifier = Modifier.weight(1f))
+                TextButton(onClick = {
+                    IllustrationByok.remove(provider)
+                    Toast.makeText(context, "已刪除這支手機上的 ${provider.label} 金鑰", Toast.LENGTH_SHORT).show()
+                }, enabled = !testing) { Text("刪除金鑰", fontSize = 13.sp) }
+            }
+        } else {
+            OutlinedTextField(
+                value = draftKey,
+                onValueChange = { draftKey = it.trim(); error = null },
+                modifier = Modifier.fillMaxWidth(),
+                singleLine = true,
+                enabled = !testing,
+                label = { Text("你的 ${provider.label} API 金鑰（${provider.keyHint}）") },
+                visualTransformation = androidx.compose.ui.text.input.PasswordVisualTransformation(),
+                keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
+                    keyboardType = androidx.compose.ui.text.input.KeyboardType.Password, autoCorrectEnabled = false)
+            )
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                TextButton(
+                    onClick = {
+                        if (draftKey.isBlank()) { error = "請先貼上金鑰"; return@TextButton }
+                        onTesting(true)
+                        scope.launch {
+                            try {
+                                val model = IllustrationByok.testKey(provider, draftKey)
+                                IllustrationByok.save(provider, IllustrationByok.Entry(draftKey, model))
+                                draftKey = ""
+                                Toast.makeText(context, "金鑰可以使用，之後插圖改用 $model", Toast.LENGTH_SHORT).show()
+                            } catch (e: IllustrationByok.ByokException) {
+                                error = "金鑰測試失敗：${e.message}"
+                            } finally { onTesting(false) }
+                        }
+                    },
+                    enabled = !testing
+                ) { Text(if (testing) "測試中…" else "測試並儲存", fontWeight = FontWeight.Bold) }
+                Spacer(Modifier.weight(1f))
+                TextButton(onClick = {
+                    runCatching { context.startActivity(Intent(Intent.ACTION_VIEW, android.net.Uri.parse(provider.keyUrl))) }
+                }) { Text("到 ${provider.label} 後台建立", fontSize = 12.sp) }
+            }
+            error?.let { Text(it, fontSize = 13.sp, color = MaterialTheme.colorScheme.error) }
+            Text(
+                if (provider == IllustrationByok.Provider.OPENAI) "OpenAI 畫圖需先完成組織驗證，一張約需 1～2 分鐘。"
+                else "Gemini 畫圖需要已開通帳單的專案。",
+                fontSize = 12.sp, color = DesignTokens.Ink3
+            )
+        }
+        Text("🔒 金鑰只存在這支手機，由手機直接呼叫該服務，不會上傳到我們的伺服器；費用由你的帳戶支付，登出時一併清除。",
+            fontSize = 12.sp, color = DesignTokens.Ink3)
+    }
 }
 
 // ── 下載行程插圖至相簿 ──────────────────────────────────────────

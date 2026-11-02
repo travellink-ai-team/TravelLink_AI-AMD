@@ -24,7 +24,12 @@ data class PlaceCost(
     // 以下供「超出預算時建議替換」挑候選用（BudgetSwap）
     val typeName: String = "",      // 餐廳／景點／咖啡廳
     val businessHours: String = "", // 全週原文；空＝無資料
-    val duration: Long = 0L         // 建議停留分鐘；0＝無資料
+    val duration: Long = 0L,        // 建議停留分鐘；0＝無資料
+    // 以下供「現在去哪」卡片顯示與室內外判斷用（QuickPick）
+    val rating: Double = 0.0,       // Google 評分；0＝無資料
+    val desc: String = "",          // 簡介（官方簡介優先）
+    val photoUrl: String = "",      // 官方照片；空＝無
+    val address: String = ""        // 地址；建立行程判斷目的地在不在台東用（TaitungAreas）
 )
 
 /**
@@ -113,32 +118,39 @@ class CostReference private constructor(
             return cut.filterNot { it.isWhitespace() }.lowercase()
         }
 
+        /** local_places.json 全文 → 地點清單（單元測試直接讀 asset 檔也用這個） */
+        internal fun parsePlaces(text: String): List<PlaceCost> {
+            val arr = JSONObject(text).getJSONArray("pois")
+            return (0 until arr.length()).map { i ->
+                val o = arr.getJSONObject(i)
+                PlaceCost(
+                    name = o.getString("name"),
+                    lat = o.getDouble("lat"),
+                    lng = o.getDouble("lng"),
+                    fee = if (o.has("fee")) o.getInt("fee") else null,
+                    feeNote = o.optString("feeNote", ""),
+                    costPerPerson = if (o.has("costPerPerson")) o.getInt("costPerPerson") else null,
+                    costNote = o.optString("costNote", ""),
+                    priceLevel = o.optInt("priceLevel", -1),
+                    typeName = o.optString("typeName", ""),
+                    businessHours = o.optString("businessHours", ""),
+                    duration = o.optLong("duration", 0L),
+                    rating = o.optDouble("rating", 0.0).takeIf { !it.isNaN() } ?: 0.0,
+                    desc = o.optString("officialDesc", "").ifBlank { o.optString("desc", "") },
+                    photoUrl = o.optString("officialPhotoUrl", ""),
+                    address = o.optString("address", "")
+                )
+            }
+        }
+
         private fun load(context: Context): CostReference {
             return try {
                 val text = context.assets.open(ASSET_FILE)
                     .bufferedReader().use { it.readText() }
-                val arr = JSONObject(text).getJSONArray("pois")
-                val byName = HashMap<String, PlaceCost>(arr.length())
-                val all = ArrayList<PlaceCost>(arr.length())
-                for (i in 0 until arr.length()) {
-                    val o = arr.getJSONObject(i)
-                    val pc = PlaceCost(
-                        name = o.getString("name"),
-                        lat = o.getDouble("lat"),
-                        lng = o.getDouble("lng"),
-                        fee = if (o.has("fee")) o.getInt("fee") else null,
-                        feeNote = o.optString("feeNote", ""),
-                        costPerPerson = if (o.has("costPerPerson")) o.getInt("costPerPerson") else null,
-                        costNote = o.optString("costNote", ""),
-                        priceLevel = o.optInt("priceLevel", -1),
-                        typeName = o.optString("typeName", ""),
-                        businessHours = o.optString("businessHours", ""),
-                        duration = o.optLong("duration", 0L)
-                    )
-                    // 同 normKey 只保留第一筆，避免覆蓋；座標清單全收供最近鄰比對
-                    byName.putIfAbsent(normKey(pc.name), pc)
-                    all.add(pc)
-                }
+                val all = parsePlaces(text)
+                val byName = HashMap<String, PlaceCost>(all.size)
+                // 同 normKey 只保留第一筆，避免覆蓋；座標清單全收供最近鄰比對
+                for (pc in all) byName.putIfAbsent(normKey(pc.name), pc)
                 Log.d(TAG, "📦 [本地資料] 已載入成本參考庫 ${all.size} 筆（本次 0 次 API 呼叫）")
                 CostReference(byName, all)
             } catch (e: Exception) {

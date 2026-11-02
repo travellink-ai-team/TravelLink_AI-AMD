@@ -316,7 +316,7 @@ object DayPlanner {
         scheduledByDay.forEachIndexed { i, dayStops ->
             val window = windows.getOrNull(i) ?: return@forEachIndexed
             val last = dayStops.lastOrNull() ?: return@forEachIndexed
-            val endMins = (parseHhMm(last.time) ?: return@forEachIndexed) + last.duration.toInt()
+            val endMins = (dayClockMins(dayStops).last() ?: return@forEachIndexed) + last.duration.toInt()
             if (endMins > window.endMins) put(window.dayIndex, endMins - window.endMins)
         }
     }
@@ -325,6 +325,24 @@ object DayPlanner {
 
     /** 分鐘數 → "HH:mm"（顯示與 log 用） */
     fun hhmmOf(mins: Int): String = "%02d:%02d".format((mins / 60) % 24, mins % 60)
+
+    /** 給使用者看的時刻：過了午夜加「隔天」，免得「預計 00:30 結束」看起來比收工時間還早 */
+    fun clockLabel(mins: Int): String = if (mins >= 24 * 60) "隔天 ${hhmmOf(mins)}" else hhmmOf(mins)
+
+    /**
+     * 同一天依序的站點 time → 分鐘數。time 只存 HH:mm，排過午夜會變回 00:xx；
+     * 比前一站早就當成隔天（+24 小時），否則超時判斷會把 00:30 當成一大早而不提醒。
+     */
+    internal fun dayClockMins(dayStops: List<Stop>): List<Int?> {
+        var prev: Int? = null
+        var offset = 0
+        return dayStops.map { s ->
+            parseHhMm(s.time)?.let { raw ->
+                if (prev != null && raw + offset < prev!!) offset += 24 * 60
+                (raw + offset).also { prev = it }
+            }
+        }
+    }
 
     /** "HH:mm" → 分鐘數；格式不符回 null */
     internal fun parseHhMm(value: String): Int? {

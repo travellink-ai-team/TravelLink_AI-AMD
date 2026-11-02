@@ -26,11 +26,13 @@ object PlanOverrun {
         val limit = last.endMins - (island?.let { it.sailingMins + IslandRegistry.BOARDING_BUFFER_MINS } ?: 0)
         val dayStops = stops.filter { it.dayIndex == last.dayIndex }.ifEmpty { return null }
         val endStop = dayStops.last()
+        // 排過午夜的站 time 會是 00:xx，要接著前一站算成隔天（見 dayClockMins）
+        val clock = DayPlanner.dayClockMins(dayStops)
         val plannedEnd = if (island == null && endStop.isStation && !endStop.isLodging && !endStop.isFerry) {
-            DayPlanner.parseHhMm(endStop.time)
+            clock.last()
         } else {
-            dayStops.lastOrNull { !it.isStation && !it.isLodging && !it.isFerry }
-                ?.let { s -> DayPlanner.parseHhMm(s.time)?.plus(s.duration.toInt()) }
+            dayStops.indexOfLast { !it.isStation && !it.isLodging && !it.isFerry }.takeIf { it >= 0 }
+                ?.let { i -> clock[i]?.plus(dayStops[i].duration.toInt()) }
         } ?: return null
         return Overrun(last.dayIndex, plannedEnd, limit, last.endMins)
             .takeIf { it.overMin > GRACE_MIN }

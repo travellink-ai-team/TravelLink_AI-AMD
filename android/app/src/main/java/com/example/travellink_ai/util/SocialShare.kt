@@ -44,29 +44,69 @@ object SocialShare {
      * 本地 content://、file:// 則直接分享。需在 coroutine 呼叫（會做 IO 下載）。
      */
     suspend fun shareVideoSmart(context: Context, uri: Uri, title: String = DEFAULT_TITLE) {
-        val shareUri: Uri? = withContext(Dispatchers.IO) {
-            if (uri.scheme == "http" || uri.scheme == "https") {
-                runCatching {
-                    val f = File(context.cacheDir, "share_recap.mp4")
-                    URL(uri.toString()).openStream().use { input -> f.outputStream().use { input.copyTo(it) } }
-                    FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", f)
-                }.getOrNull()
-            } else {
-                normalize(context, uri)
-            }
-        }
+        val shareUri = prepareVideo(context, uri)
         withContext(Dispatchers.Main) {
             if (shareUri == null) {
                 Toast.makeText(context, "準備分享失敗，請稍後再試", Toast.LENGTH_SHORT).show()
                 return@withContext
             }
-            val intent = Intent(Intent.ACTION_SEND).apply {
-                type = "video/mp4"
-                putExtra(Intent.EXTRA_STREAM, shareUri)
-                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-            }
-            launchChooser(context, intent, title)
+            launchChooser(context, videoIntent(shareUri), title)
         }
+    }
+
+    const val INSTAGRAM_PACKAGE = "com.instagram.android"
+
+    /** IG 的分享入口：用 Activity 名稱開頭找（實測 v453：StoryShareHandlerActivity、ReelShareHandlerActivity） */
+    enum class IgTarget(val activityPrefix: String) { STORY("Story"), REEL("Reel") }
+
+    /**
+     * 影片直接開 IG 的限動或 Reels 編輯畫面。
+     *
+     * 不用官方的 ADD_TO_STORY／ADD_TO_REEL：兩者都要 Meta App ID（2023 起限動沒帶會被 IG 拒絕，Reels 還要 Meta App 上線），
+     * 這裡改走一般 ACTION_SEND，在執行時找 IG 公開的分享入口；找不到指定的入口就讓 IG 自己問要發到哪。
+     * @return false＝這台沒裝 IG（呼叫端改開系統分享選單）
+     */
+    suspend fun shareVideoToInstagram(context: Context, uri: Uri, target: IgTarget): Boolean {
+        val handlers = context.packageManager.queryIntentActivities(
+            Intent(Intent.ACTION_SEND).setType("video/mp4").setPackage(INSTAGRAM_PACKAGE), 0
+        )
+        if (handlers.isEmpty()) return false
+        val shareUri = prepareVideo(context, uri)
+        withContext(Dispatchers.Main) {
+            if (shareUri == null) {
+                Toast.makeText(context, "準備分享失敗，請稍後再試", Toast.LENGTH_SHORT).show()
+                return@withContext
+            }
+            val intent = videoIntent(shareUri).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            val match = handlers.firstOrNull { it.activityInfo.name.substringAfterLast('.').startsWith(target.activityPrefix) }
+            if (match != null) intent.setClassName(INSTAGRAM_PACKAGE, match.activityInfo.name) else intent.setPackage(INSTAGRAM_PACKAGE)
+            try {
+                context.startActivity(intent)
+            } catch (e: Exception) {
+                // IG 改版拿掉了這個入口：退回系統選單
+                launchChooser(context, videoIntent(shareUri), DEFAULT_TITLE)
+            }
+        }
+        return true
+    }
+
+    /** 雲端 http(s) 先下載成本地檔（社群 App 拿到連結無法貼片）；file:// 轉 FileProvider */
+    private suspend fun prepareVideo(context: Context, uri: Uri): Uri? = withContext(Dispatchers.IO) {
+        if (uri.scheme == "http" || uri.scheme == "https") {
+            runCatching {
+                val f = File(context.cacheDir, "share_recap.mp4")
+                URL(uri.toString()).openStream().use { input -> f.outputStream().use { input.copyTo(it) } }
+                FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", f)
+            }.getOrNull()
+        } else {
+            normalize(context, uri)
+        }
+    }
+
+    private fun videoIntent(shareUri: Uri) = Intent(Intent.ACTION_SEND).apply {
+        type = "video/mp4"
+        putExtra(Intent.EXTRA_STREAM, shareUri)
+        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
     }
 
     /** 分享多張圖片（九宮格 9 張一次丟給選定 App）。 */

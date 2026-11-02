@@ -176,6 +176,12 @@ fun HomeScreen(
         )
     }
 
+    // ── 現在去哪？：依當下位置挑一個現在有開的地方（不打 AI、不存資料）──
+    var showQuickPick by remember { mutableStateOf(false) }
+    if (showQuickPick) {
+        com.example.travellink_ai.ui.explore.QuickPickSheet(onDismiss = { showQuickPick = false })
+    }
+
     // ── 官方精選範本（取代原本的測試用社群牆；與網頁首頁同一份）──────────────
     val templatesVm: com.example.travellink_ai.ui.explore.ExploreTemplatesViewModel = hiltViewModel()
     val templates by templatesVm.templates.collectAsState()
@@ -333,13 +339,20 @@ fun HomeScreen(
                                 )
                             }
                             Spacer(Modifier.height(10.dp))
-                            Text(
-                                text = "今天想去\n哪裡探索？",
-                                fontSize = 32.sp,
-                                fontWeight = FontWeight.ExtraBold,
-                                color = Color.White,
-                                lineHeight = 38.sp
-                            )
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text(
+                                    text = "今天想去\n哪裡探索？",
+                                    modifier = Modifier.weight(1f),
+                                    fontSize = 32.sp,
+                                    fontWeight = FontWeight.ExtraBold,
+                                    color = Color.White,
+                                    lineHeight = 38.sp
+                                )
+                                com.example.travellink_ai.ui.explore.QuickPickHeroButton(
+                                    onClick = { showQuickPick = true },
+                                    modifier = Modifier.coachTarget(Tours.T_HOME_QUICK_PICK)
+                                )
+                            }
                             Spacer(Modifier.height(6.dp))
                             Text(
                                 text = "讓 AI 為你量身打造專屬行程",

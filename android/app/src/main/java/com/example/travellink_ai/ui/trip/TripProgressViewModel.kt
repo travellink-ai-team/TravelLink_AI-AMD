@@ -554,6 +554,22 @@ class TripProgressViewModel @Inject constructor(
         mirrorWebProgress()
         if (notifyFeedback) sendFeedbackNotification()
         broadcastTripCompletedToFriends()
+        scheduleAutoRecap()
+    }
+
+    /** 旅程結束自動做回顧短片（C7）：開關有開才排；是不是擁有者、雲端有沒有短片由背景工作再查 */
+    private fun scheduleAutoRecap() {
+        val cur = stateHolder.itinerary.value ?: return
+        val item = com.example.travellink_ai.data.local.LocalItinerary(
+            id = stateHolder.lastGeneratedLocalId.coerceAtLeast(0),
+            title = cur.title, aiTitle = cur.aiTitle, aiReply = cur.aiReply,
+            region = cur.region, days = cur.days, people = cur.people, stops = cur.stops,
+            firestoreDocId = realDocId,
+            transportMode = stateHolder.transportMode.value
+        )
+        runCatching {
+            com.example.travellink_ai.ui.recap.AutoRecap.onTripFinished(getApplication(), firebaseAuth.currentUser?.uid, item)
+        }.onFailure { Log.w(tag, "自動回顧短片排程失敗：${it.message}") }
     }
 
     /**

@@ -18,7 +18,9 @@ data class RecapStop(
     /** 停留分鐘。 */
     val stayMin: Int,
     /** 第幾天，由 1 起算。 */
-    val dayIndex: Int
+    val dayIndex: Int,
+    /** 預計抵達時間 HH:MM（沒有是空字串）；後端收進來給地圖飛行風格用 */
+    val arriveTime: String = ""
 )
 
 /** 整趟行程。對齊契約 trip。 */
@@ -32,19 +34,25 @@ data class RecapTrip(
     val distanceKm: Double,
     /** 枚舉同 RecapStop.mode。 */
     val transportMode: String,
-    val stops: List<RecapStop>
+    val stops: List<RecapStop>,
+    /** 攻略卡的每人花費（元，與 App 費用卡同一套算法）；null 不顯示 */
+    val costPerPerson: Int? = null,
+    /** 使用者指定的主角景點（stopId）；null＝依規則挑 */
+    val highlightStopId: String? = null
 )
 
 /**
- * 到站要插入的打卡照片。對齊契約 photos[]：**用 stopIndex（stops 陣列索引），每站最多一張**。
+ * 到站要插入的打卡照片。對齊契約 photos[]：用 stopIndex（stops 陣列索引）。
+ * 第 1 版每站送一張；Reels（第 2 版）同一站可以多張（順序＝共同相簿的排序），[photoId] 給時間軸 assetRefs 對照。
  */
 data class RecapPhoto(
     val stopIndex: Int,
-    val url: String
+    val url: String,
+    val photoId: String? = null
 )
 
 /**
- * POST /api/recap/render 的 body：{trip, photos, routePoints}。
+ * POST /api/recap/render 的 body：{trip, photos, routePoints, templateId, timeline, lengthMode, tripId, coverStopIndex}。
  *
  * ★ routePoints 是巢狀數字陣列 `[[[lat,lng], ...], ...]`（每段一條折線，長度 = stops-1），
  *   不是物件陣列。選填；優先帶 routeGeometry 快取（兩端一致，見 RecapRepository）。
@@ -52,7 +60,17 @@ data class RecapPhoto(
 data class RecapRenderRequest(
     val trip: RecapTrip,
     val photos: List<RecapPhoto>,
-    val routePoints: List<List<List<Double>>>?
+    val routePoints: List<List<List<Double>>>?,
+    /** 影片節奏（reels／standard／brisk／leisurely／cinematic）；後端不認得就用標準 */
+    val templateId: String? = null,
+    /** 片段時間軸（推薦版或編輯過的），含字幕；後端會重新驗證、夾住每段時長 */
+    val timeline: com.example.travellink_ai.ui.recap.model.RecapTimeline? = null,
+    /** Reels：all（放進全部照片，最長 30 秒）／15（固定 15 秒） */
+    val lengthMode: String? = null,
+    /** 雲端行程 id：後端讀 micro_trips/{tripId}.imageUrl 當封面（會檢查呼叫者是成員） */
+    val tripId: String? = null,
+    /** 自選封面：那站要有照片，否則後端改用行程插圖 */
+    val coverStopIndex: Int? = null
 )
 
 /** POST /recap/render 回傳 {ok, jobId, totalMs}（其餘欄位 Gson 忽略）。 */

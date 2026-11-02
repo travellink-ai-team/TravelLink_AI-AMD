@@ -28,6 +28,9 @@ MAX_PROMPT_LENGTH = 20000
 # 圖片生成可附的參考圖（互動插圖的構圖草稿）：一張、base64 後最多約 3MB（草稿是幾十 KB 的 PNG）
 MAX_REFERENCE_IMAGES = 1
 MAX_REFERENCE_IMAGE_B64 = 3_000_000
+# 文字呼叫可附的照片（回顧短片配樂建議：每站一張代表照、長邊 512px 的 JPEG，一張約 50～80KB）
+MAX_TEXT_IMAGES = 6
+MAX_TEXT_IMAGE_B64 = 400_000
 
 # 生成耗時量測：分出「冷啟動（新實例＋首次 import vertexai）」與「模型本身」各花多少時間
 _INSTANCE_STARTED_AT = time.time()
@@ -71,13 +74,31 @@ def generate_content(req: https_fn.CallableRequest) -> dict:
     if not prompt or len(prompt) > MAX_PROMPT_LENGTH:
         raise https_fn.HttpsError("invalid-argument", "prompt 為空或過長")
 
+    # 每日免費額度：先記一次再呼叫模型，模型失敗就退回（見 _reserve_quota）
+    is_image = "IMAGE" in (data.get("responseModalities") or [])
+    kinds = _quota_kinds(is_image, data.get("quotaKind"))
+    used = _reserve_quota(req.auth.uid, kinds)
+    try:
+        result = _run_generation(model_name, prompt, data, t_start, is_image)
+    except Exception:
+        if used is not None:
+            _refund_quota(req.auth.uid, kinds)
+        raise
+    if used is not None:
+        result["quota"] = used
+    return result
+
+
+def _run_generation(model_name: str, prompt: str, data: dict, t_start: float, is_image: bool) -> dict:
     # 圖片生成改走 REST v1：舊版 vertexai SDK（requirements 釘 >=1.70.0）呼叫
     # gemini-3.1-flash-image 會回 404「model not found」，但 REST v1 端點正常出圖。
     # 文字生成維持走 SDK（已驗證正常）。
-    if "IMAGE" in (data.get("responseModalities") or []):
+    if is_image:
         return _generate_image_via_rest(model_name, prompt, data)
     if model_name in GLOBAL_MODELS:
         return _generate_text_via_rest(model_name, prompt, data, t_start)
+    if data.get("images"):
+        raise https_fn.HttpsError("invalid-argument", f"{model_name} 不支援附照片")
 
     t_import = time.perf_counter()
     import vertexai
@@ -153,6 +174,106 @@ def generate_content(req: https_fn.CallableRequest) -> dict:
     return {"result": response.text, "usage": usage, "timing": timing}
 
 
+# ── 每日免費額度 ─────────────────────────────────────────────
+# 依登入帳號、台灣日期計次：usage_daily/{uid}_{YYYY-MM-DD} = {uid, date, trip, image, chat, swap, text, updatedAt}。
+# 網頁代理也寫同一份文件（同一套欄位），兩邊的次數合在一起算。只有後端（Admin SDK）能寫，規則不開放用戶端。
+#   trip／swap／chat：用戶端在 quotaKind 標明是哪個動作（行程生成第一次呼叫、換景點建議、隨行管家一則）
+#   image：每畫一張（伺服器看 responseModalities 判斷，用戶端標不掉）
+#   text：所有文字呼叫的總數。行程的備援呼叫、插圖的畫面描述不另外標 quotaKind，靠這個總數兜底，
+#         防止用戶端不標 quotaKind 就無限呼叫
+# 上限與豁免帳號放在 config/ai_quota（{limits: {trip: 10, ...}, exemptUids: [...]}），Console 改了一分鐘內生效。
+DEFAULT_QUOTA_LIMITS = {"trip": 10, "image": 3, "chat": 30, "swap": 20, "text": 150}
+CLIENT_QUOTA_KINDS = {"trip", "swap", "chat"}
+QUOTA_MESSAGES = {
+    "trip": "今天的免費行程生成（{n} 次）用完了，明天再試",
+    "image": "今天的免費插圖（{n} 張）用完了，明天再畫",
+    "chat": "今天的隨行管家免費次數（{n} 則）用完了，明天再問我",
+    "swap": "今天的換景點建議（{n} 次）用完了，明天再試",
+    "text": "今天的 AI 使用次數到上限了，明天再試",
+}
+_TAIPEI = None
+_quota_cfg = {"at": 0.0, "limits": dict(DEFAULT_QUOTA_LIMITS), "exempt": set()}
+
+
+def _quota_kinds(is_image: bool, quota_kind) -> list:
+    if is_image:
+        return ["image"]
+    return ["text", quota_kind] if quota_kind in CLIENT_QUOTA_KINDS else ["text"]
+
+
+def _quota_config() -> dict:
+    """config/ai_quota 快取一分鐘；讀不到時沿用上次（第一次就讀不到則用預設值）"""
+    if time.time() - _quota_cfg["at"] < 60:
+        return _quota_cfg
+    from firebase_admin import firestore
+    try:
+        d = firestore.client().collection("config").document("ai_quota").get().to_dict() or {}
+        limits = dict(DEFAULT_QUOTA_LIMITS)
+        for k, v in (d.get("limits") or {}).items():
+            if k in limits and isinstance(v, (int, float)):
+                limits[k] = int(v)
+        _quota_cfg.update(limits=limits, exempt=set(d.get("exemptUids") or []))
+    except Exception as e:
+        print(f"[quota] 讀不到 config/ai_quota，沿用目前設定：{e}")
+    _quota_cfg["at"] = time.time()
+    return _quota_cfg
+
+
+def _quota_ref(uid: str):
+    from datetime import datetime, timedelta, timezone
+    from firebase_admin import firestore
+    global _TAIPEI
+    _TAIPEI = _TAIPEI or timezone(timedelta(hours=8))   # 台灣沒有日光節約時間
+    date = datetime.now(_TAIPEI).strftime("%Y-%m-%d")
+    return firestore.client().collection("usage_daily").document(f"{uid}_{date}"), date
+
+
+def _reserve_quota(uid: str, kinds: list):
+    """額度內就先記上一次，回傳記完後的 {kind: {used, limit}}；超過丟 resource-exhausted。豁免帳號回 None。"""
+    from firebase_admin import firestore
+    cfg = _quota_config()
+    if uid in cfg["exempt"]:
+        return None
+    limits = cfg["limits"]
+    ref, date = _quota_ref(uid)
+
+    @firestore.transactional
+    def _take(tx):
+        snap = ref.get(transaction=tx)
+        cur = (snap.to_dict() or {}) if snap.exists else {}
+        for k in kinds:
+            if int(cur.get(k, 0)) >= limits[k]:
+                raise https_fn.HttpsError("resource-exhausted", QUOTA_MESSAGES[k].format(n=limits[k]),
+                                          {"kind": k, "limit": limits[k]})
+        after = {k: int(cur.get(k, 0)) + 1 for k in kinds}
+        tx.set(ref, {"uid": uid, "date": date, **after, "updatedAt": firestore.SERVER_TIMESTAMP}, merge=True)
+        return {k: {"used": after[k], "limit": limits[k]} for k in kinds}
+
+    return _take(firestore.client().transaction())
+
+
+def _refund_quota(uid: str, kinds: list) -> None:
+    """模型失敗時退回剛記的那一次；退不回只記 log，不影響回給用戶端的錯誤"""
+    from firebase_admin import firestore
+    try:
+        ref, _ = _quota_ref(uid)
+        ref.set({k: firestore.Increment(-1) for k in kinds}, merge=True)
+    except Exception as e:
+        print(f"[quota] 退回失敗 uid={uid} kinds={kinds}: {e}")
+
+
+@https_fn.on_call(region="us-central1", timeout_sec=30)
+def get_ai_quota(req: https_fn.CallableRequest) -> dict:
+    """查今天的免費額度：{date, exempt, limits, used}（App 畫插圖前用來看還能畫幾張）"""
+    if req.auth is None:
+        raise https_fn.HttpsError("unauthenticated", "需要登入")
+    cfg = _quota_config()
+    ref, date = _quota_ref(req.auth.uid)
+    cur = ref.get().to_dict() or {}
+    return {"date": date, "exempt": req.auth.uid in cfg["exempt"], "limits": cfg["limits"],
+            "used": {k: int(cur.get(k, 0)) for k in DEFAULT_QUOTA_LIMITS}}
+
+
 # 服務帳戶憑證：同一個實例沿用，權杖過期（約 1 小時）才重取，不必每次呼叫都多一趟 refresh
 _cached_creds = None
 
@@ -211,7 +332,10 @@ def _generate_text_via_rest(model_name: str, prompt: str, data: dict, t_start: f
         gen_config["thinkingConfig"] = {"thinkingBudget": int(data["thinkingBudget"])}
     if data.get("maxOutputTokens") is not None:
         gen_config["maxOutputTokens"] = int(data["maxOutputTokens"])
-    body = {"contents": [{"role": "user", "parts": [{"text": prompt}]}], "generationConfig": gen_config}
+    # 照片（選填）放在文字前面，與圖片生成的參考圖相同
+    parts = _image_parts(data, MAX_TEXT_IMAGES, MAX_TEXT_IMAGE_B64, "照片")
+    parts.append({"text": prompt})
+    body = {"contents": [{"role": "user", "parts": parts}], "generationConfig": gen_config}
 
     t_model = time.perf_counter()
     try:
@@ -241,6 +365,23 @@ def _generate_text_via_rest(model_name: str, prompt: str, data: dict, t_start: f
     return {"result": text, "usage": _usage_of(payload), "timing": timing}
 
 
+def _image_parts(data: dict, max_n: int, max_b64: int, label: str) -> list:
+    """data["images"]（[{mimeType, data(base64)}]）轉成 Gemini 的 inlineData parts；超過 max_n 張的直接略過"""
+    images = data.get("images") or []
+    if not isinstance(images, list):
+        raise https_fn.HttpsError("invalid-argument", f"{label}格式不正確")
+    parts = []
+    for img in images[:max_n]:
+        mime = img.get("mimeType") if isinstance(img, dict) else None
+        b64 = img.get("data") if isinstance(img, dict) else None
+        if mime not in ("image/png", "image/jpeg") or not isinstance(b64, str) or not b64:
+            raise https_fn.HttpsError("invalid-argument", f"{label}格式不正確")
+        if len(b64) > max_b64:
+            raise https_fn.HttpsError("invalid-argument", f"{label}太大")
+        parts.append({"inlineData": {"mimeType": mime, "data": b64}})
+    return parts
+
+
 def _generate_image_via_rest(model_name: str, prompt: str, data: dict) -> dict:
     """以 REST v1 呼叫圖片模型（繞開舊版 vertexai SDK 的 404）。回 {imageBase64, usage}。"""
     import urllib.error
@@ -253,15 +394,7 @@ def _generate_image_via_rest(model_name: str, prompt: str, data: dict) -> dict:
         gen_config["imageConfig"] = {"aspectRatio": image_config.get("aspectRatio", "1:1")}
 
     # 參考圖（選填）：互動插圖的「構圖草稿」（紅色編號圓點＋虛線路線），放在文字前面，與網頁 posterSketchPart 相同
-    parts = []
-    for img in (data.get("images") or [])[:MAX_REFERENCE_IMAGES]:
-        mime = img.get("mimeType") if isinstance(img, dict) else None
-        b64 = img.get("data") if isinstance(img, dict) else None
-        if mime not in ("image/png", "image/jpeg") or not isinstance(b64, str) or not b64:
-            raise https_fn.HttpsError("invalid-argument", "參考圖格式不正確")
-        if len(b64) > MAX_REFERENCE_IMAGE_B64:
-            raise https_fn.HttpsError("invalid-argument", "參考圖太大")
-        parts.append({"inlineData": {"mimeType": mime, "data": b64}})
+    parts = _image_parts(data, MAX_REFERENCE_IMAGES, MAX_REFERENCE_IMAGE_B64, "參考圖")
     parts.append({"text": prompt})
     body = {
         "contents": [{"role": "user", "parts": parts}],
@@ -494,91 +627,6 @@ def detect_stop_boxes(req: https_fn.CallableRequest) -> dict:
     saved = _save(db.transaction())
     return {"imageUrl": image_url, "boxes": boxes, "cached": False, "saved": saved,
             "usage": _usage_of(payload)}
-
-
-@https_fn.on_call(region="us-central1", timeout_sec=120)
-def generate_itinerary(req: https_fn.CallableRequest) -> dict:
-    data = req.data
-    start = data.get("startDateTime", "")
-    end = data.get("endDateTime", "")
-    people = data.get("people", "")
-    pace = data.get("pace", "")
-    allowed_spots = data.get("allowedSpots", [])
-
-    import vertexai
-    from vertexai.generative_models import GenerativeModel, GenerationConfig
-
-    vertexai.init(project=PROJECT_ID, location=LOCATION)
-    model = GenerativeModel("gemini-2.5-flash")
-
-    prompt = _build_itinerary_prompt(start, end, people, pace, allowed_spots)
-
-    response = model.generate_content(
-        prompt,
-        generation_config=GenerationConfig(
-            temperature=0.3,
-            response_mime_type="application/json"
-        )
-    )
-    return {"result": response.text}
-
-
-@https_fn.on_call(region="us-central1", timeout_sec=300)
-def generate_image(req: https_fn.CallableRequest) -> dict:
-    data = req.data
-    ai_title = data.get("aiTitle", "")
-    region = data.get("region", "台東")
-    stop_details = data.get("stopDetails", "")
-
-    import vertexai
-    from vertexai.preview.vision_models import ImageGenerationModel
-
-    vertexai.init(project=PROJECT_ID, location=LOCATION)
-    model = ImageGenerationModel.from_pretrained("imagen-3.0-generate-002")
-
-    prompt = f"""A 16:9 horizontal travel guide illustration in cute hand-drawn style.
-Title: prominently display "{ai_title}" at the top in Traditional Chinese calligraphy style.
-Layout: card-style layout with each attraction as its own illustrated card:
-{stop_details}
-Each card shows: attraction name in Traditional Chinese, visit time, and a realistic detailed illustration (architecture / local food / street scene / nature).
-Style: realistic yet warm hand-drawn texture. Color tone adapts to content — coastal scenes use blue palette, mountain scenes use green palette, night market food uses warm orange palette.
-Background: include local {region} elements (map outline, regional specialty icons).
-Composition: 16:9 horizontal, cards arranged neatly without overlap, lively and informative like a travel guidebook."""
-
-    images = model.generate_images(
-        prompt=prompt,
-        number_of_images=1,
-        aspect_ratio="16:9"
-    )
-
-    img_base64 = base64.b64encode(images[0]._image_bytes).decode("utf-8")
-    return {"imageBase64": img_base64}
-
-
-def _build_itinerary_prompt(start: str, end: str, people: str, pace: str, allowed_spots: list) -> str:
-    is_long_trip = start.split(" ")[0] != end.split(" ")[0]
-    rules = [
-        f"1. 針對 {start} 到 {end} 量身打造。嚴禁超出此區間，嚴禁在單日行程中使用『三天兩夜』字眼。",
-        "2. 描述 (desc) 必須精簡在 25 字內。總景點數 3-5 個。",
-        "3. 停留時間 (duration) 必須設定在 90 到 150 分鐘之間。",
-        "4. 直接回傳純 JSON 字串，不要 Markdown 代碼塊。"
-    ]
-    if is_long_trip:
-        rules.append("5. 需安排 12:00-13:30 的午餐停留。")
-
-    spot_section = ""
-    if allowed_spots:
-        spot_section = (
-            "\n【重要限制】可選景點清單如下，name 欄位只能從這份清單中選擇，嚴禁使用清單以外的地點：\n"
-            + "、".join(allowed_spots)
-        )
-
-    return (
-        "你是台東旅遊 AI。請生成 JSON：{title, aiTitle, aiReply, region, stops:[{order,emoji,name,time,desc,duration,businessHours}]}\n"
-        f"行程規則：\n" + "\n".join(rules) + "\n"
-        + spot_section
-        + f"\n需求：台東, {start} 到 {end}, {people}, {pace}。"
-    )
 
 
 # ── 共同相簿：照片文件被刪時清掉 Storage 檔案與舊版 memories 引用 ─────────────

@@ -212,6 +212,11 @@ fun StopDetailScreen(
                     Spacer(Modifier.height(10.dp))
                     Text(stop.desc, fontSize = 14.sp, color = DesignTokens.Ink2, lineHeight = 20.sp)
                 }
+                if (stop.isMergedAttraction) {
+                    Spacer(Modifier.height(6.dp))
+                    Text("這一站包含：${stop.mergedSubSpots.joinToString("、")}", fontSize = 14.sp,
+                        color = DesignTokens.AccentDark, lineHeight = 20.sp)
+                }
                 Spacer(Modifier.height(12.dp))
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     if (stop.time.isNotBlank()) InfoChip("🕒 ${stop.time}", DesignTokens.AccentLight, DesignTokens.AccentDark)

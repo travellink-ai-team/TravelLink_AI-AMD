@@ -65,4 +65,23 @@ class LocalAlternativesTest {
         assertEquals("🍽️", s.emoji)
         assertEquals("餐廳", s.stopType)
     }
+
+    @Test
+    fun `換景點給 AI 的清單附上類型、室內外、費用、評分、距離`() {
+        val beach = PlaceCost("某沙灘", 22.8, 121.2, 0, "", null, "", -1, "景點", "", 60,
+            rating = 4.56, desc = "白色沙灘")
+        assertEquals("某沙灘（景點、戶外、免費、評分 4.6、距離 1.2 km）",
+            LocalAlternatives.describeForAi(LocalAlternatives.Candidate(beach, 1.23)))
+        val noodle = PlaceCost("某麵店", 22.8, 121.2, null, "", null, "\$100–200", -1, "餐廳", "", 40)
+        assertEquals("某麵店（餐廳、室內、餐費 \$100–200、距離 0.5 km）",
+            LocalAlternatives.describeForAi(LocalAlternatives.Candidate(noodle, 0.5)))
+    }
+
+    @Test
+    fun `點標籤加進想法、再點拿掉，自己打的字保留`() {
+        assertEquals("室內", LocalAlternatives.toggleWishTag("", "室內"))
+        assertEquals("想吃小吃、室內", LocalAlternatives.toggleWishTag("想吃小吃", "室內"))
+        assertEquals("想吃小吃", LocalAlternatives.toggleWishTag("想吃小吃、室內", "室內"))
+        assertEquals("親子", LocalAlternatives.toggleWishTag(" 室內 、親子", "室內"))
+    }
 }

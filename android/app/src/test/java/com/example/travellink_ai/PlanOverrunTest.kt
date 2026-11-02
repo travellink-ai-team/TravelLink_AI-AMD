@@ -2,6 +2,7 @@ package com.example.travellink_ai
 
 import com.example.travellink_ai.data.island.IslandRegistry
 import com.example.travellink_ai.data.model.Stop
+import com.example.travellink_ai.ui.planning.DayPlanner
 import com.example.travellink_ai.ui.planning.PlanOverrun
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
@@ -45,6 +46,29 @@ class PlanOverrunTest {
         assertNull(PlanOverrun.of(days, ok, "台東"))
         val over = listOf(s("夜景", "20:00", 60, day = 1), s("B", "15:50", 60, day = 2))
         assertEquals(2, PlanOverrun.of(days, over, "台東")!!.day)
+    }
+
+    @Test
+    fun pastMidnight_stillWarns() {
+        // time 只存 HH:mm：23:10 + 60 分之後的站排到 00:20，過去被當成一大早，不提醒超時
+        val stops = listOf(s("A", "22:00", 70), s("B", "00:20", 30))
+        val o = PlanOverrun.of(oneDay, stops, "台東")!!
+        assertEquals(24 * 60 + 50, o.plannedEnd)
+        assertEquals(24 * 60 + 50 - 18 * 60, o.overMin)
+        assertEquals("隔天 00:50", DayPlanner.clockLabel(o.plannedEnd))
+    }
+
+    @Test
+    fun returnStationPastMidnight_stillWarns() {
+        val stops = listOf(s("A", "23:00", 60), s("台東車站", "00:15", 0, station = true))
+        assertEquals(24 * 60 + 15, PlanOverrun.of(oneDay, stops, "台東")!!.plannedEnd)
+    }
+
+    @Test
+    fun overrunByDay_pastMidnight() {
+        val windows = DayPlanner.buildDayWindows("2026/10/04 09:00", "2026/10/04 18:00")
+        val day = listOf(s("A", "23:30", 60), s("B", "00:40", 30))
+        assertEquals(mapOf(1 to 24 * 60 + 70 - 18 * 60), DayPlanner.overrunMinutesByDay(listOf(day), windows))
     }
 
     @Test
