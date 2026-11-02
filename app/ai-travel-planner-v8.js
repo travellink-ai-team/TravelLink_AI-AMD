@@ -17498,7 +17498,7 @@
         _addRgLine(`> ⚠️ 已排除 ${rejectedNames.length} 個無法驗證景點，補充新景點…`, 'warn');
         const replenishRes = await fetchReplanWithTimeout(endpoint, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: await vertexAuthHeaders(),
           body: JSON.stringify({
             contents: [{ role: 'user', parts: [{ text: buildReplenishPrompt(dest, needed, [...rejectedNames, ...newStops.map(s => s.name)], wizardData) }] }],
             generationConfig: buildGenConfig({ temperature: 0.9, maxOutputTokens: 2048, thinking: 0 })
@@ -17544,7 +17544,7 @@
         _addRgLine(`> 🗺️ 搜尋 ${dest} 周邊替代景點…`, 'warn');
         const nearbyRes = await fetchReplanWithTimeout(endpoint, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: await vertexAuthHeaders(),
           body: JSON.stringify({
             contents: [{ role: 'user', parts: [{ text: buildNearbyFallbackPrompt(dest, nearbyNeeded, [...rejectedNames, ...newStops.map(s => s.name)], wizardData) }] }],
             generationConfig: buildGenConfig({ temperature: 1.0, maxOutputTokens: 2048, thinking: 0 })
@@ -17619,7 +17619,7 @@
           let res;
           try {
             res = await fetchReplanWithTimeout(endpoint, {
-              method: 'POST', headers: { 'Content-Type': 'application/json' },
+              method: 'POST', headers: await vertexAuthHeaders(),
               body: JSON.stringify({
                 contents: [{ role: 'user', parts: [{ text: buildTimeFillPrompt(dest, need, shortfall, replanStops.map(s => s.name).concat(rejectedNames), wizardData) }] }],
                 generationConfig: buildGenConfig({ temperature: 0.9, maxOutputTokens: 2048, thinking: 0 })
