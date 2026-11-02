@@ -6,7 +6,7 @@
      get_trip_request 讀條件 → get_weather_forecast 決定室內外比例
      → search_local_poi／search_restaurants 篩候選（離島另查 get_ferry_status）
      → draft_itinerary 送「選了哪些站」→ 程式（planner.js）排序、算車程、
-       排時間、驗證，回 violations → 模型修改（最多 3 輪）
+       排時間、驗證，回 violations → 模型修改（最多 4 輪）
      → present_itinerary 結束
    原則：AI 負責「選」，程式負責「算」；站名只能用工具回傳過的名稱。
    防護比照 loop.js：工具白名單、步數上限、總時限、5xx 重試。
@@ -20,7 +20,8 @@ const P = require('./planner');
 
 const MAX_TOOL_CALLS = 20;
 const MAX_LLM_CALLS = 18;
-const MAX_FAILED_ROUNDS = 3;
+// 3 輪時，短行程偶爾在「太短 → 加站變太長 → 刪站」之間來回用完次數；多給一輪，每輪約 0.5 秒
+const MAX_FAILED_ROUNDS = 4;
 const SEARCH_LIMIT = 8;
 const timeoutMs = () => Number(process.env.AGENT_PLAN_TIMEOUT_MS) || 90 * 1000;
 
@@ -206,6 +207,7 @@ const IMPL = {
     const interests = args.interest ? [String(args.interest)] : r.interests;
     const kw = String(args.keyword || '').trim().slice(0, 12);
     const seenBase = [];
+    const kept = [];
     const results = P.poolOf(r, 'scenic')
       .filter((p) => !args.indoor || D.indoorOf(p) === 'indoor')
       .filter((p) => !kw || `${p.name}${p.desc || ''}`.includes(kw))
@@ -219,7 +221,10 @@ const IMPL = {
         // 拿掉英文、拆出括號內外的名稱，任一段互相包含就算同一個，只留分數高的那筆
         const parts = x.p._key.replace(/[a-z0-9&'’.,-]+/g, '').split(/[()（）]/).map((s) => s.trim()).filter((s) => s.length >= 3);
         if (parts.some((a) => seenBase.some((b) => a.includes(b) || b.includes(a)))) return false;
+        // 名稱不互相包含的別名（「哈巴狗與睡美人岩」vs「小長城步道 & 睡美人與哈巴狗」）交給地標詞＋距離判斷
+        if (kept.some((k) => P.sameAttraction(k, x.p))) return false;
         seenBase.push(...parts);
+        kept.push(x.p);
         return true;
       })
       .slice(0, SEARCH_LIMIT);
@@ -461,13 +466,13 @@ async function runPlanAgent({ request, scenario, onEvent, onUsage, chat }) {
           });
         }
       }
-      if (ctx.failedRounds >= MAX_FAILED_ROUNDS) throw Object.assign(new Error('validation failed 3 times'), { code: 'validation' });
+      if (ctx.failedRounds >= MAX_FAILED_ROUNDS) throw Object.assign(new Error(`validation failed ${MAX_FAILED_ROUNDS} times`), { code: 'validation' });
     }
     throw Object.assign(new Error('too many llm calls'), { code: 'max_steps' });
   } catch (err) {
     const code = err.code || (err.name === 'TimeoutError' ? 'timeout' : 'upstream');
     const why = {
-      timeout: 'AI 規劃代理人逾時', max_steps: 'AI 規劃代理人步數超過上限', validation: 'AI 草稿連續 3 輪驗證失敗', no_tools: 'AI 規劃代理人沒有完成流程'
+      timeout: 'AI 規劃代理人逾時', max_steps: 'AI 規劃代理人步數超過上限', validation: `AI 草稿連續 ${MAX_FAILED_ROUNDS} 輪驗證失敗`, no_tools: 'AI 規劃代理人沒有完成流程'
     }[code] || 'AI 服務暫時無法回應';
     console.warn('[plan-agent] 失敗：' + why + (err.code ? '' : '｜' + String(err.message || err).slice(0, 300)));
     return finish({ type: 'error', code, message: why + '，改用一般生成。' });

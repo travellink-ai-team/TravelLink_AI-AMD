@@ -107,6 +107,26 @@ const last = (results, name) => (results[name] || [])[(results[name] || []).leng
   const rainy = P.buildDraft(req, outdoors.concat([{ name: food.results[0].name }]), { allowed: ctx0.allowed, forecast: rainFc });
   ok('buildDraft：大雨天排 2 個以上戶外站 → rain 違規', rainy.violations.some((v) => v.code === 'rain'));
 
+  // 同一處景點的別名：名稱不互相包含、座標差 750 m（觀景步道 vs 岩石本身）
+  const sleepA = { name: '哈巴狗與睡美人岩', lat: 22.653986, lng: 121.507175 };
+  const sleepB = { name: '小長城步道 & 睡美人與哈巴狗', lat: 22.660833, lng: 121.506816 };
+  ok('sameAttraction：睡美人岩的兩個別名算同一處', P.sameAttraction(sleepA, sleepB));
+  ok('sameAttraction：「三和海濱公園」與「海濱公園」相距 15 km 不算', !P.sameAttraction({ name: '三和海濱公園', lat: 22.62, lng: 121.03 }, { name: '海濱公園', lat: 22.755, lng: 121.158 }));
+  ok('sameAttraction：相鄰 80 m 的不同景點不算', !P.sameAttraction({ name: '臺東故事館', lat: 22.7935, lng: 121.1235 }, { name: '鐵花新聚落', lat: 22.7929, lng: 121.124 }));
+  const gctx = { req: greenReq, allowed: new Set(), failedRounds: 0, getForecast: async () => null };
+  const gpoi = await A.runTool(gctx, 'search_local_poi', { radiusKm: 30 });
+  const gnames = gpoi.results.map((r) => r.name);
+  ok('search_local_poi：綠島結果不會同時有兩個睡美人岩別名', gnames.filter((n) => /睡美人/.test(n)).length <= 1, gnames.join('、'));
+  const dupAllowed = new Set(gctx.allowed);
+  ['哈巴狗與睡美人岩', '小長城步道 & 睡美人與哈巴狗'].forEach((n) => { const p = D.findPlace(n); if (p) dupAllowed.add(p._key); });
+  const dup = P.buildDraft(greenReq, [{ name: '哈巴狗與睡美人岩' }, { name: '小長城步道 & 睡美人與哈巴狗' }], { allowed: dupAllowed });
+  ok('buildDraft：同一處景點排兩次 → 退回', dup.violations.some((v) => v.code === 'unknown_place' && /同一個景點/.test(v.message)), dup.violations.map((v) => v.message).join('；'));
+
+  // 行程太早結束：09–18 只排兩站，離結束還空很久 → idle 違規
+  const lateReq = P.normalizeRequest({ ...TAITUNG, durationMin: 540 });
+  const shortDay = P.buildDraft(lateReq, picks.slice(0, 2).concat([{ name: food.results[0].name }]), { allowed: ctx0.allowed });
+  ok('buildDraft：離結束時間空超過 90 分 → idle 違規', shortDay.violations.some((v) => v.code === 'idle'), shortDay.returnTime);
+
   /* ═══ 2. mock LLM 跑通工具迴圈：第一輪缺午餐被退回，第二輪通過 ═══ */
   const script = [
     [['get_trip_request', {}]],
@@ -145,7 +165,7 @@ const last = (results, name) => (results[name] || [])[(results[name] || []).leng
 
   const badDraft = (r) => [['draft_itinerary', { stops: [{ name: '不存在的夢幻秘境' }] }]];
   const threeFails = await A.runPlanAgent({ request: TAITUNG, chat: mockChat([[['get_trip_request', {}]], badDraft, badDraft, badDraft, badDraft]), onEvent: () => {} });
-  ok('防護：草稿連續 3 輪驗證失敗 → error', threeFails.type === 'error' && threeFails.code === 'validation');
+  ok('防護：草稿連續 4 輪驗證失敗 → error', threeFails.type === 'error' && threeFails.code === 'validation');
 
   const e500 = Object.assign(new Error('vLLM 500'), { status: 500 });
   const retried = mockChat([{ throw: e500 }, ...script]);

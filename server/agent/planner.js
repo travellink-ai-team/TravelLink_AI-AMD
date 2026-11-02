@@ -48,6 +48,37 @@ const INTEREST_RE = {
 
 const normDest = (s) => String(s || '').replace(/臺/g, '台').trim();
 
+// ── 同一處景點的不同名稱 ──
+// 本地資料常把一個景點拆成好幾筆：「睡美人岩」「哈巴狗與睡美人岩」「小長城步道 & 睡美人與哈巴狗」、
+// 「小野柳」「富岡地質公園 (小野柳)」。名稱不互相包含、座標也可能差幾百公尺（觀景步道 vs 岩石本身），
+// 所以拆出「地標詞」比對：共用地標詞且相距 3 km 內，或兩點不到 25 m，就當同一處。
+// 限 3 km 是為了擋「三和海濱公園」與「海濱公園」這種只是撞名、實際差 15 km 的；
+// 純距離只抓 25 m，市區景點常相鄰（臺東故事館與鐵花新聚落差 80 m，是兩個景點）。
+// 只比景點對景點，景點旁邊的餐廳不算重複。
+const LANDMARK_SUFFIX = /(觀景平台|觀景台|休憩區|遊憩區|風景區|步道|公園|遺址|部落|海灘|沙灘|園區|燈塔|漁港|岩|洞)$/;
+const LANDMARK_STOPWORDS = new Set(['台東', '臺東', '綠島', '蘭嶼', '東河', '成功', '長濱', '池上', '關山', '鹿野', '太麻里',
+  '知本', '卑南', '大武', '金峰', '達仁', '延平', '海端', '小長城', '海濱']);
+const SAME_SPOT_KM = 0.025;
+const SAME_LANDMARK_KM = 3;
+
+function landmarkTokens(name) {
+  return String(name || '').replace(/[A-Za-z0-9'’.,-]+/g, ' ')
+    .split(/[&＆、與和及()（）\s・·—~～/]+/)
+    .map((s) => s.trim().replace(LANDMARK_SUFFIX, '').replace(LANDMARK_SUFFIX, ''))
+    .filter((t) => t.length >= 2 && !LANDMARK_STOPWORDS.has(t));
+}
+
+/** 兩筆地點是不是同一處景點（需要 lat/lng） */
+function sameAttraction(a, b) {
+  if (!a || !b || a === b) return false;
+  const km = D.haversineKm(a, b);
+  if (km <= SAME_SPOT_KM) return true;
+  if (km > SAME_LANDMARK_KM) return false;
+  const ta = landmarkTokens(a.name);
+  const tb = landmarkTokens(b.name);
+  return ta.some((t) => tb.some((u) => u === t || (t.length >= 3 && u.includes(t)) || (u.length >= 3 && t.includes(u))));
+}
+
 /** 目的地 → 島名（綠島／蘭嶼），本島回 null */
 function islandOf(dest) {
   const d = normDest(dest);
@@ -238,6 +269,8 @@ function buildDraft(req, picks, opts = {}) {
     if (place.kind === 'transit') { rejected.push({ name: place.name, reason: '交通站不是景點' }); continue; }
     if (seen.has(place._key)) continue;
     seen.add(place._key);
+    const twin = place.kind === 'food' ? null : items.find((x) => x.place.kind !== 'food' && sameAttraction(x.place, place));
+    if (twin) { rejected.push({ name: place.name, reason: `和「${twin.place.name}」是同一個景點，請只留一個，改挑別的景點` }); continue; }
     const stay = Number(p && p.stayMin);
     items.push({
       place,
@@ -313,9 +346,11 @@ function buildDraft(req, picks, opts = {}) {
   if (items.length && items.length < range.min) {
     violations.push({ code: 'too_few', message: `只有 ${items.length} 站，${Math.round(req.durationMin / 60)} 小時的行程建議至少 ${range.min} 站` });
   }
+  // 原本 120 分才擋，實測 09–18 的行程 16:00 就回到終點也會通過；前端還會在起點加約 30 分停留，
+  // 所以這裡收到 90 分：實際畫面上的空檔約 1 小時內
   const idle = req.endMin - sch.returnMin;
-  if (items.length && idle > 120) violations.push({ code: 'idle', message: `行程 ${I.toClock(sch.returnMin)} 就結束，離 ${I.toClock(req.endMin)} 還空 ${idle} 分鐘，請再加 1–2 站或延長停留` });
-  else if (items.length && idle > 75) warnings.push({ code: 'idle_minor', message: `離結束時間還有約 ${idle} 分鐘空檔` });
+  if (items.length && idle > 90) violations.push({ code: 'idle', message: `行程 ${I.toClock(sch.returnMin)} 就結束，離 ${I.toClock(req.endMin)} 還空 ${idle} 分鐘，請再加 1–2 站或延長停留` });
+  else if (items.length && idle > 60) warnings.push({ code: 'idle_minor', message: `離結束時間還有約 ${idle} 分鐘空檔` });
   const longWaits = sch.stops.filter((x) => x.wait >= 45);
   longWaits.forEach((x) => warnings.push({ code: 'wait', stop: x.place.name, message: `「${x.place.name}」要等 ${x.wait} 分鐘才開門` }));
 
@@ -410,5 +445,5 @@ function interestScore(place, interests) {
 
 module.exports = {
   normalizeRequest, buildDraft, resolveDesired, poolOf, interestScore, centerOf, islandOf, endpointOf,
-  mealSlots, stopRange, schedule, orderByRoute, INTEREST_RE, MAX_DRAFT_STOPS
+  mealSlots, stopRange, schedule, orderByRoute, INTEREST_RE, MAX_DRAFT_STOPS, landmarkTokens, sameAttraction
 };
