@@ -1150,6 +1150,8 @@ const agentLimiter = rateLimit({
   legacyHeaders: false,
   message: { error: 'rate limited', message: 'AI 代理人使用太頻繁，請稍後再試。' }
 });
+// 主動式旅途管家：POST /api/agent/precheck（程式檢查，不呼叫 AI；見 agent/precheck-route.js）
+require('./agent/precheck-route').mount(app, { requireFirebaseUser, rateLimit });
 
 app.post('/api/agent/replan', agentLimiter, requireFirebaseUser, async (req, res) => {
   const body = req.body || {};
