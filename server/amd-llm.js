@@ -287,8 +287,67 @@ async function chat({ messages, tools, temperature = 0.3, maxTokens = 2048, sign
   return { message, finishReason: choice.finish_reason || '', usage: data.usage || null, model: data.model || '', upstream };
 }
 
+/* ── 結構化輸出（/api/ai/task 用，見 ai-tasks.js）──────────────────
+   vLLM 的 OpenAI 相容介面支援 response_format: json_schema（guided decoding），
+   輸出被文法約束，不再只靠 prompt 叫它「只回 JSON」。
+   端點若不支援（回 400 且訊息提到 response_format／json_schema／guided），
+   這個行程內改用 json_object 並記一次 log；之後的請求不再先試 json_schema。
+   既有的 Gemini 轉接（toOpenAiRequest）與 chat() 行為完全不變。 */
+let jsonSchemaUnsupported = false;
+
+/**
+ * @returns {Promise<{ text, finishReason, usage, model, upstream, structured: 'json_schema'|'json_object' }>}
+ */
+async function chatJson({ messages, schema, schemaName = 'output', temperature = 0.4, maxTokens = 1024, signal }) {
+  const build = (mode) => {
+    const body = {
+      model: AMD_LLM_MODEL,
+      messages,
+      temperature,
+      max_tokens: maxTokens + REASONING_HEADROOM,
+      reasoning_effort: AMD_LLM_REASONING_EFFORT
+    };
+    body.response_format = mode === 'json_schema'
+      ? { type: 'json_schema', json_schema: { name: schemaName, schema, strict: true } }
+      : { type: 'json_object' };
+    return body;
+  };
+  let mode = schema && !jsonSchemaUnsupported ? 'json_schema' : 'json_object';
+  let { response: r, upstream } = await postChatCompletions(JSON.stringify(build(mode)), { signal });
+  if (r.status === 400 && mode === 'json_schema') {
+    const detail = await r.text().catch(() => '');
+    if (!/response_format|json_schema|guided|structured/i.test(detail)) {
+      const err = new Error('AMD LLM 400：' + detail.slice(0, 200));
+      err.status = 400;
+      throw err;
+    }
+    jsonSchemaUnsupported = true;
+    console.warn('[amd-llm] 端點不支援 json_schema，改用 json_object：' + detail.slice(0, 160));
+    mode = 'json_object';
+    ({ response: r, upstream } = await postChatCompletions(JSON.stringify(build(mode)), { signal }));
+  }
+  if (!r.ok) {
+    const detail = await r.text().catch(() => '');
+    const err = new Error('AMD LLM ' + r.status + '：' + detail.slice(0, 200));
+    err.status = r.status;
+    throw err;
+  }
+  const data = await r.json();
+  const choice = (data.choices && data.choices[0]) || {};
+  return {
+    text: String((choice.message && choice.message.content) || ''),
+    finishReason: choice.finish_reason || '',
+    usage: toUsageMetadata(data.usage),
+    model: data.model || USAGE_MODEL_ID,
+    upstream,
+    structured: mode
+  };
+}
+
 module.exports = {
   chat,
+  chatJson,
+  _resetJsonSchemaSupport: () => { jsonSchemaUnsupported = false; },
   postChatCompletions,
   hasFallback,
   USAGE_MODEL_ID,

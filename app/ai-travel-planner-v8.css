@@ -9028,3 +9028,9 @@ body.poster-viewer-open { overflow: hidden; }
 .poster-trip-card { height: auto; }
 .poster-card-window { position: relative; inset: auto; max-height: 220px; }
 .poster-trip-card { display: flex; flex-direction: column; } /* 避免空白字元多撐出一行高度，卡片底下才不會多一條空白 */
+/* ── 方案 E：/api/ai/task 回應 provider=amd 時的小標示（ai-task-client.js badgeHtml）──
+   短標籤一律不換行；放在提示句開頭，後面的中文提示照常換行 */
+.ai-provider-badge { display: inline-block; white-space: nowrap; vertical-align: 1px; margin-right: 6px; padding: 1px 7px; border-radius: 999px; font-size: 11px; font-weight: 600; line-height: 1.5; letter-spacing: .01em; color: #b4161b; background: rgba(237, 28, 36, .08); border: 1px solid rgba(237, 28, 36, .28); }
+.memory-ai-meta { margin: -2px 0 8px; }
+.memory-ai-meta:empty { display: none; }
+.recap-idea-hint { text-wrap: pretty; }
