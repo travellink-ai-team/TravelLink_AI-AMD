@@ -1478,12 +1478,23 @@ const overpassLimiter = rateLimit({
 
 // 景點邊界幾乎不變：成功結果快取 24 小時，全站共用
 const _overpassCache = new Map(); // query → { exp, body }
+// 公開 Overpass 常整批滿載或連不上（2026-11 實測三個端點都逾時）。前端一次只送一個請求，
+// 每次白等 3 × 20 秒會讓後面排隊的查詢一起卡住，所以：每個端點最多等 8 秒；
+// 全部失敗就進入冷卻期直接回失敗（不再打對方），同一個查詢的失敗也記一段時間
+const OVERPASS_ATTEMPT_MS = 8000;
+const OVERPASS_DOWN_COOLDOWN_MS = 3 * 60 * 1000;
+const OVERPASS_FAIL_TTL_MS = 10 * 60 * 1000;
+const _overpassFailed = new Map(); // query → 失敗紀錄到期時間
+let _overpassDownUntil = 0;
+const overpassFail = (res) => res.json({ ok: false, error: 'all overpass endpoints failed' });
+
 app.post('/api/overpass', overpassLimiter, express.text({ type: '*/*', limit: '8kb' }), async (req, res) => {
   const q = typeof req.body === 'string' ? req.body.trim() : '';
   if (!OVERPASS_ALLOWED_QUERY.test(q)) return res.status(403).json({ ok: false, error: 'query not allowed' });
 
   const hit = _overpassCache.get(q);
   if (hit && Date.now() < hit.exp) return res.type('application/json').send(hit.body);
+  if (Date.now() < _overpassDownUntil || (_overpassFailed.get(q) || 0) > Date.now()) return overpassFail(res);
 
   for (const ep of OVERPASS_ENDPOINTS) {
     try {
@@ -1491,18 +1502,22 @@ app.post('/api/overpass', overpassLimiter, express.text({ type: '*/*', limit: '8
         method: 'POST',
         headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'User-Agent': OVERPASS_USER_AGENT },
         body: 'data=' + encodeURIComponent(q),
-        signal: AbortSignal.timeout(20000)
+        signal: AbortSignal.timeout(OVERPASS_ATTEMPT_MS)
       });
       const body = await upstream.text();
       if (!upstream.ok || /rate_limited|Too Many Requests/i.test(body)) continue;
       try { JSON.parse(body); } catch (e) { continue; } // 端點偶爾回 HTML 錯誤頁卻給 200
       if (_overpassCache.size > 500) _overpassCache.delete(_overpassCache.keys().next().value);
       _overpassCache.set(q, { exp: Date.now() + 24 * 60 * 60 * 1000, body });
+      _overpassFailed.delete(q);
       return res.type('application/json').send(body);
     } catch (err) { /* 逾時／網路錯誤 → 換下一個端點 */ }
   }
-  console.error('[proxy] overpass 全部端點失敗');
-  res.json({ ok: false, error: 'all overpass endpoints failed' });
+  if (_overpassFailed.size > 500) _overpassFailed.delete(_overpassFailed.keys().next().value);
+  _overpassFailed.set(q, Date.now() + OVERPASS_FAIL_TTL_MS);
+  _overpassDownUntil = Date.now() + OVERPASS_DOWN_COOLDOWN_MS;
+  console.error(`[proxy] overpass 全部端點失敗，${OVERPASS_DOWN_COOLDOWN_MS / 60000} 分鐘內直接回失敗、不再打端點`);
+  overpassFail(res);
 });
 
 // 回顧短片封面（A1）：行程插圖 micro_trips/{id}.imageUrl（多日行程＝第 1 天那張）。

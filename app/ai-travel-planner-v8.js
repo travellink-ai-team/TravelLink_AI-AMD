@@ -20615,7 +20615,7 @@
         method: 'POST',
         headers: { 'Content-Type': 'text/plain;charset=UTF-8' },
         body: q,
-        signal: AbortSignal.timeout(70000) // 代理最多輪詢 3 個端點 × 20 秒
+        signal: AbortSignal.timeout(30000) // 代理最多輪詢 3 個端點 × 8 秒，端點全掛時會立刻回失敗
       });
       if (!res.ok) return null;
       const data = await res.json().catch(() => null);
