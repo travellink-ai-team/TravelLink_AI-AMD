@@ -1,0 +1,559 @@
+<!doctype html>
+<html lang="zh-Hant-TW">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>TravelLink AI 專題展海報</title>
+<!-- 專題展海報（A2 直式 × 3 張）。由舊版 PDF 重建；圖片在 img/，用 Edge 列印成 PDF：
+     msedge --headless --print-to-pdf=out.pdf --no-pdf-header-footer index.html -->
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;500;700;900&family=Noto+Serif+TC:wght@700;900&family=Outfit:wght@700;800&display=block" rel="stylesheet">
+<style>
+  :root {
+    --ink: #1a1814;
+    --muted: #55524b;
+    --green-900: #163c33;
+    --green-800: #1f5448;
+    --green-700: #296a5d;
+    --green-600: #2a6b5e;
+    --green-50: #e6f0ec;
+    --paper: #f4f6f5;
+    --line: #d9d5cc;
+    --orange: #e7733a;
+    --orange-ink: #a4471a;
+    --orange-50: #fbebe1;
+    --orange-light: #ffb48a;
+  }
+  @page { size: 1191pt 1684pt; margin: 0; }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { background: #8a8a8a; }
+  body {
+    font-family: 'Noto Sans TC', sans-serif;
+    color: var(--ink);
+    -webkit-print-color-adjust: exact; print-color-adjust: exact;
+    line-break: strict;
+  }
+  @media screen { .page { margin: 24pt auto; box-shadow: 0 6pt 30pt rgba(0,0,0,.35); } }
+  @media print { html, body { background: #fff; } }
+
+  .page {
+    width: 1191pt; height: 1684pt; position: relative; overflow: hidden;
+    background: #fff; page-break-after: always; break-after: page;
+  }
+  .page:last-child { page-break-after: auto; break-after: auto; }
+
+  /* ── 頁首 ── */
+  .hero {
+    height: 194pt; background: var(--green-900); color: #fff;
+    border-bottom: 7pt solid var(--orange); padding: 34pt 52pt 0; position: relative;
+  }
+  .hero .eyebrow { font-size: 15.3pt; font-weight: 700; letter-spacing: .12em; opacity: .85; }
+  .hero h1 { font-family: 'Outfit', sans-serif; font-weight: 800; font-size: 54pt; line-height: 1; margin-top: 8pt; letter-spacing: -.01em; }
+  .hero h1 em { font-style: normal; color: var(--orange); }
+  .hero .subtitle { font-family: 'Noto Serif TC', serif; font-weight: 700; font-size: 25.5pt; margin-top: 14pt; letter-spacing: .02em; }
+  .hero .badge {
+    position: absolute; right: 52pt; top: 81pt; border: .75pt solid #fff;
+    padding: 5pt 13pt; font-size: 15.3pt; font-weight: 700; letter-spacing: .08em;
+  }
+
+  .body { padding: 22pt 52pt 0; }
+
+  /* ── 章節標題 ── */
+  .sec { margin-top: 18pt; }
+  .sec:first-child { margin-top: 0; }
+  .two-col .sec { margin-top: 18pt; }
+  .sec-head {
+    display: flex; align-items: center; gap: 14pt;
+    border-bottom: 2pt solid var(--green-700); padding-bottom: 9pt; margin-bottom: 18pt;
+  }
+  .sec-num {
+    width: 34pt; height: 34pt; flex: none; background: var(--green-700); color: #fff;
+    font-family: 'Noto Serif TC', serif; font-weight: 900; font-size: 19.8pt;
+    display: grid; place-items: center;
+  }
+  .sec-title { font-family: 'Noto Serif TC', serif; font-weight: 900; font-size: 30pt; line-height: 1; }
+  .sec-en { margin-left: auto; font-size: 11.9pt; font-weight: 700; letter-spacing: .28em; color: var(--muted); }
+  .tag { background: var(--orange); color: #fff; font-size: 13.6pt; font-weight: 700; padding: 2pt 8pt; letter-spacing: .1em; }
+  .sec.feature .sec-head { border-bottom-color: var(--orange); }
+  .sec.feature .sec-num { background: var(--orange); }
+
+  p.lead { font-size: 16.4pt; line-height: 1.72; }
+  p.lead + p.lead { margin-top: 9pt; }
+  .hl { color: var(--green-800); font-weight: 700; }
+  .hl-o { color: var(--orange); font-weight: 700; }
+
+  ul.sq { list-style: none; }
+  ul.sq li { position: relative; padding-left: 21pt; font-size: 15.9pt; line-height: 1.5; margin-top: 7pt; }
+  ul.sq li::before { content: ''; position: absolute; left: 1pt; top: .62em; width: 6pt; height: 6pt; background: var(--green-700); }
+  ul.sq.sm li { font-size: 15pt; margin-top: 3pt; }
+
+  .fig { text-align: center; }
+  .fig figcaption { font-size: 14.2pt; margin-top: 10pt; line-height: 1.35; }
+  .fig figcaption b { font-weight: 700; }
+
+  /* 瀏覽器外框 */
+  .browser {
+    background: #e3dfd8; border-radius: 7pt; padding: 20pt 4pt 4pt; position: relative;
+    box-shadow: 0 8pt 24pt rgba(0,0,0,.22);
+  }
+  .browser::before {
+    content: ''; position: absolute; left: 12pt; top: 7pt; width: 7pt; height: 7pt; border-radius: 50%;
+    background: #d9653a; box-shadow: 12pt 0 0 #d9a33a, 24pt 0 0 #4f8a5b;
+  }
+  .browser img { display: block; width: 100%; border-radius: 0 0 4pt 4pt; }
+
+  /* 手機外框 */
+  .phone {
+    background: #1a1713; border-radius: 15pt; padding: 4.5pt;
+    box-shadow: 0 8pt 22pt rgba(0,0,0,.28);
+  }
+  .phone img { display: block; width: 100%; border-radius: 11pt; }
+
+  /* ── 頁尾 ── */
+  .foot {
+    position: absolute; left: 0; right: 0; bottom: 0; height: 107pt;
+    background: var(--paper); border-top: 2pt solid var(--line);
+    display: flex; align-items: center; padding: 0 52pt;
+  }
+  .foot .brand { font-family: 'Outfit', sans-serif; font-weight: 800; font-size: 17pt; }
+  .foot .brand span { font-family: 'Noto Sans TC', sans-serif; font-weight: 400; color: var(--muted); margin-left: 14pt; }
+  .foot .sub { font-size: 14.7pt; color: var(--muted); margin-top: 6pt; }
+  .foot .scan { margin-left: auto; text-align: right; margin-right: 12pt; }
+  .foot .scan b { display: block; font-size: 14.7pt; }
+  .foot .scan span { font-size: 13pt; color: var(--muted); }
+  .foot .qr { width: 74pt; height: 74pt; background: #fff; padding: 4pt; }
+  .foot .qr img { width: 100%; height: 100%; display: block; image-rendering: pixelated; }
+
+  /* ── 海報一 ── */
+  .abstract { background: var(--paper); border-left: 5pt solid var(--green-700); padding: 14pt 22pt 13pt; }
+  .abstract h2 { font-family: 'Noto Serif TC', serif; font-weight: 900; font-size: 21pt; color: var(--green-800); margin-bottom: 6pt; }
+  .abstract p { font-size: 16.4pt; line-height: 1.72; }
+  .abstract .kw { font-size: 14.7pt; color: var(--muted); margin-top: 8pt; }
+  .abstract .kw b { color: var(--ink); }
+  .two-col { display: grid; grid-template-columns: 567pt 1fr; gap: 28pt; }
+  ol.goals { list-style: none; counter-reset: g; }
+  ol.goals li { counter-increment: g; position: relative; padding-left: 28pt; font-size: 15.9pt; line-height: 1.5; margin-bottom: 8pt; }
+  ol.goals li::before {
+    content: counter(g); position: absolute; left: 0; top: .18em; width: 20pt; height: 20pt; border-radius: 50%;
+    background: var(--green-800); color: #fff; font-size: 11.3pt; font-weight: 700; display: grid; place-items: center;
+  }
+  .platform { display: grid; grid-template-columns: 650pt 1fr; gap: 24pt; align-items: start; }
+  .phones { display: grid; grid-template-columns: 1fr 1fr; gap: 20pt; }
+  .stages { display: grid; grid-template-columns: repeat(3, 1fr); gap: 22pt; margin-top: 16pt; }
+  .stage { border-top: 3pt solid var(--green-700); padding-top: 11pt; }
+  .stage.mid { border-top-color: var(--orange); }
+  .stage .when { font-size: 14.2pt; font-weight: 700; color: var(--muted); }
+  .stage h3 { font-size: 18.7pt; font-weight: 900; color: var(--green-800); margin: 2pt 0 2pt; }
+  .intrip { display: grid; grid-template-columns: 1fr 290pt; gap: 24pt; align-items: start; }
+
+  /* ── 海報二 ── */
+  .map-row { display: grid; grid-template-columns: 490pt 1fr; gap: 24pt; align-items: start; }
+  .flow { display: flex; flex-direction: column; }
+  .flow .step { border: 1pt solid var(--green-700); padding: 6pt 10pt; position: relative; display: flex; align-items: baseline; }
+  .flow .step + .step { margin-top: 9pt; }
+  .flow .step + .step::before {
+    content: '▼'; position: absolute; top: -12pt; left: 50%; transform: translateX(-50%);
+    font-size: 7.4pt; color: var(--green-600);
+  }
+  .flow .step.ai { background: var(--orange-50); border-color: var(--orange); }
+  .flow .k { display: inline-block; font-size: 11.9pt; font-weight: 700; padding: 1pt 6pt; background: var(--green-50); color: var(--green-900); margin-right: 6pt; }
+  .flow .ai .k { background: var(--orange); color: #fff; }
+  .flow b { font-size: 15.9pt; font-weight: 900; }
+  .flow p { font-size: 12.5pt; color: var(--muted); margin-left: 10pt; }
+  .stats { display: flex; gap: 34pt; margin-top: 14pt; }
+  .stat .n { font-family: 'Outfit', sans-serif; font-weight: 800; font-size: 31pt; color: var(--green-800); line-height: 1; }
+  .stat .n small { font-size: .5em; font-family: 'Noto Sans TC', sans-serif; font-weight: 900; }
+  .stat .l { font-size: 13.3pt; color: var(--muted); margin-top: 4pt; }
+  .recap-row { display: grid; grid-template-columns: 300pt 108pt 1fr; gap: 26pt; align-items: start; }
+  .ig-row { display: grid; grid-template-columns: 100pt 1fr 340pt; gap: 28pt; align-items: start; }
+  .note-box { border: 1pt solid var(--green-700); padding: 13pt 15pt; }
+  .note-box h4 { font-size: 18.7pt; font-weight: 900; color: var(--green-800); margin-bottom: 6pt; }
+  .note-box p { font-size: 14.7pt; line-height: 1.6; }
+  .tools { display: grid; grid-template-columns: repeat(3, 1fr); gap: 18pt; margin-top: 14pt; }
+  .tool { background: var(--paper); border-top: 4pt solid var(--green-700); padding: 10pt 14pt 10pt; }
+  .tool .th { display: flex; align-items: center; gap: 9pt; }
+  .tool .ic {
+    width: 30pt; height: 30pt; flex: none; border-radius: 7pt; background: var(--green-800); color: #fff;
+    display: grid; place-items: center; font-family: 'Outfit', sans-serif; font-weight: 800; font-size: 17pt;
+  }
+  .tool .ic svg { width: 18pt; height: 18pt; }
+  .tool h4 { font-size: 17.5pt; font-weight: 900; color: var(--green-800); }
+  .tool .plat { margin-left: auto; font-size: 11.5pt; font-weight: 700; color: var(--muted); border: .75pt solid var(--line); background: #fff; padding: 1pt 6pt; }
+  .tool ul.sq li { font-size: 13.6pt; line-height: 1.45; margin-top: 4pt; padding-left: 16pt; }
+  .tool ul.sq li::before { width: 5pt; height: 5pt; }
+
+  /* ── 海報三 ── */
+  .arch { border: 1pt solid var(--line); padding: 13pt 15pt; display: grid; grid-template-columns: 66pt 1fr; gap: 0 14pt; }
+  .arch .lbl { background: var(--paper); display: grid; place-items: center; font-size: 14.7pt; font-weight: 700; color: var(--green-800); }
+  .arch .row { display: grid; gap: 10pt; }
+  .arch .cell { border: 1pt solid var(--green-700); padding: 7pt 11pt 7pt; }
+  .arch .cell b { display: block; font-size: 16.4pt; font-weight: 900; color: var(--green-900); }
+  .arch .cell span { font-size: 13.6pt; color: var(--muted); }
+  .arch .cell.dark { background: var(--green-800); border-color: var(--green-800); }
+  .arch .cell.dark b, .arch .cell.dark span { color: #fff; }
+  .arch .cell.amd { background: var(--orange-50); border-color: var(--orange); }
+  .arch .cell.amd b { color: var(--orange-ink); }
+  .arch .arrow { grid-column: 2; font-size: 9.6pt; color: var(--muted); text-align: center; line-height: 1; padding: 3pt 0; }
+  .collab { display: grid; grid-template-columns: 1fr 264pt; gap: 26pt; align-items: start; }
+  .cards2 { display: grid; grid-template-columns: 1fr 1fr; gap: 7pt; margin-top: 12pt; }
+  .cards2 div { background: var(--paper); border-left: 3pt solid var(--green-700); padding: 6pt 12pt; }
+  .cards2 b { display: block; font-size: 16.4pt; color: var(--green-800); font-weight: 900; }
+  .cards2 span { font-size: 14.2pt; color: var(--muted); }
+  .sched { display: grid; grid-template-columns: 1fr 300pt; gap: 26pt; align-items: start; }
+  .pipe { display: flex; align-items: stretch; margin-top: 12pt; }
+  .pipe div { flex: 1; border: 1pt solid var(--green-700); text-align: center; padding: 8pt 4pt; }
+  .pipe div:first-child { background: var(--orange-50); border-color: var(--orange); }
+  .pipe b { display: block; font-size: 15.6pt; font-weight: 900; }
+  .pipe span { font-size: 12.8pt; color: var(--muted); }
+  .pipe i { flex: none; width: 18pt; display: grid; place-items: center; font-style: normal; font-size: 9.1pt; color: var(--green-600); }
+  .why { background: #1a1713; color: #fff; padding: 15pt 17pt; }
+  .why h4 { color: var(--orange-light); font-size: 16.4pt; font-weight: 900; margin-bottom: 6pt; }
+  .why p { font-size: 16.4pt; line-height: 1.7; }
+  .runlog { display: flex; flex-wrap: wrap; align-items: center; gap: 5pt 0; margin-top: 10pt; }
+  .runlog span { font-size: 13.6pt; font-weight: 700; padding: 4pt 9pt; background: var(--orange-50); border: 1pt solid var(--orange); color: var(--orange-ink); }
+  .runlog span.calc { background: #fff; border-color: var(--green-700); color: var(--green-900); }
+  .runlog span.warn { background: #fff4d6; border-color: #d99a1a; color: #8a5a00; }
+  .runlog span.done { background: var(--green-800); border-color: var(--green-800); color: #fff; }
+  .runlog i { font-style: normal; font-size: 8pt; color: var(--green-600); padding: 0 4pt; }
+  .runmeta { margin-top: 9pt; font-size: 13.6pt; color: var(--muted); }
+  .runmeta b { font-family: 'Outfit', sans-serif; font-weight: 800; font-size: 22pt; color: var(--green-800); margin-right: 8pt; vertical-align: -2pt; }
+  .card-shot { display: grid; grid-template-columns: 236pt 1fr; gap: 16pt; align-items: center; text-align: left; }
+  .card-shot img { width: 100%; display: block; border-radius: 8pt; box-shadow: 0 6pt 18pt rgba(0,0,0,.2); }
+  .card-shot p { font-size: 13.6pt; line-height: 1.55; color: var(--muted); }
+  .card-shot p b { display: block; color: var(--green-800); font-size: 14.7pt; margin-bottom: 2pt; }
+  .e-shot { display: block; width: 340pt; margin: 10pt 0 0 21pt; border-radius: 6pt; box-shadow: 0 4pt 14pt rgba(0,0,0,.16); }
+  .banner-shot { display: block; width: 100%; margin-bottom: 8pt; border-radius: 6pt; box-shadow: 0 4pt 14pt rgba(0,0,0,.18); }
+  .agent { display: grid; grid-template-columns: 470pt 1fr; gap: 38pt; align-items: start; }
+  .agent-steps .st { border: 1pt solid var(--green-700); padding: 9pt 13pt; }
+  .agent-steps .st + .st { margin-top: 11pt; }
+  .agent-steps .st.final { background: var(--orange-50); border-color: var(--orange); }
+  .agent-steps .h { font-size: 13pt; font-weight: 700; color: var(--green-600); }
+  .agent-steps .final .h { color: var(--orange); }
+  .agent-steps .h b { font-size: 17pt; color: var(--ink); margin-left: 4pt; font-weight: 900; }
+  .agent-steps p { font-size: 13.9pt; color: var(--muted); margin-top: 3pt; }
+  .chips { display: flex; flex-wrap: wrap; gap: 6pt; margin-top: 6pt; }
+  .chips span { background: var(--green-50); color: var(--green-900); font-size: 13pt; padding: 2pt 7pt; }
+</style>
+</head>
+<body>
+
+<!-- ═════════════ 海報一：專題簡介與雙平台 ═════════════ -->
+<section class="page">
+  <header class="hero">
+    <div class="eyebrow">旅遊 × 生成式 AI</div>
+    <h1>TravelLink <em>AI</em></h1>
+    <div class="subtitle">結合生成式 AI 與演算法排程的臺東旅遊行程規劃系統</div>
+    <div class="badge">專題簡介與雙平台</div>
+  </header>
+  <div class="body">
+    <div class="abstract">
+      <h2>摘要</h2>
+      <p>TravelLink AI 是一套臺東旅遊行程規劃系統，提供網頁版與 Android App 雙平台，支援多人即時共編。使用者輸入日期、人數與旅遊風格後，AI 從 453 筆在地景點挑選候選景點，再由程式依真實車程與營業時間排出可執行的行程；部署於 AMD 算力的 gpt-oss-120b 代理人負責一日遊生成，並在旅途中主動因應下雨、停航與延誤。行程會被畫成<span class="hl-o">互動式地圖</span>，旅程結束後自動產生<span class="hl-o">回顧短片</span>與 <span class="hl-o">IG 九宮格</span>。</p>
+      <div class="kw"><b>關鍵字：</b>生成式 AI、互動式地圖、回顧短片、行程排程、AI 代理人、多人即時協作、臺東觀光</div>
+    </div>
+
+    <div class="two-col">
+      <div class="sec">
+        <div class="sec-head"><div class="sec-num">一</div><div class="sec-title">研究背景與動機</div><div class="sec-en">BACKGROUND</div></div>
+        <p class="lead">臺東南北狹長、景點分散、大眾運輸班次少，前往綠島、蘭嶼還要配合船班與海象，行程很容易「紙上可行、實際走不完」。</p>
+        <p class="lead">直接讓 AI 排行程，會出現<span class="hl">不存在的景點</span>與<span class="hl">沒開門的時段</span>；而一般行程表只有文字，旅途結束後也很少留下能分享的紀錄。</p>
+      </div>
+      <div class="sec">
+        <div class="sec-head"><div class="sec-num">二</div><div class="sec-title">研究目的</div><div class="sec-en">OBJECTIVES</div></div>
+        <ol class="goals">
+          <li>以「AI 選點、程式排程」產生<span class="hl">真的走得完</span>的行程。</li>
+          <li>把行程畫成<span class="hl">可點選的互動式地圖</span>，旅程後自動剪成<span class="hl">回顧短片</span>。</li>
+          <li>旅途中由 <span class="hl">AMD 代理人</span>主動因應天氣、船班與延誤。</li>
+          <li>網頁與 App <span class="hl">雙平台即時共編</span>，旅伴同步行程與打卡。</li>
+        </ol>
+      </div>
+    </div>
+
+    <div class="sec">
+      <div class="sec-head"><div class="sec-num">三</div><div class="sec-title">雙平台系統</div><div class="sec-en">WEB &amp; ANDROID</div></div>
+      <div class="platform">
+        <figure class="fig">
+          <div class="browser"><img src="img/p0_0.png" alt="網頁版時間軸與地圖"></div>
+          <figcaption><b>圖 1</b> 網頁版：時間軸與地圖路線並排，適合出發前在電腦上規劃</figcaption>
+        </figure>
+        <div class="phones">
+          <figure class="fig"><div class="phone"><img src="img/p0_1.png" alt="App 行程預覽"></div><figcaption><b>圖 2</b> App 行程預覽</figcaption></figure>
+          <figure class="fig"><div class="phone"><img src="img/p0_2.png" alt="App 行程進行中"></div><figcaption><b>圖 3</b> App 行程進行中</figcaption></figure>
+        </div>
+      </div>
+      <div class="stages">
+        <div class="stage">
+          <div class="when">出發前</div><h3>規劃可執行的行程</h3>
+          <ul class="sq sm">
+            <li>規劃精靈：日期、旅伴、風格、節奏、飲食禁忌</li>
+            <li>一日遊到多日，含住宿、日出、早餐、離島船班</li>
+            <li>官方精選範本：由在地景點即時組出順路行程</li>
+            <li>費用估算，超出預算時建議替換</li>
+          </ul>
+        </div>
+        <div class="stage mid">
+          <div class="when">旅途中</div><h3>行程隨現況調整</h3>
+          <ul class="sq sm">
+            <li>打卡、導航、停車樞紐、語音導遊</li>
+            <li>降雨、落後時 AI 管家主動提醒</li>
+            <li>臺鐵回程班次，預留 10 分鐘進站</li>
+            <li>App 出發提醒、接近下一站通知</li>
+          </ul>
+        </div>
+        <div class="stage">
+          <div class="when">旅程後</div><h3>把回憶留下來</h3>
+          <ul class="sq sm">
+            <li>網頁與 App 共用的共同相簿</li>
+            <li>回顧短片（直式 1080×1920）</li>
+            <li>IG 九宮格，四種版面自由排版</li>
+            <li>好友名單，下次出遊一鍵邀請</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+
+    <div class="sec">
+      <div class="sec-head"><div class="sec-num">四</div><div class="sec-title">旅途中即時調整</div><div class="sec-en">IN-TRIP</div></div>
+      <div class="intrip">
+        <div>
+          <p class="lead">出發後，App 用時間軸帶著旅伴一站一站走：每一站顯示車程、停留時間與預計抵達，到站後可以打卡、導航或跳過。</p>
+          <ul class="sq" style="margin-top:8pt">
+            <li>打卡後時間軸自動推進到下一站，旅伴裝置同步更新</li>
+            <li>落後時標出延誤分鐘數，後續各站<span class="hl">自動順延</span>並保留原定時間對照</li>
+            <li>景點頁可查附近公廁、即時調整停留時間</li>
+            <li>停車、語音導遊與離線地圖等<span class="hl">在地實用工具</span>（見海報二）</li>
+            <li>順延造成營業時間衝突時，交給 <span class="hl">AMD 應變代理人</span>提出修改方案（見海報三）</li>
+          </ul>
+        </div>
+        <div class="phones">
+          <figure class="fig"><div class="phone"><img src="img/p0_3.png" alt="景點資訊與打卡"></div><figcaption><b>圖 4</b> 景點資訊與打卡</figcaption></figure>
+          <figure class="fig"><div class="phone"><img src="img/p0_4.png" alt="延誤自動順延"></div><figcaption><b>圖 5</b> 延誤自動順延</figcaption></figure>
+        </div>
+      </div>
+    </div>
+  </div>
+  <footer class="foot">
+    <div><div class="brand">TravelLink AI<span>臺東在地的 AI 旅遊夥伴</span></div><div class="sub">網頁版與 Android App 皆可於現場試用</div></div>
+    <div class="scan"><b>掃描開啟網頁版</b><span>travel-link-amd.duckdns.org</span></div>
+    <div class="qr"><img src="img/qr.png" alt="網頁版 QR code"></div>
+  </footer>
+</section>
+
+<!-- ═════════════ 海報二：特色功能 ═════════════ -->
+<section class="page">
+  <header class="hero">
+    <div class="eyebrow">旅遊 × 生成式 AI</div>
+    <h1>TravelLink <em>AI</em></h1>
+    <div class="subtitle">結合生成式 AI 與演算法排程的臺東旅遊行程規劃系統</div>
+    <div class="badge">特色功能</div>
+  </header>
+  <div class="body">
+    <div class="sec feature">
+      <div class="sec-head"><div class="sec-num">一</div><div class="sec-title">互動式地圖</div><span class="tag">特色</span><div class="sec-en">INTERACTIVE MAP</div></div>
+      <p class="lead" style="margin-bottom:6pt">行程排好後，系統把整趟路線畫成一張手繪風格的俯瞰地圖。地圖不只是裝飾：每一站都能點選，行程進行中還會顯示目前走到哪裡。</p>
+      <div class="map-row">
+        <figure class="fig">
+          <div class="browser"><img src="img/p1_0.png" alt="互動式地圖實例"></div>
+          <figcaption><b>圖 6</b> 互動式地圖實例：「海濱公園 2 小時微旅行」，編號與站名由程式疊上</figcaption>
+        </figure>
+        <div>
+          <div class="flow">
+            <div class="step"><span class="k">程式</span><b>決定位置</b><p>依路線順序排好每一站的位置</p></div>
+            <div class="step ai"><span class="k">AI</span><b>畫底圖</b><p>Gemini 畫出不含文字的手繪俯瞰圖</p></div>
+            <div class="step"><span class="k">程式</span><b>疊上站名</b><p>避免 AI 寫錯字或畫出行程外的店</p></div>
+            <div class="step ai"><span class="k">AI</span><b>找出站框</b><p>看圖找出每一站的點擊範圍</p></div>
+            <div class="step"><span class="k">使用者</span><b>點圖互動</b><p>點站看營業時間、導航；進行中小點沿路線前進</p></div>
+          </div>
+          <div class="stats">
+            <div class="stat"><div class="n">6<small>/6</small></div><div class="l">站框辨識正確</div></div>
+            <div class="stat"><div class="n">3.7<small>秒</small></div><div class="l">辨識一張</div></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="sec feature">
+      <div class="sec-head"><div class="sec-num">二</div><div class="sec-title">旅程回顧短片</div><span class="tag">特色</span><div class="sec-en">TRIP RECAP VIDEO</div></div>
+      <div class="recap-row">
+        <figure class="fig">
+          <div class="browser"><img src="img/p1_1.png" alt="網頁版短片設定"></div>
+          <figcaption><b>圖 7</b> 網頁版短片設定<br>節奏、長度、主角景點與封面</figcaption>
+        </figure>
+        <figure class="fig"><div class="phone"><img src="img/p1_2.png" alt="產生的短片"></div><figcaption><b>圖 8</b> 產生的短片</figcaption></figure>
+        <div>
+          <p class="lead">依景點順序、交通工具與旅程數據自動生成；有打卡照片的景點會在到站時插入。</p>
+          <ul class="sq">
+            <li><span class="hl">4 種節奏</span>：Reels、標準、慢遊、電影感</li>
+            <li>放進全部照片（最長 30 秒），或固定 15 秒只挑重點</li>
+            <li>封面直接使用<span class="hl">互動式地圖</span></li>
+            <li>標題與 hashtag 由 <span class="hl">AMD gpt-oss-120b</span> 產生，實測 0.5 秒</li>
+            <li>輸出 1080×1920 直式 mp4，存在雲端，網頁、App 與旅伴都看得到</li>
+          </ul>
+          <img class="e-shot" src="img/test/E1_recap_title_amd_zoom.png" alt="AMD gpt-oss-120b 產生的短片標題">
+        </div>
+      </div>
+    </div>
+
+    <div class="sec feature">
+      <div class="sec-head"><div class="sec-num">三</div><div class="sec-title">IG 九宮格</div><span class="tag">特色</span><div class="sec-en">IG 3×3 GRID</div></div>
+      <div class="ig-row">
+        <figure class="fig"><div class="phone"><img src="img/p1_3.png" alt="App 編輯畫面"></div><figcaption style="white-space:nowrap"><b>圖 9</b> App 編輯畫面</figcaption></figure>
+        <div>
+          <p class="lead">把旅程照片排成一張大圖，切成九張依序發到 IG，個人主頁就拼出完整畫面。</p>
+          <ul class="sq">
+            <li><span class="hl">4 種版面</span>：原本、整齊六宮、錯落拼貼、雜誌主打</li>
+            <li>點選照片或標題即可拖曳、縮放，長按照片設為底圖</li>
+            <li>顯示切線，預覽九張與發布順序後一鍵存入相簿</li>
+          </ul>
+        </div>
+        <div class="note-box">
+          <h4>逐格渲染</h4>
+          <p>3240×4320 的大圖一次產生約需 56 MB，低階手機會當機；改為一次只畫一格 1080×1440，並以 overscan 消除接縫。</p>
+          <div class="stats">
+            <div class="stat"><div class="n">13.5<small>MB</small></div><div class="l">峰值記憶體</div></div>
+            <div class="stat"><div class="n">3.4<small>秒</small></div><div class="l">九張完成</div></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="sec feature">
+      <div class="sec-head"><div class="sec-num">四</div><div class="sec-title">在地實用工具</div><span class="tag">特色</span><div class="sec-en">LOCAL TOOLS</div></div>
+      <p class="lead">熱門景點不好停車、山區與海岸常沒訊號，這三個工具補上行程表之外的最後一哩。</p>
+      <div class="tools">
+        <div class="tool">
+          <div class="th"><div class="ic">P</div><h4>停車樞紐與旅伴回報</h4></div>
+          <ul class="sq">
+            <li>自動找最近停車點（TDX、縣府、Places）</li>
+            <li>標出到景點的步行路線，走超過 12 分鐘就不推薦</li>
+            <li>旅伴回報「已滿」「沒開」，同行者即時收到提醒</li>
+          </ul>
+        </div>
+        <div class="tool">
+          <div class="th"><div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M4 14v-2a8 8 0 0 1 16 0v2"/><rect x="3" y="14" width="4" height="6" rx="1.5"/><rect x="17" y="14" width="4" height="6" rx="1.5"/></svg></div><h4>語音導遊</h4><span class="plat">網頁</span></div>
+          <ul class="sq">
+            <li>一鍵用語音依序唸出今天的每一站</li>
+            <li>開車或騎車時不用低頭看螢幕</li>
+            <li>使用瀏覽器內建語音合成，不需額外 API 費用</li>
+          </ul>
+        </div>
+        <div class="tool">
+          <div class="th"><div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M9 4 3 6v14l6-2 6 2 6-2V4l-6 2-6-2z"/><path d="M9 4v14M15 6v14"/></svg></div><h4>離線地圖</h4><span class="plat">App</span></div>
+          <ul class="sq">
+            <li>預先下載臺東向量地圖包（OpenStreetMap 圖資）</li>
+            <li>沒訊號仍可縮放平移，顯示路線、站點與位置</li>
+            <li>採開放圖資，避開商用地圖不得長期快取的限制</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+  </div>
+  <footer class="foot">
+    <div><div class="brand">TravelLink AI<span>臺東在地的 AI 旅遊夥伴</span></div><div class="sub">網頁版與 Android App 皆可於現場試用</div></div>
+    <div class="scan"><b>掃描開啟網頁版</b><span>travel-link-amd.duckdns.org</span></div>
+    <div class="qr"><img src="img/qr.png" alt="網頁版 QR code"></div>
+  </footer>
+</section>
+
+<!-- ═════════════ 海報三：系統設計與技術 ═════════════ -->
+<section class="page">
+  <header class="hero">
+    <div class="eyebrow">旅遊 × 生成式 AI</div>
+    <h1>TravelLink <em>AI</em></h1>
+    <div class="subtitle">結合生成式 AI 與演算法排程的臺東旅遊行程規劃系統</div>
+    <div class="badge">系統設計與技術</div>
+  </header>
+  <div class="body">
+    <div class="sec">
+      <div class="sec-head"><div class="sec-num">一</div><div class="sec-title">系統架構</div><div class="sec-en">SYSTEM ARCHITECTURE</div></div>
+      <div class="arch">
+        <div class="lbl">用戶端</div>
+        <div class="row" style="grid-template-columns:1fr 1fr">
+          <div class="cell"><b>網頁版</b><span>電腦上規劃，與 App 互相編輯同一份行程</span></div>
+          <div class="cell"><b>Android App</b><span>Kotlin · Jetpack Compose · Room 離線優先</span></div>
+        </div>
+        <div class="arrow">▼▲</div>
+        <div class="lbl">雲端服務</div>
+        <div class="row"><div class="cell dark"><b>Firebase</b><span>Authentication 登入 · Firestore 即時同步與安全規則 · Storage 相簿與地圖</span></div></div>
+        <div class="arrow">▼▲</div>
+        <div class="lbl">後端</div>
+        <div class="row" style="grid-template-columns:1fr 1fr 1fr">
+          <div class="cell"><b>Cloud Functions</b><span>Gemini 代理 · 金鑰只在後端 · 每日額度</span></div>
+          <div class="cell amd"><b>Node 後端</b><span>AMD 代理人 · 統一 AI 入口 · SSE 即時回傳</span></div>
+          <div class="cell"><b>短片渲染服務</b><span>1080×1920 · 兩端同輸入同一支影片</span></div>
+        </div>
+        <div class="arrow">▼</div>
+        <div class="lbl">AI 模型</div>
+        <div class="row" style="grid-template-columns:1fr 1fr">
+          <div class="cell"><b>Gemini（Vertex AI）</b><span>原版網站與 App 的文字 AI · 地圖底圖 · 站框辨識</span></div>
+          <div class="cell amd"><b>gpt-oss-120b（AMD）</b><span>AMD 版網站的全部文字推理：行程生成 · 代理人 · 文案</span></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="sec">
+      <div class="sec-head"><div class="sec-num">二</div><div class="sec-title">多人即時共編</div><div class="sec-en">COLLABORATION</div></div>
+      <div class="collab">
+        <div>
+          <p class="lead">網頁與 App 讀寫 Firestore 上<span class="hl">同一份行程文件</span>：在電腦上排好的行程，出門後直接用手機接著走；旅伴的每一個動作，所有人的畫面都即時更新。</p>
+          <div class="cards2">
+            <div><b>邀請加入</b><span>從好友名單、分享連結邀請，通知中心收到後一鍵加入</span></div>
+            <div><b>角色權限</b><span>擁有者、編輯者、檢視者，由 Firestore 安全規則把關</span></div>
+            <div><b>即時同步</b><span>打卡、改站、上傳照片，其他裝置馬上看到</span></div>
+            <div><b>防止衝突</b><span>編輯鎖加上更新時間檢查，兩人不會同時改同一站</span></div>
+            <div><b>群組決策</b><span>旅伴各自填偏好，節奏等參數以多數決決定</span></div>
+            <div><b>離線可用</b><span>App 先存本機，恢復連線後自動同步</span></div>
+          </div>
+        </div>
+        <div class="phones" style="gap:16pt">
+          <figure class="fig"><div class="phone"><img src="img/p2_1.png" alt="擁有者裝置"></div><figcaption><b>圖 10</b> 擁有者裝置</figcaption></figure>
+          <figure class="fig"><div class="phone"><img src="img/p2_2.png" alt="旅伴裝置同步打卡"></div><figcaption><b>圖 11</b> 旅伴裝置<br>同步打卡</figcaption></figure>
+        </div>
+      </div>
+    </div>
+
+    <div class="sec">
+      <div class="sec-head"><div class="sec-num">三</div><div class="sec-title">行程排程方法</div><div class="sec-en">SCHEDULING METHOD</div></div>
+      <div class="sched">
+        <div>
+          <p class="lead">AI 負責<span class="hl">選</span>、程式負責<span class="hl">算</span>：一日遊由 AMD gpt-oss-120b 代理人呼叫工具，邊查天氣、景點、餐廳邊挑選；順序與時間由程式依真實車程與營業時間排定，草稿不合規就退回 AI 修改。</p>
+          <div class="runlog">
+            <span>讀取條件</span><i>▶</i><span>查天氣</span><i>▶</i><span>搜景點</span><i>▶</i><span>配餐廳</span><i>▶</i><span class="calc">程式排程驗證</span><i>▶</i><span class="warn">退回：AI 修改</span><i>▶</i><span class="calc">重新驗證</span><i>▶</i><span class="done">完成</span>
+          </div>
+          <div class="runmeta"><b>3.2 秒</b>正式站實測：臺東市一日遊，7 段路線（2026/11/3）</div>
+        </div>
+        <div class="why">
+          <h4>為什麼不讓 AI 直接排時間？</h4>
+          <p>測試時，只在週三到週六營業的<b>臺東觀光夜市</b>被排在週一中午。現在程式依每一站實際的日期檢查營業時間。</p>
+        </div>
+      </div>
+    </div>
+
+    <div class="sec">
+      <div class="sec-head"><div class="sec-num">四</div><div class="sec-title">AMD 旅程應變代理人</div><div class="sec-en">AI AGENT</div></div>
+      <div class="agent">
+        <figure class="fig">
+          <img class="banner-shot" src="img/test/D1_proactive_banner_zoom.png" alt="主動提醒列">
+          <div class="card-shot"><img src="img/test/D2_replan_proposal_zoom.png" alt="代理人提出的修改建議"><p><b>① 主動提醒</b>上方提示列：系統偵測到 13:00 起降雨 80%<br><br><b>② 按「看建議」</b>AMD 代理人 3.1 秒提出方案：3 個戶外站換成室內景點，並附上原因</p></div>
+          <figcaption><b>圖 12</b> 正式站實測：管家主動提醒降雨，代理人改排室內景點</figcaption>
+        </figure>
+        <div class="agent-steps">
+          <div class="st"><div class="h">01 主動偵測 <b>狀況改變</b></div><p>每分鐘檢查降雨、落後與公休（程式判斷，不耗 AI），也可直接說「好累」</p></div>
+          <div class="st"><div class="h">02 gpt-oss-120b <b>自行呼叫工具</b></div>
+            <div class="chips"><span>天氣</span><span>海象</span><span>船班</span><span>營業時間</span><span>替代景點</span><span>餐廳</span><span>車程</span><span>反問</span></div></div>
+          <div class="st"><div class="h">03 產出 <b>修改提案</b></div><p>每站如何調整、費用差異，並先通過驗證；實測 3.1 秒</p></div>
+          <div class="st final"><div class="h">04 使用者 <b>按下「套用」</b></div><p>確認後才寫入，並同步給所有旅伴</p></div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <footer class="foot">
+    <div><div class="brand">TravelLink AI<span>臺東在地的 AI 旅遊夥伴</span></div><div class="sub">網頁版與 Android App 皆可於現場試用</div></div>
+    <div class="scan"><b>掃描開啟網頁版</b><span>travel-link-amd.duckdns.org</span></div>
+    <div class="qr"><img src="img/qr.png" alt="網頁版 QR code"></div>
+  </footer>
+</section>
+
+</body>
+</html>

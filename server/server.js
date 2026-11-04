@@ -41,6 +41,10 @@ const { runAgent } = require('./agent/loop');
 const { parseDelayRequest } = require('./agent/delay');
 // 回顧短片後端渲染 job（M8）：獨立模組，掛在既有代理上
 const { mountRecapJobs } = require('./recap-jobs');
+// 行程生成 Agent（方案 C，一日遊）：POST /api/agent/plan，獨立模組
+const { mountAgentPlan } = require('./agent/plan-route');
+// 零散文字 AI 任務的統一入口 /api/ai/task（方案 E，見 docs/amd-agent/ai-task-inventory.md）
+const { mountAiTasks } = require('./ai-tasks');
 
 const PORT = Number(process.env.PORT) || 3001;
 const VERTEX_API_KEY = (process.env.VERTEX_API_KEY || '').trim();
@@ -1148,6 +1152,8 @@ const agentLimiter = rateLimit({
   legacyHeaders: false,
   message: { error: 'rate limited', message: 'AI 代理人使用太頻繁，請稍後再試。' }
 });
+// 主動式旅途管家：POST /api/agent/precheck（程式檢查，不呼叫 AI；見 agent/precheck-route.js）
+require('./agent/precheck-route').mount(app, { requireFirebaseUser, rateLimit, ipKeyGenerator });
 
 app.post('/api/agent/replan', agentLimiter, requireFirebaseUser, async (req, res) => {
   const body = req.body || {};
@@ -1499,8 +1505,29 @@ app.post('/api/overpass', overpassLimiter, express.text({ type: '*/*', limit: '8
   res.json({ ok: false, error: 'all overpass endpoints failed' });
 });
 
+// 回顧短片封面（A1）：行程插圖 micro_trips/{id}.imageUrl（多日行程＝第 1 天那張）。
+// 和 bind-trip 同一套成員檢查——不檢查的話，知道別人 tripId 就能把對方的插圖印進自己的影片。
+async function loadTripCover(user, tripId) {
+  if (!adminReady) return null;
+  const snap = await adminDb.collection('micro_trips').doc(tripId).get();
+  if (!snap.exists) return null;
+  const data = snap.data() || {};
+  const email = normalizeEmail(user.email || '');
+  const allowed = isTripOwner(user, data)
+    || (email && (data.memberEmails || []).map(normalizeEmail).includes(email))
+    || (email && (data.editorEmails || []).map(normalizeEmail).includes(email));
+  if (!allowed) return null;
+  return typeof data.imageUrl === 'string' && data.imageUrl ? data.imageUrl : null;
+}
+
 // 回顧短片渲染 job 端點（需登入 + 每人每小時 5 次 + 序列化渲染）
-mountRecapJobs(app, { requireFirebaseUser, rateLimit, ipKeyGenerator });
+mountRecapJobs(app, { requireFirebaseUser, rateLimit, ipKeyGenerator, loadTripCover });
+
+// 行程生成 Agent 端點（需登入 + 每帳號 60 次／10 分鐘 + SSE；usage 記到 generation_runs）
+mountAgentPlan(app, { requireFirebaseUser, rateLimit, genRuns, amdLlm, ipKeyGenerator });
+
+// 文字 AI 小任務（標題、描述、版面…）：需登入 + 限流；AI_PROVIDER=amd 走 gpt-oss-120b 結構化輸出
+mountAiTasks(app, { requireFirebaseUser, rateLimit, ipKeyGenerator, vertexUpstream: VERTEX_UPSTREAM, vertexApiKey: VERTEX_API_KEY });
 
 // 全域錯誤處理：必須排在所有路由之後。沒有它時 Express 會回預設 HTML 錯誤頁，
 // 未設 NODE_ENV=production 就連 stack trace（含本機路徑）一起經 nginx 送到公網。

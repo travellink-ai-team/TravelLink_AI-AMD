@@ -3809,8 +3809,9 @@ async function optimizeGeneratedTripStops(stops, wizardData = {}, livePlaces = [
   _genPerf.mark('opt: 缺座標補齊');
 
   // Corridor filter: try 5km first; if too few stops, expand to 10km
+  // AI 規劃代理人的站在後端已依目的地半徑挑過，這裡不再用路廊刪站
   let stopsForVerify = enrichedStops;
-  if (_startCoords && _endCoords) {
+  if (_startCoords && _endCoords && wizardData._agentPlanned !== true) {
     const _destCoord = getDestinationCenter(destination) || _startCoords;
     const _minStops = getDurationStopRange(wizardData.days || '1天', wizardData.people || '2人').min;
     const _corridorFilter = (km) => enrichedStops.filter(s => {
@@ -3829,22 +3830,28 @@ async function optimizeGeneratedTripStops(stops, wizardData = {}, livePlaces = [
   _sub('驗證景點真實性中…');
   const verifiedStops = await verifyAndFilterStopsWithPlaces(stopsForVerify, destination, wizardData);
   _genPerf.mark('opt: Places 逐站驗證');
-  const geographicallySorted = sortStopsByNearestRoute(verifiedStops, wizardData);
+  // AI 規劃代理人（agent-plan-client.js）的站：後端已依營業時間、用餐時段排好順序並驗證過時長，
+  // 這裡不再重排、合併、補站、移餐，避免把「11:00 才開」的景點排回早上（其餘後處理照舊）。
+  // 但驗證若刪掉了站，後端排好的時段就有缺口：改走一般後處理，讓它重排並補站
+  const _agentDropped = wizardData._agentPlanned === true && verifiedStops.length < stopsForVerify.length;
+  if (_agentDropped) console.info(`[AI 規劃代理人] 驗證刪掉 ${stopsForVerify.length - verifiedStops.length} 站，改用一般後處理補齊`);
+  const _agentPlanned = wizardData._agentPlanned === true && !_agentDropped;
+  const geographicallySorted = _agentPlanned ? verifiedStops : sortStopsByNearestRoute(verifiedStops, wizardData);
   // 合併同一大景區內密集子景點（如三仙台觀景台／跨海步橋 → 單一「三仙台」站）
-  const mergedNearby = mergeNearbySubAttractions(geographicallySorted);
+  const mergedNearby = _agentPlanned ? geographicallySorted : mergeNearbySubAttractions(geographicallySorted);
   // 大景區以單站進來、合併不到鄰近站時，用 Places 附近搜尋補出子景點並標記合併（只貼標籤，不加站）
   _sub('比對大景區子景點中…');
   const enrichedNearby = await enrichBigAttractionSubSpots(mergedNearby, destination).catch(() => mergedNearby);
   _genPerf.mark('opt: 大景區子景點');
   // 合併後若時間縮水，沿路線補景點填回目標時段（含回終點交通、不超時）
   _sub('檢查行程時段長度中…');
-  const filledStops = await fillTripTimeBudget(enrichedNearby, wizardData, destination, _startCoords, _endCoords).catch(() => enrichedNearby);
+  const filledStops = _agentPlanned ? enrichedNearby : await fillTripTimeBudget(enrichedNearby, wizardData, destination, _startCoords, _endCoords).catch(() => enrichedNearby);
   _genPerf.mark('opt: 補時段(fillTripTimeBudget)');
   _sub('整理路線順序中…');
   // 最後輸出前再重排一次，避免合併/補景點後路線南北來回跑
-  const orderedStops = reorderStopsAlongRoute(filledStops, _startCoords, wizardData, _endCoords);
+  const orderedStops = _agentPlanned ? filledStops : reorderStopsAlongRoute(filledStops, _startCoords, wizardData, _endCoords);
   // 上面兩次排序只看路線順不順，會把晚餐排到第 3 站；這裡把用餐站移回時鐘走到那一餐的位置
-  const mealArrangedStops = placeMealStopsAtMealTimes(orderedStops, wizardData);
+  const mealArrangedStops = _agentPlanned ? orderedStops : placeMealStopsAtMealTimes(orderedStops, wizardData);
   const ruledStops = applyTripPlanningRules(mealArrangedStops, wizardData);
   const withTransport = assignTransportModes(ruledStops, wizardData.transportMode);
 
@@ -7646,7 +7653,9 @@ async function _doGeneration(trip, wData) {
     setWizGenStep(1);
 
     let lastNames = [];
-    const finalPlan = await requestGeminiMicroTravelPlan(wData, {
+    // 方案 C：一日遊且開了 Agent 模式（agent-plan-client.js）→ 先讓 AI 規劃代理人逐步組行程；
+    // 沒開、多日、或失敗／逾時回 null，照舊走下面的一次生成
+    const finalPlan = (typeof tryAgentPlanForWizard === 'function' ? await tryAgentPlanForWizard(wData) : null) || await requestGeminiMicroTravelPlan(wData, {
       mode: 'final',
       includeFirebase: !_localHint && livePlaces.length === 0,
       livePoiHint,
