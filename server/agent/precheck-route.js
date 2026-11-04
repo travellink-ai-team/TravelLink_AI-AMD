@@ -16,16 +16,18 @@ function sanitizeScenario(raw) {
   return Object.keys(out).length ? out : null;
 }
 
-function mount(app, { requireFirebaseUser, rateLimit }) {
+function mount(app, { requireFirebaseUser, rateLimit, ipKeyGenerator }) {
   // 背景輪詢用：比 replan 寬鬆（不呼叫 AI），但仍限流，避免壞掉的用戶端狂打 CWA
   const limiter = rateLimit({
     windowMs: 10 * 60 * 1000,
     max: 60,
     standardHeaders: true,
     legacyHeaders: false,
+    // 驗證之後用帳號計算：展場共用同一個對外 IP，用 IP 算會互相吃額度
+    keyGenerator: (req, res) => (req.user && req.user.uid) || (ipKeyGenerator ? ipKeyGenerator(req, res) : req.ip),
     message: { error: 'rate limited', message: '檢查太頻繁，請稍後再試。' }
   });
-  app.post('/api/agent/precheck', limiter, requireFirebaseUser, async (req, res) => {
+  app.post('/api/agent/precheck', requireFirebaseUser, limiter, async (req, res) => {
     const body = req.body || {};
     const trigger = body.trigger && typeof body.trigger === 'object' ? body.trigger : { type: 'weather' };
     if (!['weather', 'delay'].includes(trigger.type || 'weather')) return res.status(400).json({ error: 'invalid trigger', message: '預檢只支援 weather 與 delay' });

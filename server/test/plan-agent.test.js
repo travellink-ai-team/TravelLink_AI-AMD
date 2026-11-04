@@ -112,6 +112,7 @@ const last = (results, name) => (results[name] || [])[(results[name] || []).leng
   const sleepB = { name: '小長城步道 & 睡美人與哈巴狗', lat: 22.660833, lng: 121.506816 };
   ok('sameAttraction：睡美人岩的兩個別名算同一處', P.sameAttraction(sleepA, sleepB));
   ok('sameAttraction：「三和海濱公園」與「海濱公園」相距 15 km 不算', !P.sameAttraction({ name: '三和海濱公園', lat: 22.62, lng: 121.03 }, { name: '海濱公園', lat: 22.755, lng: 121.158 }));
+  ok('sameAttraction：缺座標不判同一處（避免跳過距離限制）', !P.sameAttraction({ name: '海濱公園' }, { name: '三和海濱公園', lat: 22.62, lng: 121.03 }));
   ok('sameAttraction：相鄰 80 m 的不同景點不算', !P.sameAttraction({ name: '臺東故事館', lat: 22.7935, lng: 121.1235 }, { name: '鐵花新聚落', lat: 22.7929, lng: 121.124 }));
   const gctx = { req: greenReq, allowed: new Set(), failedRounds: 0, getForecast: async () => null };
   const gpoi = await A.runTool(gctx, 'search_local_poi', { radiusKm: 30 });
@@ -158,6 +159,11 @@ const last = (results, name) => (results[name] || [])[(results[name] || []).leng
 
   const badTool = await A.runPlanAgent({ request: TAITUNG, chat: mockChat([[['delete_everything', {}]]]), onEvent: () => {} });
   ok('防護：白名單外的工具不執行', badTool.type === 'error');
+
+  // 草稿已通過、模型卻停止呼叫工具（沒呼叫 present_itinerary）：直接用草稿交出行程
+  // 沿用上面跑通的劇本，只把最後的 present_itinerary 換成「不呼叫工具」
+  const forgot = await A.runPlanAgent({ request: TAITUNG, chat: mockChat(script.slice(0, 6).concat([[]])), onEvent: () => {} });
+  ok('草稿已通過但沒呼叫 present_itinerary → 仍交出行程', forgot.type === 'itinerary' && forgot.stops.length >= 5, forgot.code || '');
 
   const loopForever = mockChat(Array.from({ length: 30 }, () => [['get_trip_request', {}]]));
   const steps = await A.runPlanAgent({ request: TAITUNG, chat: loopForever, onEvent: () => {} });
@@ -228,10 +234,33 @@ const last = (results, name) => (results[name] || [])[(results[name] || []).leng
   ok('端點：多日 400', (await post({ request: { ...TAITUNG, days: 2 } })).status === 400);
   const sse = await post({ request: TAITUNG });
   const text = await sse.text();
-  const sseEvents = text.split('\n\n').filter(Boolean).map((b) => JSON.parse(b.replace(/^data: /, '')));
+  const sseEvents = text.split('\n\n').filter((b) => b.startsWith('data: ')).map((b) => JSON.parse(b.replace(/^data: /, '')));
   ok('端點：SSE content-type', String(sse.headers.get('content-type')).includes('text/event-stream'));
   ok('端點：SSE 逐步事件，最後是 itinerary', sseEvents[0].type === 'start' && sseEvents[sseEvents.length - 1].type === 'itinerary' && sseEvents.filter((e) => e.type === 'tool_call').length === 7);
   server.close();
+
+  // 心跳：等 AI 時每隔一段時間送 SSE 註解行，前端的等待計時才不會誤判逾時
+  const app2 = express();
+  app2.use(express.json());
+  mountAgentPlan(app2, {
+    requireFirebaseUser, rateLimit, genRuns, amdLlm: { USAGE_MODEL_ID: 'gpt-oss-120b' }, pingMs: 30,
+    run: async (opts) => { await new Promise((r) => setTimeout(r, 200)); const e = { type: 'error', code: 'timeout', message: 'x' }; opts.onEvent(e); return e; }
+  });
+  const server2 = await new Promise((resolve) => { const s = app2.listen(0, '127.0.0.1', () => resolve(s)); });
+  const slowText = await (await fetch(`http://127.0.0.1:${server2.address().port}/api/agent/plan`, { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer t' }, body: JSON.stringify({ request: TAITUNG }) })).text();
+  ok('端點：等待 AI 時送心跳（SSE 註解行）', (slowText.match(/^: ping$/gm) || []).length >= 2, slowText.slice(0, 120));
+  server2.close();
+
+  // 前端斷線：signal 中止後不再呼叫 LLM
+  const ac = new AbortController();
+  let llmCalls = 0;
+  const abortChat = async () => { llmCalls += 1; ac.abort(); throw Object.assign(new Error('aborted'), { name: 'AbortError' }); };
+  const aborted = await A.runPlanAgent({ request: TAITUNG, chat: abortChat, signal: ac.signal, onEvent: () => {} });
+  ok('前端斷線：回 aborted 且不重試', aborted.type === 'error' && aborted.code === 'aborted' && llmCalls === 1, `${aborted.code} calls=${llmCalls}`);
+  const pre = new AbortController(); pre.abort();
+  let preCalls = 0;
+  const preAborted = await A.runPlanAgent({ request: TAITUNG, chat: async () => { preCalls += 1; return {}; }, signal: pre.signal, onEvent: () => {} });
+  ok('前端已斷線：一次 LLM 都不呼叫', preAborted.code === 'aborted' && preCalls === 0);
 
   /* ═══ 6. --live：實際呼叫 AMD gpt-oss-120b ═══ */
   if (LIVE) {

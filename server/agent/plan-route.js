@@ -10,6 +10,7 @@
 const { runPlanAgent } = require('./plan-agent');
 
 const MAX_DAY_MINUTES = 14 * 60;
+const PING_MS = 5000;
 
 /** 驗證 body.request；回傳 { error } 或 { request, scenario } */
 function parsePlanBody(body) {
@@ -47,22 +48,23 @@ function parsePlanBody(body) {
 
 /**
  * @param {import('express').Express} app
- * @param {{ requireFirebaseUser: Function, rateLimit: Function, genRuns: object, amdLlm: object, run?: Function }} deps
+ * @param {{ requireFirebaseUser: Function, rateLimit: Function, genRuns: object, amdLlm: object, ipKeyGenerator?: Function, run?: Function, pingMs?: number }} deps
  */
 function mountAgentPlan(app, deps) {
-  const { requireFirebaseUser, rateLimit, genRuns, amdLlm } = deps;
+  const { requireFirebaseUser, rateLimit, genRuns, amdLlm, ipKeyGenerator } = deps;
   const run = deps.run || runPlanAgent;
   const planLimiter = rateLimit({
     windowMs: 10 * 60 * 1000,
     // 一次規劃最多 18 次 LLM 呼叫；這裡限的是「規劃次數」。
-    // 展場多人共用同一個對外 IP（場館 Wi-Fi NAT），10 次很快用完，放寬到 60。
+    // 放在驗證之後、用帳號計算：展場多人共用同一個對外 IP（場館 Wi-Fi NAT），用 IP 算會互相吃額度
     max: 60,
     standardHeaders: true,
     legacyHeaders: false,
+    keyGenerator: (req, res) => (req.user && req.user.uid) || (ipKeyGenerator ? ipKeyGenerator(req, res) : req.ip),
     message: { error: 'rate limited', message: 'AI 規劃代理人使用太頻繁，請稍後再試。' }
   });
 
-  app.post('/api/agent/plan', planLimiter, requireFirebaseUser, async (req, res) => {
+  app.post('/api/agent/plan', requireFirebaseUser, planLimiter, async (req, res) => {
     const parsed = parsePlanBody(req.body);
     if (parsed.error) return res.status(400).json({ error: parsed.error, ...(parsed.message ? { message: parsed.message } : {}) });
 
@@ -75,13 +77,19 @@ function mountAgentPlan(app, deps) {
     res.set('X-Accel-Buffering', 'no');
     res.flushHeaders();
     let closed = false;
-    res.on('close', () => { closed = true; });
+    // 前端放棄（逾時退回一般生成、關頁）就停止 Agent，別在 AMD 上繼續跑一份沒人要的
+    const controller = new AbortController();
+    res.on('close', () => { closed = true; if (!res.writableEnded) controller.abort(); });
     const send = (e) => { if (!closed) res.write('data: ' + JSON.stringify(e) + '\n\n'); };
+    // 心跳：等 AI 回應時（含 5xx 重試、改走備援代理）沒有事件，前端 20 秒沒收到東西就會放棄。
+    // SSE 註解行前端不當事件處理，但會重置它的等待計時
+    const ping = setInterval(() => { if (!closed) res.write(': ping\n\n'); }, deps.pingMs || PING_MS);
 
     try {
       const last = await run({
         request: parsed.request,
         scenario: parsed.scenario,
+        signal: controller.signal,
         onEvent: send,
         onUsage: (u) => {
           if (!genRun) return;
@@ -98,6 +106,7 @@ function mountAgentPlan(app, deps) {
       if (genRun) genRuns.markUpstreamError(genRun);
       send({ type: 'error', code: 'internal', message: 'AI 規劃代理人發生錯誤，改用一般生成。' });
     }
+    clearInterval(ping);
     if (genRun) genRuns.release(genRun).catch(() => {});
     res.end();
   });

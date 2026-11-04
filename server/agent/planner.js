@@ -72,6 +72,7 @@ function landmarkTokens(name) {
 function sameAttraction(a, b) {
   if (!a || !b || a === b) return false;
   const km = D.haversineKm(a, b);
+  if (!Number.isFinite(km)) return false;   // 缺座標就無法用距離把關，寧可不合併
   if (km <= SAME_SPOT_KM) return true;
   if (km > SAME_LANDMARK_KM) return false;
   const ta = landmarkTokens(a.name);
@@ -339,7 +340,9 @@ function buildDraft(req, picks, opts = {}) {
 
   // 回到終點
   if (sch.returnMin > req.endMin + 15) {
-    violations.push({ code: 'return_late', message: `最後一站結束 ${I.toClock(sch.endMin)}，回到「${endPoint.name}」約 ${I.toClock(Math.min(sch.returnMin, 1439))}，超過結束時間 ${I.toClock(req.endMin)}，請刪站或縮短停留` });
+    const over = sch.returnMin - req.endMin;
+    const fix = over <= 60 ? `請把幾站的 stayMin 合計縮短約 ${over + 10} 分鐘（不要刪站）` : `請刪掉 1 站，或把幾站的 stayMin 合計縮短約 ${over + 10} 分鐘`;
+    violations.push({ code: 'return_late', message: `最後一站結束 ${I.toClock(sch.endMin)}，回到「${endPoint.name}」約 ${I.toClock(Math.min(sch.returnMin, 1439))}，超過結束時間 ${I.toClock(req.endMin)} 約 ${over} 分鐘：${fix}` });
   }
   // 站數與空檔
   const range = stopRange(req.durationMin, req.pace);
@@ -349,7 +352,14 @@ function buildDraft(req, picks, opts = {}) {
   // 原本 120 分才擋，實測 09–18 的行程 16:00 就回到終點也會通過；前端還會在起點加約 30 分停留，
   // 所以這裡收到 90 分：實際畫面上的空檔約 1 小時內
   const idle = req.endMin - sch.returnMin;
-  if (items.length && idle > 90) violations.push({ code: 'idle', message: `行程 ${I.toClock(sch.returnMin)} 就結束，離 ${I.toClock(req.endMin)} 還空 ${idle} 分鐘，請再加 1–2 站或延長停留` });
+  if (items.length && idle > 90) {
+    // 空檔不大就延長停留（加一站常常一下子超時），差很多才加站；目標是回到終點時離結束還有 30–60 分
+    const need = idle - 45;
+    const fix = idle <= 150
+      ? `請把幾站的 stayMin 合計延長約 ${need} 分鐘（不要加站）`
+      : `請再加 ${Math.max(1, Math.round(need / 90))} 站（每站約 60–75 分），或延長停留合計約 ${need} 分鐘`;
+    violations.push({ code: 'idle', message: `行程 ${I.toClock(sch.returnMin)} 就結束，離 ${I.toClock(req.endMin)} 還空 ${idle} 分鐘：${fix}` });
+  }
   else if (items.length && idle > 60) warnings.push({ code: 'idle_minor', message: `離結束時間還有約 ${idle} 分鐘空檔` });
   const longWaits = sch.stops.filter((x) => x.wait >= 45);
   longWaits.forEach((x) => warnings.push({ code: 'wait', stop: x.place.name, message: `「${x.place.name}」要等 ${x.wait} 分鐘才開門` }));

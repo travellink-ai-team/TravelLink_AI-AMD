@@ -310,7 +310,12 @@
         return true;
       }
       const json = await res.json();
-      const alert = !!(json && json.alert);
+      // 後端的 alert 是「有任何問題」；這則提醒要後端也找到同一類問題才成立
+      // （避免後端只查到公休，卻跳出降雨提示列）
+      const codes = new Set(((json && json.issues) || []).map((v) => v.code));
+      const alert = !!(json && json.alert) && (issue.kind === 'weather'
+        ? codes.has('rain')
+        : ['closed', 'suspended', 'hours'].some((c) => codes.has(c)));
       pc.precheck.set(cacheKey, { exp: Date.now() + CFG.precheckTtlMs, alert });
       return alert;
     } catch (_e) {

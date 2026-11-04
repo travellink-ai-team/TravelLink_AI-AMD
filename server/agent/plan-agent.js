@@ -363,9 +363,10 @@ function itineraryView(draft) {
  * @param {function} opts.onEvent 每一步呼叫一次，參數是可直接送給前端的事件物件
  * @param {function} [opts.onUsage] 每次 LLM 呼叫後回報 OpenAI usage（記帳用）
  * @param {function} [opts.chat]  測試用：取代 amd.chat
+ * @param {AbortSignal} [opts.signal] 前端斷線時中止，不再呼叫 LLM
  * @returns {Promise<object>} 最後一個事件（itinerary / error）
  */
-async function runPlanAgent({ request, scenario, onEvent, onUsage, chat }) {
+async function runPlanAgent({ request, scenario, onEvent, onUsage, chat, signal }) {
   const t0 = Date.now();
   const TIMEOUT_MS = timeoutMs();
   const emit = (e) => { try { onEvent && onEvent({ ...e, ms: Date.now() - t0 }); } catch (_e) {} };
@@ -399,15 +400,35 @@ async function runPlanAgent({ request, scenario, onEvent, onUsage, chat }) {
   const tools = definitions(req);
   let nudged = false;
 
+  // 交出行程：present_itinerary 的結果，或（模型忘了呼叫時）用已通過驗證的草稿補上預設說明
+  const finishItinerary = (meta) => finish({
+    type: 'itinerary',
+    title: meta.title,
+    summary: meta.summary,
+    reasons: meta.reasons,
+    dest: req.dest,
+    date: req.date,
+    startTime: I.toClock(req.startMin),
+    endTime: ctx.draft.endTime,
+    start: ctx.draft.startPoint.name,
+    end: ctx.draft.endPoint.name,
+    costPerPerson: ctx.draft.costPerPerson,
+    warnings: ctx.draft.warnings.slice(0, 5).map((w) => w.message),
+    stops: itineraryView(ctx.draft),
+    draftRounds: ctx.failedRounds + 1
+  });
+
   async function chatWithRetry() {
     let lastErr;
     for (let attempt = 0; attempt < 3; attempt++) {
       const budget = TIMEOUT_MS - (Date.now() - t0);
       if (budget <= 0) break;
       try {
-        return await callLlm({ messages, tools, temperature: 0.3, maxTokens: 2048, signal: AbortSignal.timeout(budget) });
+        const timer = AbortSignal.timeout(budget);
+        return await callLlm({ messages, tools, temperature: 0.3, maxTokens: 2048, signal: signal ? AbortSignal.any([timer, signal]) : timer });
       } catch (err) {
         lastErr = err;
+        if (signal && signal.aborted) throw Object.assign(new Error('client closed'), { code: 'aborted' });
         if (!(err.status >= 500)) throw err;
         console.warn(`[plan-agent] LLM ${err.status}，重試第 ${attempt + 1} 次`);
       }
@@ -417,6 +438,7 @@ async function runPlanAgent({ request, scenario, onEvent, onUsage, chat }) {
 
   try {
     for (let call = 0; call < MAX_LLM_CALLS; call++) {
+      if (signal && signal.aborted) throw Object.assign(new Error('client closed'), { code: 'aborted' });
       if (TIMEOUT_MS - (Date.now() - t0) <= 0) throw Object.assign(new Error('timeout'), { code: 'timeout' });
       const res = await chatWithRetry();
       usage.llmCalls += 1;
@@ -430,6 +452,10 @@ async function runPlanAgent({ request, scenario, onEvent, onUsage, chat }) {
 
       const calls = res.message.tool_calls || [];
       if (!calls.length) {
+        // 草稿已通過驗證、只是沒呼叫 present_itinerary：行程本身沒問題，直接交出（實測偶爾發生）
+        if (ctx.draft && ctx.draft.ok) {
+          return finishItinerary({ title: String(ctx.req.title || `${req.dest}一日遊`).slice(0, 30), summary: '', reasons: [] });
+        }
         if (nudged) throw Object.assign(new Error('model stopped calling tools'), { code: 'no_tools' });
         nudged = true;
         messages.push({ role: 'user', content: '請用工具繼續，最後一定要呼叫 present_itinerary。' });
@@ -447,24 +473,7 @@ async function runPlanAgent({ request, scenario, onEvent, onUsage, chat }) {
         emit({ type: 'tool_result', tool: name, ok: !result.error && result.ok !== false, detail: summarizeResult(name, result) });
         messages.push({ role: 'tool', tool_call_id: c.id, content: JSON.stringify(result) });
 
-        if (TERMINAL.has(name) && !result.error) {
-          return finish({
-            type: 'itinerary',
-            title: result.title,
-            summary: result.summary,
-            reasons: result.reasons,
-            dest: req.dest,
-            date: req.date,
-            startTime: I.toClock(req.startMin),
-            endTime: ctx.draft.endTime,
-            start: ctx.draft.startPoint.name,
-            end: ctx.draft.endPoint.name,
-            costPerPerson: ctx.draft.costPerPerson,
-            warnings: ctx.draft.warnings.slice(0, 5).map((w) => w.message),
-            stops: itineraryView(ctx.draft),
-            draftRounds: ctx.failedRounds + 1
-          });
-        }
+        if (TERMINAL.has(name) && !result.error) return finishItinerary(result);
       }
       if (ctx.failedRounds >= MAX_FAILED_ROUNDS) throw Object.assign(new Error(`validation failed ${MAX_FAILED_ROUNDS} times`), { code: 'validation' });
     }
@@ -472,7 +481,7 @@ async function runPlanAgent({ request, scenario, onEvent, onUsage, chat }) {
   } catch (err) {
     const code = err.code || (err.name === 'TimeoutError' ? 'timeout' : 'upstream');
     const why = {
-      timeout: 'AI 規劃代理人逾時', max_steps: 'AI 規劃代理人步數超過上限', validation: `AI 草稿連續 ${MAX_FAILED_ROUNDS} 輪驗證失敗`, no_tools: 'AI 規劃代理人沒有完成流程'
+      aborted: '前端已中止', timeout: 'AI 規劃代理人逾時', max_steps: 'AI 規劃代理人步數超過上限', validation: `AI 草稿連續 ${MAX_FAILED_ROUNDS} 輪驗證失敗`, no_tools: 'AI 規劃代理人沒有完成流程'
     }[code] || 'AI 服務暫時無法回應';
     console.warn('[plan-agent] 失敗：' + why + (err.code ? '' : '｜' + String(err.message || err).slice(0, 300)));
     return finish({ type: 'error', code, message: why + '，改用一般生成。' });

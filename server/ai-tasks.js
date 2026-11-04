@@ -401,10 +401,12 @@ function mountAiTasks(app, deps) {
     max: 40,   // 這些都是小任務（標題、描述、版面），比行程生成寬鬆
     standardHeaders: true,
     legacyHeaders: false,
+    // 驗證之後用帳號計算：展場共用同一個對外 IP，用 IP 算會互相吃額度
+    keyGenerator: (req, res) => (req.user && req.user.uid) || (deps.ipKeyGenerator ? deps.ipKeyGenerator(req, res) : req.ip),
     message: { error: 'rate limited', message: 'AI 請求過於頻繁，請稍後再試。' }
   });
 
-  app.post('/api/ai/task', limiter, deps.requireFirebaseUser, async (req, res) => {
+  app.post('/api/ai/task', deps.requireFirebaseUser, limiter, async (req, res) => {
     const body = req.body || {};
     const task = String(body.task || '');
     if (!Object.prototype.hasOwnProperty.call(TASKS, task)) {

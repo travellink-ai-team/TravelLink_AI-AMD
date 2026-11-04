@@ -1153,7 +1153,7 @@ const agentLimiter = rateLimit({
   message: { error: 'rate limited', message: 'AI 代理人使用太頻繁，請稍後再試。' }
 });
 // 主動式旅途管家：POST /api/agent/precheck（程式檢查，不呼叫 AI；見 agent/precheck-route.js）
-require('./agent/precheck-route').mount(app, { requireFirebaseUser, rateLimit });
+require('./agent/precheck-route').mount(app, { requireFirebaseUser, rateLimit, ipKeyGenerator });
 
 app.post('/api/agent/replan', agentLimiter, requireFirebaseUser, async (req, res) => {
   const body = req.body || {};
@@ -1523,11 +1523,11 @@ async function loadTripCover(user, tripId) {
 // 回顧短片渲染 job 端點（需登入 + 每人每小時 5 次 + 序列化渲染）
 mountRecapJobs(app, { requireFirebaseUser, rateLimit, ipKeyGenerator, loadTripCover });
 
-// 行程生成 Agent 端點（需登入 + 每 IP 10 次／10 分鐘 + SSE；usage 記到 generation_runs）
-mountAgentPlan(app, { requireFirebaseUser, rateLimit, genRuns, amdLlm });
+// 行程生成 Agent 端點（需登入 + 每帳號 60 次／10 分鐘 + SSE；usage 記到 generation_runs）
+mountAgentPlan(app, { requireFirebaseUser, rateLimit, genRuns, amdLlm, ipKeyGenerator });
 
 // 文字 AI 小任務（標題、描述、版面…）：需登入 + 限流；AI_PROVIDER=amd 走 gpt-oss-120b 結構化輸出
-mountAiTasks(app, { requireFirebaseUser, rateLimit, vertexUpstream: VERTEX_UPSTREAM, vertexApiKey: VERTEX_API_KEY });
+mountAiTasks(app, { requireFirebaseUser, rateLimit, ipKeyGenerator, vertexUpstream: VERTEX_UPSTREAM, vertexApiKey: VERTEX_API_KEY });
 
 // 全域錯誤處理：必須排在所有路由之後。沒有它時 Express 會回預設 HTML 錯誤頁，
 // 未設 NODE_ENV=production 就連 stack trace（含本機路徑）一起經 nginx 送到公網。
