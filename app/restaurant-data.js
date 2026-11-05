@@ -1178,7 +1178,7 @@ window.WAI_RESTAURANT_DATA = {
       "costNote": "$400–600"
     },
     {
-      "name": "順大新港 黑潮海鮮餐廳/FB預約制",
+      "name": "順大新港 黑潮海鮮餐廳",
       "lat": 23.0991108,
       "lng": 121.37866639999999,
       "businessHours": "星期一: 11:00 – 20:00\n星期二: 11:00 – 20:00\n星期三: 11:00 – 20:00\n星期四: 11:00 – 20:00\n星期五: 11:00 – 20:00\n星期六: 11:00 – 20:00\n星期日: 11:00 – 20:00",
@@ -1188,7 +1188,8 @@ window.WAI_RESTAURANT_DATA = {
       "costMin": 400,
       "costMax": 1400,
       "costPerPerson": 900,
-      "costNote": "$400–1400"
+      "costNote": "$400–1400",
+      "nameNote": "FB預約制"
     },
     {
       "name": "成功海銀行",

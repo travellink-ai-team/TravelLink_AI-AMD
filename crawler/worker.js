@@ -2132,6 +2132,8 @@ const NAME_NOTE_RE = new RegExp(`\\s*[（(]([^（）()]*(?:${NAME_NOTE_WORDS})[^
 // 前面可以帶日期區間：「6/22（一）-6/24（三）公休3日」整段都是公休公告
 const NAME_DATE = String.raw`\d{1,2}\/\d{1,2}(?:\s*[（(][^（）()]{1,2}[）)])?`;
 const NAME_TAIL_NOTE_RE = new RegExp(String.raw`\s*[，,、｜|]?\s*((?:${NAME_DATE}\s*(?:[-~–至]\s*${NAME_DATE}\s*)?)?(?:店休|公休|休息|營業時間|營業日)[^（）()]{0,30})$`);
+// 斜線後面的預約說明：「順大新港 黑潮海鮮餐廳/FB預約制」。只有接在斜線後才拆，避免把店名裡的「預約」切掉
+const NAME_SLASH_NOTE_RE = /\s*[\/／]\s*((?:FB|IG)?\s*(?:預約|訂位)[^（）()\/／]*)$/i;
 // 書名號裡的宣傳詞：「博文臭豆腐《池上必吃銅板美食》」
 const NAME_SLOGAN_RE = /\s*《([^《》]*(?:必吃|推薦|人氣|銅板|美食|招牌)[^《》]*)》\s*/g;
 function splitNameNote(name) {
@@ -2139,6 +2141,7 @@ function splitNameNote(name) {
   const notes = [];
   const clean = raw.replace(NAME_NOTE_RE, (_m, note) => { notes.push(note.trim()); return ' '; })
     .replace(NAME_TAIL_NOTE_RE, (_m, note) => { notes.push(note.trim()); return ''; })
+    .replace(NAME_SLASH_NOTE_RE, (_m, note) => { notes.push(note.trim()); return ''; })
     .replace(NAME_SLOGAN_RE, (_m, note) => { notes.push(note.trim()); return ' '; })
     .replace(/\s+/g, ' ').trim();
   return clean.length >= 2 && notes.length ? { name: clean, note: notes.join('；') } : { name: raw, note: '' };
