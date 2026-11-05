@@ -23,6 +23,14 @@ const MAX_LLM_CALLS = 18;
 // 3 輪時，短行程偶爾在「太短 → 加站變太長 → 刪站」之間來回用完次數；多給一輪，每輪約 0.5 秒
 const MAX_FAILED_ROUNDS = 4;
 const SEARCH_LIMIT = 8;
+// 第一層分流：所有人用同一個公式排序，前幾名每次都一樣，大家會擠到同一批景點與同一家餐廳。
+// 分數加一點隨機（差距在這個範圍內的視為一樣好），最近排過的站再扣一點；明顯比較好的照樣排前面。
+const SCORE_JITTER = 0.6;          // 景點分數＝興趣×2＋評分－距離/8，0.6 約等於評分差 0.6 顆星
+const AVOID_PENALTY = 0.8;         // 同一個人最近排過的景點
+const FOOD_JITTER_KM = 1.5;        // 餐廳照距離排，近 1.5 km 以內的視為一樣近
+const FOOD_AVOID_KM = 2;
+const rnd = (ctx) => (typeof ctx.random === 'function' ? ctx.random() : Math.random());
+const avoided = (req, place) => !!(req.avoidKeys && req.avoidKeys.has(place._key));
 const timeoutMs = () => Number(process.env.AGENT_PLAN_TIMEOUT_MS) || 90 * 1000;
 
 const SYSTEM_PROMPT = [
@@ -214,7 +222,11 @@ const IMPL = {
       .filter((p) => openDuringTrip(p, r))
       .map((p) => ({ p, km: D.haversineKm(origin, p) }))
       .filter((x) => x.km <= radius)
-      .map((x) => ({ ...x, score: P.interestScore(x.p, interests) * 2 + (Number(x.p.rating) || 4) - x.km / 8 }))
+      .map((x) => ({
+        ...x,
+        score: P.interestScore(x.p, interests) * 2 + (Number(x.p.rating) || 4) - x.km / 8
+          + rnd(ctx) * SCORE_JITTER - (avoided(r, x.p) ? AVOID_PENALTY : 0)
+      }))
       .sort((a, b) => b.score - a.score)
       .filter((x) => {
         // 同一地點常有多筆：「中文名 + 英文名」、「臺東鐵道藝術村 (鐵花新聚落)」與「鐵花新聚落」。
@@ -231,7 +243,7 @@ const IMPL = {
     results.forEach((x) => ctx.allowed.add(x.p._key));
     return {
       date: r.date,
-      center: args.nearName && origin !== r.center ? origin.name : (r.startPoint.source === 'local' ? r.startPoint.name : r.dest),
+      center: args.nearName && origin !== r.center ? origin.name : (r.center === r.startPoint ? r.startPoint.name : r.dest),
       results: results.map((x) => candidateView(x.p, origin, r.date)),
       note: results.length ? undefined : '範圍內沒有符合的景點，可拿掉 keyword／interest 或加大 radiusKm'
     };
@@ -252,7 +264,8 @@ const IMPL = {
       .filter((p) => openDuringTrip(p, r))
       .map((p) => ({ p, km: D.haversineKm(origin, p), meals: mealsOf(p) }))
       .filter((x) => x.km <= radius && (!slots.length || x.meals.length))
-      .sort((a, b) => a.km - b.km)
+      .map((x) => ({ ...x, rank: x.km + rnd(ctx) * FOOD_JITTER_KM + (avoided(r, x.p) ? FOOD_AVOID_KM : 0) }))
+      .sort((a, b) => a.rank - b.rank)
       .slice(0, SEARCH_LIMIT);
     results.forEach((x) => ctx.allowed.add(x.p._key));
     return {
@@ -337,7 +350,7 @@ function itineraryView(draft) {
       duration: s.stayMin,
       stayMin: s.stayMin,
       dayIndex: 1,
-      desc: String(p.desc || (food ? (p.costNote ? `人均 ${p.costNote}` : '在地餐廳') : '')).slice(0, 120),
+      desc: [p.nameNote, String(p.desc || (food ? (p.costNote ? `人均 ${p.costNote}` : '在地餐廳') : ''))].filter(Boolean).join('；').slice(0, 120),
       lat: p.lat,
       lng: p.lng,
       ...(p.businessHours ? { businessHours: p.businessHours } : {}),
@@ -364,9 +377,10 @@ function itineraryView(draft) {
  * @param {function} [opts.onUsage] 每次 LLM 呼叫後回報 OpenAI usage（記帳用）
  * @param {function} [opts.chat]  測試用：取代 amd.chat
  * @param {AbortSignal} [opts.signal] 前端斷線時中止，不再呼叫 LLM
+ * @param {function} [opts.random] 分流用的亂數（測試注入固定值）
  * @returns {Promise<object>} 最後一個事件（itinerary / error）
  */
-async function runPlanAgent({ request, scenario, onEvent, onUsage, chat, signal }) {
+async function runPlanAgent({ request, scenario, onEvent, onUsage, chat, signal, random }) {
   const t0 = Date.now();
   const TIMEOUT_MS = timeoutMs();
   const emit = (e) => { try { onEvent && onEvent({ ...e, ms: Date.now() - t0 }); } catch (_e) {} };
@@ -376,6 +390,7 @@ async function runPlanAgent({ request, scenario, onEvent, onUsage, chat, signal 
     req,
     scenario: scenario && scenario.rain ? scenario : null,
     allowed: new Set(),
+    random: typeof random === 'function' ? random : Math.random,   // 測試可注入固定值
     draft: null,
     failedRounds: 0,
     getForecast: () => (forecastPromise || (forecastPromise = D.getForecast(req.island || req.dest, ctx.scenario).then((f) => (f.periods.length ? f : null)).catch(() => null)))
@@ -410,6 +425,7 @@ async function runPlanAgent({ request, scenario, onEvent, onUsage, chat, signal 
     date: req.date,
     startTime: I.toClock(req.startMin),
     endTime: ctx.draft.endTime,
+    returnTime: ctx.draft.returnTime,
     start: ctx.draft.startPoint.name,
     end: ctx.draft.endPoint.name,
     costPerPerson: ctx.draft.costPerPerson,

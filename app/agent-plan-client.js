@@ -110,6 +110,7 @@
       title: result.title || '',
       reply: [result.summary || ''].concat(reasons.length ? ['（' + reasons.join('；') + '）'] : []).join(' ').trim(),
       stops: result.stops,
+      returnTime: result.returnTime || '',
       agent: { ms: result.ms, steps: result.steps, llmCalls: result.usage && result.usage.llmCalls, draftRounds: result.draftRounds, warnings: result.warnings || [] }
     };
   }
@@ -123,6 +124,25 @@
  * 依賴 ai-travel-explore-final.js 的全域函式（isLongTrip、parseDurationMinutes、getBudgetTier、
  * vertexAuthHeaders、setWizGenStep），都以 typeof 防護。
  */
+/** 最近兩趟同目的地行程排過的中間站名（不含起訖點），最多 20 個 */
+function recentPlannedStopNames(dest) {
+  try {
+    if (typeof myTrips === 'undefined' || !Array.isArray(myTrips) || !dest) return [];
+    var norm = function (s) { return String(s || '').replace(/臺/g, '台').trim(); };
+    var target = norm(dest);
+    var names = [];
+    myTrips.filter(function (t) {
+      return t && Array.isArray(t.stops) && t.stops.length && norm(t.region || (t.wizardData && t.wizardData.dest)) === target;
+    }).slice(0, 2).forEach(function (t) {
+      t.stops.forEach(function (s) {
+        var n = s && (s.name || s.title);
+        if (n && s.type !== 'start' && s.type !== 'end' && names.indexOf(n) < 0) names.push(String(n).slice(0, 40));
+      });
+    });
+    return names.slice(0, 20);
+  } catch (_e) { return []; }
+}
+
 async function tryAgentPlanForWizard(wData) {
   // 暫態旗標（同 _rainOutlook，不入庫）：optimizeGeneratedTripStops 看到它就保留後端排好的順序
   if (wData) wData._agentPlanned = false;
@@ -136,6 +156,22 @@ async function tryAgentPlanForWizard(wData) {
     var step = function (label) { if (typeof setWizGenStep === 'function') setWizGenStep(1, '🤖 ' + label); };
     step('AI 規劃代理人啟動中…');
     var t0 = Date.now();
+    var dest = wData.dest || wData.destCustom || '';
+    var hub = typeof getDefaultTransitHub === 'function' ? getDefaultTransitHub(dest) : '';
+    var startName = String(wData.startLocation || '').trim();
+    var endName = String(wData.endLocation || '').trim() || startName;
+    // 使用者自填的起訖點（門牌、路名、地標）後端的本地資料認不得，以前會退回目的地中心排程，
+    // 地圖卻畫在 Places 查到的位置。這裡先查好座標一起送，排程與地圖用同一個點（同名查詢有快取，後處理不會重打）
+    var coordOf = async function (name) {
+      if (!name || typeof fetchCoordinateFromGooglePlaces !== 'function') return null;
+      try {
+        var c = await fetchCoordinateFromGooglePlaces(name, dest);
+        return c && Number.isFinite(c.lat) && Number.isFinite(c.lng) ? { lat: c.lat, lng: c.lng } : null;
+      } catch (_e) { return null; }
+    };
+    var coords = await Promise.all([coordOf(startName), endName === startName ? null : coordOf(endName)]);
+    var startCoord = coords[0];
+    var endCoord = endName === startName ? startCoord : coords[1];
     var plan = await A.plan({
       dest: wData.dest || wData.destCustom || '',
       date: wData.departureDate || '',
@@ -148,11 +184,17 @@ async function tryAgentPlanForWizard(wData) {
       budgetPerPerson: tier && tier.perMax != null ? tier.perMax : null,
       desiredSpots: wData.desiredSpots || '',
       // 沒填起訖點時用前端同一個預設轉運站（台東車站、島內港…），後端排路線與前端插入的起訖站一致
-      startLocation: wData.startLocation || (typeof getDefaultTransitHub === 'function' ? getDefaultTransitHub(wData.dest || wData.destCustom || '') : ''),
-      endLocation: wData.endLocation || wData.startLocation || (typeof getDefaultTransitHub === 'function' ? getDefaultTransitHub(wData.dest || wData.destCustom || '') : ''),
+      startLocation: startName || hub,
+      endLocation: endName || hub,
+      startCoord: startCoord,
+      endCoord: endCoord,
+      // 分流：同一個人最近在同一目的地排過的站，後端會稍微降低它們的優先順序，避免每次都排到同一批
+      avoidNames: recentPlannedStopNames(dest),
       transportMode: wData.transportMode || ''
     }, { headers: headers, onStep: step });
     wData._agentPlanned = true;
+    // 暫態：回到終點的時刻（後處理把它寫到終點站，不入庫）
+    wData._agentReturnTime = plan.returnTime || '';
     console.info('[AI 規劃代理人] 完成：' + plan.stops.length + ' 站、' + ((Date.now() - t0) / 1000).toFixed(1) + ' 秒、LLM ' + plan.agent.llmCalls + ' 次、草稿 ' + plan.agent.draftRounds + ' 輪');
     return plan;
   } catch (err) {

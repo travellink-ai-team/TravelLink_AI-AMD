@@ -19,6 +19,7 @@
 const D = require('./data');
 const I = require('./itinerary');
 const F = require('./ferry');
+const B = require('./boundaries');
 
 const MAX_DRAFT_STOPS = 14;
 const MAX_WAIT_FOR_OPEN = 90;      // 早到最多等幾分鐘開門
@@ -75,6 +76,8 @@ function sameAttraction(a, b) {
   if (!Number.isFinite(km)) return false;   // 缺座標就無法用距離把關，寧可不合併
   if (km <= SAME_SPOT_KM) return true;
   if (km > SAME_LANDMARK_KM) return false;
+  // 名稱不共用字、但在同一個園區裡（鷺鷥湖在臺東森林公園裡、龍鳳佛堂在鯉魚山上）：看座標是否落在對方的 OSM 輪廓內
+  if (B.contains(a, b) || B.contains(b, a) || B.sharedOutline(a, b)) return true;
   const ta = landmarkTokens(a.name);
   const tb = landmarkTokens(b.name);
   return ta.some((t) => tb.some((u) => u === t || (t.length >= 3 && u.includes(t)) || (u.length >= 3 && t.includes(u))));
@@ -103,12 +106,20 @@ function centerOf(dest) {
  * 起點／終點：使用者填的地名在本地資料找得到就用它；離島用島內港（ferry-config）；
  * 其他用目的地中心。回傳 { name, lat, lng, source }。
  */
-function endpointOf(name, dest) {
+// 使用者座標離目的地中心多遠以內才採用：本島一日遊 80 km、離島只收島上的點
+const USER_POINT_MAX_KM = { mainland: 80, island: 12 };
+
+function endpointOf(name, dest, coord) {
   const island = islandOf(dest);
   const n = String(name || '').trim();
   if (n) {
     const p = D.findPlace(n);
     if (p) return { name: p.name, lat: p.lat, lng: p.lng, source: 'local' };
+  }
+  // 本地資料認不得的門牌、路名：用前端 Places 查好的座標，排程才會和地圖畫的是同一個點
+  if (n && coord && Number.isFinite(coord.lat) && Number.isFinite(coord.lng)
+      && D.haversineKm(coord, centerOf(dest)) <= (island ? USER_POINT_MAX_KM.island : USER_POINT_MAX_KM.mainland)) {
+    return { name: n, lat: coord.lat, lng: coord.lng, source: 'user' };
   }
   if (island && F.CONFIG[island] && F.CONFIG[island].islandHarbor) {
     const h = F.CONFIG[island].islandHarbor;
@@ -418,11 +429,14 @@ function normalizeRequest(raw) {
     budgetPerPerson: Number(r.budgetPerPerson) > 0 ? Math.min(100000, Math.round(Number(r.budgetPerPerson))) : null,
     desiredSpots: desired,
     transportMode: String(r.transportMode || 'car').slice(0, 12),
-    title: String(r.title || `${dest}一日遊`).slice(0, 40)
+    title: String(r.title || `${dest}一日遊`).slice(0, 40),
+    // 分流：最近排過的站（正規化後的名稱），搜尋時稍微降低優先順序
+    avoidKeys: new Set((Array.isArray(r.avoidNames) ? r.avoidNames : []).slice(0, 20)
+      .map((x) => String(x).replace(/臺/g, '台').replace(/\s+/g, '').toLowerCase()).filter(Boolean))
   };
-  req.startPoint = endpointOf(r.startLocation, dest);
-  req.endPoint = String(r.endLocation || '').trim() ? endpointOf(r.endLocation, dest) : req.startPoint;
-  req.center = req.island ? centerOf(dest) : (req.startPoint.source === 'local' ? req.startPoint : centerOf(dest));
+  req.startPoint = endpointOf(r.startLocation, dest, r.startCoord);
+  req.endPoint = String(r.endLocation || '').trim() ? endpointOf(r.endLocation, dest, r.endCoord || r.startCoord) : req.startPoint;
+  req.center = req.island ? centerOf(dest) : (req.startPoint.source !== 'center' && req.startPoint.source !== 'harbor' ? req.startPoint : centerOf(dest));
   return req;
 }
 

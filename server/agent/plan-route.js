@@ -18,6 +18,11 @@ function parsePlanBody(body) {
   const r = b.request && typeof b.request === 'object' && !Array.isArray(b.request) ? b.request : null;
   if (!r) return { error: 'invalid request' };
   if (!String(r.dest || '').trim()) return { error: 'dest required' };
+  // 前端用 Places 查好的起訖點座標：只收台灣範圍內的數字，其餘一律當作沒給
+  const coordOf = (c) => {
+    const lat = Number(c && c.lat), lng = Number(c && c.lng);
+    return Number.isFinite(lat) && Number.isFinite(lng) && lat > 21.5 && lat < 26.5 && lng > 119 && lng < 123 ? { lat, lng } : null;
+  };
   const dur = Number(r.durationMin);
   if (r.durationMin !== undefined && (!Number.isFinite(dur) || dur < 60)) return { error: 'invalid durationMin' };
   // 一日遊才走 Agent；多日由前端維持原本的一次生成
@@ -35,6 +40,9 @@ function parsePlanBody(body) {
     desiredSpots: String(r.desiredSpots || '').slice(0, 200),
     startLocation: String(r.startLocation || '').slice(0, 60),
     endLocation: String(r.endLocation || '').slice(0, 60),
+    startCoord: coordOf(r.startCoord),
+    endCoord: coordOf(r.endCoord),
+    avoidNames: Array.isArray(r.avoidNames) ? r.avoidNames.slice(0, 20).map((x) => String(x).slice(0, 40)).filter(Boolean) : [],
     transportMode: String(r.transportMode || '').slice(0, 12),
     title: String(r.title || '').slice(0, 40)
   };

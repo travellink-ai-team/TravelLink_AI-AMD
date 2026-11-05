@@ -12,6 +12,10 @@ const P = require('../agent/planner');
 const A = require('../agent/plan-agent');
 const { parsePlanBody, mountAgentPlan } = require('../agent/plan-route');
 
+// 分流會在搜尋排序加亂數；離線測試固定成 0，mock 劇本挑到的站才每次一樣（分流本身另外用注入的亂數測）
+const realRandom = Math.random;
+Math.random = () => 0;
+
 let pass = 0, fail = 0;
 const ok = (name, cond, extra) => { if (cond) { pass++; console.log('PASS  ' + name); } else { fail++; console.log('FAIL  ' + name + (extra ? '\n      ' + extra : '')); } };
 
@@ -112,6 +116,48 @@ const last = (results, name) => (results[name] || [])[(results[name] || []).leng
   const sleepB = { name: '小長城步道 & 睡美人與哈巴狗', lat: 22.660833, lng: 121.506816 };
   ok('sameAttraction：睡美人岩的兩個別名算同一處', P.sameAttraction(sleepA, sleepB));
   ok('sameAttraction：「三和海濱公園」與「海濱公園」相距 15 km 不算', !P.sameAttraction({ name: '三和海濱公園', lat: 22.62, lng: 121.03 }, { name: '海濱公園', lat: 22.755, lng: 121.158 }));
+  // 名稱不共用字、但在同一個園區裡：看 OSM 輪廓（app/osm-boundary-data.js）
+  const dpark = require('../agent/data');
+  ok('sameAttraction：鷺鷥湖在臺東森林公園裡算同一處', P.sameAttraction(dpark.findPlace('台東森林公園'), dpark.findPlace('鷺鷥湖')));
+  ok('sameAttraction：龍鳳佛堂在鯉魚山上算同一處', P.sameAttraction(dpark.findPlace('鯉魚山'), dpark.findPlace('臺東龍鳳佛堂')));
+  ok('sameAttraction：鷺鷥湖與活水湖都在森林公園裡算同一處', P.sameAttraction(dpark.findPlace('鷺鷥湖'), dpark.findPlace('活水湖')));
+  ok('sameAttraction：相鄰的海濱公園與鐵花新聚落不算', !P.sameAttraction(dpark.findPlace('海濱公園'), dpark.findPlace('鐵花新聚落')));
+
+  // 起訖點：本地資料認不得的門牌／路名，用前端查好的座標排程（不再退回目的地中心）
+  const roadReq = P.normalizeRequest({ ...TAITUNG, startLocation: '常德路', endLocation: '常德路', startCoord: { lat: 22.7507, lng: 121.1332 }, endCoord: { lat: 22.7507, lng: 121.1332 } });
+  ok('起點：路名＋座標 → 用使用者座標，挑景點的中心也跟著移', roadReq.startPoint.source === 'user' && roadReq.startPoint.lat === 22.7507 && roadReq.center === roadReq.startPoint && roadReq.endPoint.source === 'user', JSON.stringify(roadReq.startPoint));
+  const noCoordReq = P.normalizeRequest({ ...TAITUNG, startLocation: '常德路' });
+  ok('起點：路名沒座標 → 照舊用目的地中心', noCoordReq.startPoint.source === 'center' && noCoordReq.startPoint.name === '常德路');
+  const farReq = P.normalizeRequest({ ...TAITUNG, startLocation: '忠孝東路', startCoord: { lat: 25.04, lng: 121.55 } });
+  ok('起點：座標離目的地太遠（台北）→ 不採用', farReq.startPoint.source === 'center');
+  const stationReq = P.normalizeRequest({ ...TAITUNG, startLocation: '台東車站', startCoord: { lat: 22.7, lng: 121.1 } });
+  ok('起點：本地認得的地名優先於座標', stationReq.startPoint.source === 'local');
+  const greenUser = P.normalizeRequest({ ...GREEN, startLocation: '綠島民宿', startCoord: { lat: 22.75, lng: 121.15 } });
+  ok('起點：離島只收島上的座標（本島座標不採用）', greenUser.startPoint.source === 'harbor');
+
+  // 第一層分流：分數相近的景點每次排序不同；最近排過的往後放
+  const divReq = P.normalizeRequest(TAITUNG);
+  const topOf = async (seed) => {
+    let x = seed;
+    const rand = () => { x = (x * 9301 + 49297) % 233280; return x / 233280; };
+    const res = await A.runTool({ req: divReq, allowed: new Set(), random: rand }, 'search_local_poi', {});
+    return res.results.map((p) => p.name);
+  };
+  const orders = new Set();
+  for (const seed of [1, 2, 3, 4, 5, 6, 7, 8]) orders.add((await topOf(seed)).slice(0, 5).join('|'));
+  ok('分流：同樣條件、不同亂數 → 候選順序不會每次都一樣', orders.size >= 3, `${orders.size} 種`);
+  const poiBase = await A.runTool({ req: divReq, allowed: new Set(), random: () => 0 }, 'search_local_poi', {});
+  const firstName = poiBase.results[0].name;
+  const avoidReq = P.normalizeRequest({ ...TAITUNG, avoidNames: [firstName] });
+  const avoidRes = await A.runTool({ req: avoidReq, allowed: new Set(), random: () => 0 }, 'search_local_poi', {});
+  ok('分流：上次排過的第一名會往後放', avoidRes.results[0].name !== firstName, `${firstName} → ${avoidRes.results[0].name}`);
+  const foodBase = await A.runTool({ req: divReq, allowed: new Set(), random: () => 0 }, 'search_restaurants', {});
+  const foodAvoid = await A.runTool({ req: P.normalizeRequest({ ...TAITUNG, avoidNames: [foodBase.results[0].name] }), allowed: new Set(), random: () => 0 }, 'search_restaurants', {});
+  ok('分流：上次排過的餐廳也往後放', foodAvoid.results[0].name !== foodBase.results[0].name);
+  ok('parsePlanBody：座標只收台灣範圍', parsePlanBody({ request: { dest: '台東', startCoord: { lat: 40, lng: 121 }, endCoord: { lat: 22.75, lng: 121.13 } } }).request.startCoord === null
+    && parsePlanBody({ request: { dest: '台東', endCoord: { lat: 22.75, lng: 121.13 } } }).request.endCoord.lat === 22.75);
+  void realRandom;
+
   ok('sameAttraction：缺座標不判同一處（避免跳過距離限制）', !P.sameAttraction({ name: '海濱公園' }, { name: '三和海濱公園', lat: 22.62, lng: 121.03 }));
   ok('sameAttraction：相鄰 80 m 的不同景點不算', !P.sameAttraction({ name: '臺東故事館', lat: 22.7935, lng: 121.1235 }, { name: '鐵花新聚落', lat: 22.7929, lng: 121.124 }));
   const gctx = { req: greenReq, allowed: new Set(), failedRounds: 0, getForecast: async () => null };

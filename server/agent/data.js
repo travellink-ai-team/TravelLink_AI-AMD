@@ -22,13 +22,30 @@ function loadWindowFile(file, key) {
 
 const normName = (s) => String(s || '').replace(/臺/g, '台').replace(/\s+/g, '').toLowerCase();
 
+// （與 crawler/worker.js 同一套規則；舊資料檔還沒整理時，這裡讀進來也會先拆好）
+// 店家在 Google 登記的名稱常夾營業備註：「台東客來吃樂（店休不固定，請查詢粉絲專頁））」、
+// 「日日麵所．Daily Pasta (3月底營業)」。直接當站名會出現在行程卡、語音導覽、地圖標籤上，
+// 所以把括號裡的營業備註拆出來放 nameNote，名稱只留店名。分店名（「台東正氣店」）不含這些字，不受影響。
+const NAME_NOTE_RE = /\s*[（(]([^（）()]*(?:店休|公休|休息|營業|請(?:看|查|洽|參考)|IG|粉絲|臉書|FB|預約|月底|月初)[^（）()]*)[）)]+\s*/gi;
+function splitNameNote(name) {
+  const raw = String(name || '');
+  const notes = [];
+  const clean = raw.replace(NAME_NOTE_RE, (_m, note) => { notes.push(note.trim()); return ' '; }).replace(/\s+/g, ' ').trim();
+  return clean.length >= 2 && notes.length ? { name: clean, note: notes.join('；') } : { name: raw, note: '' };
+}
+
+
 function flatten(buckets, kindDefault) {
   const out = [];
   const seen = new Set();
   for (const [region, list] of Object.entries(buckets)) {
     if (!Array.isArray(list)) continue;
-    for (const p of list) {
+    for (let p of list) {
       if (!p || !p.name || !Number.isFinite(p.lat) || !Number.isFinite(p.lng)) continue;
+      if (!p.nameNote) {
+        const s = splitNameNote(p.name);
+        if (s.note) p = { ...p, name: s.name, nameNote: s.note };
+      }
       const key = normName(p.name);
       if (seen.has(key)) continue;
       seen.add(key);
