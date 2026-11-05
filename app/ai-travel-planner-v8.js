@@ -16344,6 +16344,7 @@
       '【修改行程】actions 只是給使用者的建議：畫面會列出來，使用者按「套用」才會真的修改。reply 不要說「已經幫你改好」「已為您將…」，要用建議的語氣，例如「建議把加路蘭換成臺東美術館，確認後按『套用』」。',
       '【延續對話】context 的【先前對話】是這次聊天的前文。使用者說「換一間」「別間」「再推薦」「太貴了」等沒講類型的話時，一律延續前文正在談的類型與時段（例如在談早午餐、早餐店，就繼續推早午餐／早餐店，不可改推午餐、晚餐或景點），並保留前文的條件（地點、預算、營業時間）。',
       '【已否決】先前對話中使用者嫌棄過（太貴、沒開、不喜歡、人太多）或放棄過的店家與景點，之後都不可再推薦或放進 actions；說「太貴」時，新推薦要明顯比被嫌貴的那間便宜。不可把前面已推薦過、使用者沒接受的店換個說法再推一次。',
+      '【行程以目前為準】哪些站在行程裡，只看 context 的「目前行程」。先前對話裡提出但沒套用的建議（例如新增某間店）並不在行程中：使用者要換掉那個建議時，改提新的 add_stop，不可對它用 replace_stop 或 remove_stop。',
       '回傳必須是 JSON，不要使用 markdown code block。',
       '【重要指令】當使用者明確要求「新增」景點或行程時，請務必使用 "add_stop" 動作，千萬不要使用 "replace_stop" 覆蓋原有的行程。',
       '【重要指令】新增景點時，stop 請一併提供 "景點座標"，格式為 {"lat": 數字, "lng": 數字}；若已知 Firebase 中的同名景點，請沿用相同座標與資訊，不要重新生成。',
@@ -18223,7 +18224,9 @@
       });
       aiConversationHistory.push({ role: 'user', text: userMessage });
       const proposalNote = proposedActions.length
-        ? `\n（提出修改建議：${proposedActions.map(describeChatAction).map((r) => `${r.tag} ${r.text}`).join('；')}）`
+        // 一定要寫「尚未套用」：只寫「提出修改建議」時，模型下一輪會把沒套用的新增當成已在行程，
+        // 接著提出「替換 66萊樂 → …」，卡片就顯示「目前行程找不到這一站」（2026-11-05 正式站實測）。
+        ? `\n（提出修改建議，尚未套用、行程沒有變動：${proposedActions.map(describeChatAction).map((r) => `${r.tag} ${r.text}`).join('；')}）`
         : '';
       aiConversationHistory.push({ role: 'ai', text: replyLines.join('\n') + proposalNote });
     } catch (error) {
