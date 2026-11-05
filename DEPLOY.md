@@ -553,5 +553,10 @@ netstat -an | findstr ":3001"
   ```
 - **控制台**：`TravelLink_AI-AMD\server\proxy-control.bat` 管 3011；舊網站的代理用 `UIUX\server` 那一份。
 - **AMD 端點備援**：`server/.env` 設了 `AMD_LLM_FALLBACK_BASE_URL`／`AMD_LLM_FALLBACK_API_KEY`（組員 VM 的反向代理，網址與金鑰不進 repo）時，直連工研院連不上或回 401/403 會**自動**改走備援，5 分鐘後再試直連，切換與恢復都會寫進 `server/logs/proxy.out.log`／`proxy.err.log`。改 `.env` 後要重啟 3011 代理。測試：`node server/test/amd-failover.test.js`（本機假伺服器，不打真端點）。
+- **行程生成代理人預設開啟（2026-11-04）**：`app/weather.env.js`（gitignored，換機器要手動加）的 `TRAVEL_APP_CONFIG` 加了 `AGENT_PLAN_ENABLED: true`，AMD 站的一日遊因此一律先由 gpt-oss-120b 代理人規劃（`POST /api/agent/plan`，SSE；前端是 `app/agent-plan-client.js`）。兩天一夜等多日行程仍走原本的一次生成。
+  - **舊網站不要加**：舊站文字 AI 是 Gemini，代理人只在 3011 代理（`AI_PROVIDER=amd`）上有意義。
+  - **自動退回**：未登入、`API_PROXY_BASE` 沒設、代理人回錯，或 20 秒內沒有任何事件（總上限 100 秒）時，會自動改走原本的一次生成，使用者不會卡住。
+  - **暫時關閉／開啟**：網址加 `?agentPlan=0` 強制關、`?agentPlan=1` 強制開，優先於設定檔，方便展場對照或排查問題。要整站關掉，就把設定改成 `false` 或刪掉；這個檔是 `no-cache`，重新整理就生效，不用重啟代理或跳版本號。
+  - **限流**：後端每位登入使用者 10 分鐘 60 次（`server/agent/plan-route.js`），超過就回 429，前端改走一般生成。
 - **外部設定（Console）**：Firebase Auth 授權網域、Google Maps 瀏覽器金鑰的 HTTP referrer 都要加上 `travel-link-amd.duckdns.org`。工研院端點看的是 IP，不用改。
 - **Google 登入顯示自家網域（2026-10-11）**：`app/weather.env.js` 的 `authDomain` 改為 `travel-link-amd.duckdns.org`，nginx 443 站加了 `location ^~ /__/` 反向代理到 `project-720a680b-3ad1-40d1-b07.firebaseapp.com`，Google 帳戶選擇畫面因此顯示本站而非 `*.firebaseapp.com`。前提是 Google Cloud OAuth 用戶端（Web client (auto created by Google Service)）已加入 JavaScript 來源 `https://travel-link-amd.duckdns.org` 與重新導向 URI `https://travel-link-amd.duckdns.org/__/auth/handler`，否則登入會出現 `redirect_uri_mismatch`。改 nginx 前的備份是 `nginx.conf.bak-20261011-amd-authdomain`。

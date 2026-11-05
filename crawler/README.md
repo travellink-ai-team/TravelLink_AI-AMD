@@ -320,6 +320,39 @@ node worker.js --crawl-parking --source=gov             # 只跑原本的縣府 
 - 由 `..\ai-travel-planner-v8.html` 以 `<script src="parking-data.js">` 載入；集合為空時
   `export:local` 會跳過匯出、前端直接退回 TDX/Places（不會噴錯）。
 
+## 大景點離線邊界（export:boundaries → osm-boundary-data.js）
+
+行程地圖會把「大景點」（合併了好幾個子景點的園區）畫成半透明區塊，再換成 OpenStreetMap 的真實輪廓。
+原本每次開地圖都即時打公開 Overpass；公開實例 2026-10 起常整批滿載（立刻回 502「at capacity」或一直沒回應），
+使用政策也要求自動化用途別直接打公開端點。所以改成這裡一次抓好、存成靜態檔，前端先查本地。
+
+有兩種產生方式，輸出同一個檔、同一種格式：
+
+**A. Geofabrik 台灣 OSM 檔（推薦，2026-11-05 實際用這個產生）**：不打任何 API，約 20 秒跑完。
+
+```powershell
+python -m pip install --user osmium     # pyosmium，只要裝一次
+# 下載 https://download.geofabrik.de/asia/taiwan-latest.osm.pbf（約 330 MB，每日更新）到 repo 以外的資料夾
+python osm-boundaries-from-pbf.py <taiwan-latest.osm.pbf 的路徑>            # 加 --dry-run 只預覽
+```
+
+**B. Overpass（不用下載大檔，但公共實例滿載時可能跑不完）**：
+
+```powershell
+npm run export:boundaries:dry   # 預覽，不寫檔
+npm run export:boundaries       # 寫入 app/osm-boundary-data.js（window.WAI_OSM_BOUNDARY_DATA）
+npm run export:boundaries -- --force   # 全部重查（例如 poi-data.js 大改、或想更新 OSM 新畫的輪廓）
+```
+
+- 兩種方式都**不需要 Firestore 憑證、不用 Google 金鑰**。以下說明 B，A 的比對規則相同（見腳本開頭註解）。
+- 景點直接讀 `app/poi-data.js`（只取 `kind: 'scenic'`），每 10 個景點合成一支 Overpass 查詢（名稱過濾 + 3 km 範圍，台／臺 兩種寫法都配）。
+- **可續跑（B）**：每批成功就存檔，已查過的景點記在檔內 `__done`。Overpass 滿載導致部分批次失敗時，稍後再跑同一個指令只會補還沒查到的。重試／退避沿用停車場 OSM 的 `fetchOverpassElements`（`OVERPASS_MAX_ROUNDS`、`OVERPASS_API_URL` 一樣適用）。A 產生的檔把全部景點都記進 `__done`，之後跑 B 只會補 `poi-data.js` 新增的景點。
+- **User-Agent 不能含 crawler／bot**：overpass-api.de 會直接回 406（2026-11-04 查出，`crawl:parking --source=osm` 以前在本機 406 也是這個原因，已一併修正）。
+- **檔案只存候選面**（名稱與景點互相包含、質心在 3 km 內，已排除水體／海岸／行政區），頂點抽稀到 120 點、座標取到小數 5 位。最後挑哪個面由前端 `pickOsmBoundary` 用與即時查詢相同的規則決定。
+- **前端**：`ai-travel-planner-v8.js` 的 `fetchOsmBoundaryPath` 先查本地檔，沒有符合的才退回 `/api/overpass`（代理在端點全掛時會立刻回失敗，地圖維持近似區塊）。
+- **授權**：OSM 資料是 ODbL。地圖畫出 OSM 邊界時左下角會出現「景點邊界 © OpenStreetMap」。
+- OSM 的輪廓變動很少，不需要排程；`poi-data.js` 新增景點後再跑一次（不加 `--force`）即可補上新景點。
+
 ## 每兩週自動爬餐廳（Windows 工作排程）
 
 由 [`run-food-crawl.bat`](run-food-crawl.bat) + 工作排程執行，工作名稱 **`WanderAI Food Crawl`**，每 2 週週日 03:00，輸出寫到 `crawler/crawl-food.log`。
@@ -403,6 +436,7 @@ npm run cleanup:collab
 | `..\poi-data.js` | `window.WAI_POI_DATA` | `export:local`（資料來自 `verify:places` + `enrich:fees`） | 景點/座標校正有變時：`verify:places -- --force` → `export:local`；門票有變時：`enrich:fees -- --force` → `export:local` |
 | `..\restaurant-data.js` | `window.WAI_RESTAURANT_DATA` | `crawl:food` | 每兩週自動；要立即更新就手動 `crawl:food` |
 | `..\parking-data.js` | `window.WAI_PARKING_DATA` | `export:local`（資料來自 `crawl:parking`） | 縣府資料「不定期更新」，需要時手動 `crawl:parking -- --force` → `export:local` |
+| `..\osm-boundary-data.js` | `window.WAI_OSM_BOUNDARY_DATA` | `osm-boundaries-from-pbf.py`（Geofabrik）或 `export:boundaries`（Overpass）；景點清單取自 `poi-data.js` | `poi-data.js` 大改時用 Geofabrik 檔重跑；只新增幾個景點時 `export:boundaries` 會只補新的 |
 | [`app/attraction-fee-config.js`](../app/attraction-fee-config.js) | `window.WAI_ATTRACTION_FEE` | 手動維護（非爬蟲產出） | 想覆蓋 `poi-data.js` 門票時直接編輯，不必重跑爬蟲 |
 
 前兩者為自動產生檔，請勿手動編輯；`attraction-fee-config.js` 相反，是唯一預期手動編輯的覆蓋層。

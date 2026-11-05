@@ -45,6 +45,7 @@ const VERIFY_PLACES_MODE = !!(argv['verify-places'] || argv.mode === 'verify-pla
 const ENRICH_FEES_MODE = !!(argv['enrich-fees'] || argv.mode === 'enrich-fees');
 const CRAWL_FOOD_MODE = !!(argv['crawl-food'] || argv.mode === 'crawl-food');
 const CRAWL_PARKING_MODE = !!(argv['crawl-parking'] || argv.mode === 'crawl-parking');
+const EXPORT_BOUNDARIES_MODE = !!(argv['export-boundaries'] || argv.mode === 'export-boundaries');
 const CLEANUP_COLLAB_MODE = !!(argv['cleanup-collab'] || argv.mode === 'cleanup-collab');
 const CLEANUP_DAYS = parseInt(argv.days || process.env.CLEANUP_COLLAB_DAYS || '7', 10);
 const FORCE = !!argv.force;
@@ -52,6 +53,7 @@ const VERIFY_NEAR_METERS = parseInt(process.env.VERIFY_NEAR_METERS || '5000', 10
 const EXPORT_LOCAL_PATH = process.env.EXPORT_LOCAL_PATH || path.resolve(__dirname, '..', 'app', 'poi-data.js');
 const RESTAURANT_DATA_PATH = process.env.RESTAURANT_DATA_PATH || path.resolve(__dirname, '..', 'app', 'restaurant-data.js');
 const PARKING_DATA_PATH = process.env.PARKING_DATA_PATH || path.resolve(__dirname, '..', 'app', 'parking-data.js');
+const BOUNDARY_DATA_PATH = process.env.BOUNDARY_DATA_PATH || path.resolve(__dirname, '..', 'app', 'osm-boundary-data.js');
 const PARKING_COLLECTION = process.env.PARKING_COLLECTION || 'parking_lots';
 // 臺東縣政府公有及民營路外停車場（政府資料開放平臺 dataset 165292）。無經緯度，crawler 端一次性地理編碼。
 const TAITUNG_PARKING_XLSX_URL = process.env.TAITUNG_PARKING_XLSX_URL
@@ -367,14 +369,15 @@ async function crawlParking(db) {
 // 但 poi-data.js 有 280 個台東景點——鄉鎮景點幾乎必然查不到停車場，前端只好一路印
 // 「停車待確認」。OSM 的 amenity=parking 在台灣鄉間由在地社群長期維護，覆蓋好很多，
 // 而且 Overpass API 免金鑰、免費用，符合本專案 local-first 壓 API 成本的設計。
-// 依序嘗試多個 Overpass 實例：主站 overpass-api.de 對部分網路環境會直接回 406
-// （實測本機就是），單一端點會讓整個匯入靜默失敗。OVERPASS_API_URL 可指定單一端點覆蓋。
+// 依序嘗試多個 Overpass 實例，單一端點會讓整個匯入靜默失敗。OVERPASS_API_URL 可指定單一端點覆蓋。
+// 主站 overpass-api.de 以前一直回 406，2026-11-04 查出原因是 User-Agent 含「crawler」被它的
+// 機器人過濾擋掉（換掉這個字就正常排隊），不是網路環境問題，所以主站放回第一順位。
 const OVERPASS_ENDPOINTS = process.env.OVERPASS_API_URL
   ? [process.env.OVERPASS_API_URL]
   : [
-    'https://overpass.kumi.systems/api/interpreter',
+    'https://overpass-api.de/api/interpreter',
     'https://overpass.private.coffee/api/interpreter',
-    'https://overpass-api.de/api/interpreter'
+    'https://overpass.kumi.systems/api/interpreter'
   ];
 // 已排除的端點（實測）：
 //  - overpass.osm.jp：憑證過期（certificate has expired）
@@ -467,11 +470,12 @@ const OVERPASS_MAX_ROUNDS = parseInt(process.env.OVERPASS_MAX_ROUNDS || '3', 10)
 const OVERPASS_BACKOFF_MS = [15000, 45000, 90000];
 
 // 逐一嘗試端點，每個端點先 GET 再 POST；整輪失敗就退避後重試，全部用完才放棄。
-async function fetchOverpassElements(query) {
+async function fetchOverpassElements(query, { allowEmpty = false, timeoutMs = 90000 } = {}) {
   const headers = {
     'Accept': 'application/json',
-    // Overpass 公共實例要求可辨識的 UA，否則可能被限流
-    'User-Agent': 'TravelLinkAI-crawler/1.0 (+https://travel-link-ai.duckdns.org)'
+    // Overpass 公共實例要求可辨識的 UA，否則可能被限流。
+    // UA 裡不能有 crawler／bot 之類的字：overpass-api.de 會直接回 406（實測）
+    'User-Agent': 'TravelLinkAI/1.0 (+https://travel-link-amd.duckdns.org)'
   };
   let lastRequestAt = 0;
   const politeWait = async () => {
@@ -492,14 +496,14 @@ async function fetchOverpassElements(query) {
           const res = method === 'get'
             // 每次嘗試上限 90s（對齊查詢本身的 [timeout:90]）：公共實例時常逾時或 5xx，
             // 拖太久只是白等，快點換下一個端點比較實際。
-            ? await axios.get(url, { params: { data: query }, headers, timeout: 90000 })
+            ? await axios.get(url, { params: { data: query }, headers, timeout: timeoutMs })
             : await axios.post(url, `data=${encodeURIComponent(query)}`,
-              { headers: { ...headers, 'Content-Type': 'application/x-www-form-urlencoded' }, timeout: 90000 });
+              { headers: { ...headers, 'Content-Type': 'application/x-www-form-urlencoded' }, timeout: timeoutMs });
           const elements = Array.isArray(res.data && res.data.elements) ? res.data.elements : [];
           // 0 筆一律當失敗換下一個端點：台東不可能一個停車場都沒有，回 0 代表這個鏡像
           // 根本沒有這個區域的資料（例如只涵蓋單一國家的鏡像）。
           // 若當成成功，匯入會靜默地什麼都不做。
-          if (!elements.length) {
+          if (!elements.length && !(allowEmpty && res.data && Array.isArray(res.data.elements))) {
             console.warn(`Overpass 回 0 筆（${method.toUpperCase()} ${url}）→ 視為該鏡像無此區域資料，換下一個`);
             continue;
           }
@@ -2228,7 +2232,177 @@ async function cleanupCollab(db) {
   console.log('Cleanup-collab summary', { scanned, deleted, kept, days: CLEANUP_DAYS, dryRun: DRY });
 }
 
+// ── 大景點離線邊界（OpenStreetMap）→ app/osm-boundary-data.js ─────────────────
+// 行程地圖會把「大景點」畫成區塊，原本每次開地圖都即時打公開 Overpass 抓真實輪廓；
+// 公開實例 2026-10 起常整批滿載（502 at capacity／逾時），使用政策也要求自動化用途別直接打公開端點。
+// 所以改成這裡一次抓好、存成靜態檔，前端先查本地（ai-travel-planner-v8.js fetchOsmBoundaryPath）。
+// 景點來源是 app/poi-data.js（不需要 Firestore）。只做「候選面」：名稱與某景點互相包含、離景點 3 km 內，
+// 最後挑哪一個面仍由前端 pickOsmBoundary 用同一套規則決定（名稱嚴格比對、質心距離、面積上限）。
+// 資料授權：ODbL，前端畫出 OSM 邊界時要標示「© OpenStreetMap contributors」。
+const BOUNDARY_AROUND_M = 3000;      // 前端查詢半徑的上限（Math.min(3000, …)）
+const BOUNDARY_BATCH = 10;           // 一支 union 查詢放幾個景點；太多公共實例容易逾時
+const BOUNDARY_MAX_PTS = 120;        // 與前端 localStorage 快取同樣的抽稀上限
+const OSM_BAD_NATURAL = /^(water|bay|strait|coastline|wetland|reef|shoal|cape|peninsula)$/i;
+
+function boundaryNameCore(name) {
+  return String(name || '').replace(/[（(][^）)]*[）)]/g, '').trim();
+}
+function boundaryNorm(name) {
+  return boundaryNameCore(name).replace(/臺/g, '台').toLowerCase().replace(/[^\p{L}\p{N}]+/gu, '');
+}
+// Overpass 正規表達式：跳脫特殊字元，台／臺 兩種寫法都要配到（OSM 多寫「臺東」）
+function boundaryNameRegex(name) {
+  const s = boundaryNameCore(name).replace(/[\\^$.*+?()[\]{}|"]/g, '\\$&');
+  return s.length >= 2 ? s.replace(/[台臺]/g, '[台臺]') : '';
+}
+function boundaryDistM(a, b) {
+  const R = 6371000, toRad = (d) => d * Math.PI / 180;
+  const dLat = toRad(b.lat - a.lat), dLng = toRad(b.lng - a.lng);
+  const h = Math.sin(dLat / 2) ** 2 + Math.cos(toRad(a.lat)) * Math.cos(toRad(b.lat)) * Math.sin(dLng / 2) ** 2;
+  return 2 * R * Math.asin(Math.sqrt(h));
+}
+function boundaryPts(geom) {
+  return (Array.isArray(geom) ? geom : [])
+    .map((g) => ({ lat: Number(g.lat), lng: Number(g.lon) }))
+    .filter((p) => Number.isFinite(p.lat) && Number.isFinite(p.lng));
+}
+const samePt = (a, b) => Math.abs(a.lat - b.lat) < 1e-7 && Math.abs(a.lng - b.lng) < 1e-7;
+function ringArea(ring) {
+  let a = 0;
+  for (let i = 0; i < ring.length; i++) { const p = ring[i], q = ring[(i + 1) % ring.length]; a += p.lng * q.lat - q.lng * p.lat; }
+  return Math.abs(a) / 2;
+}
+// multipolygon 的 outer 常由好幾段 way 首尾相接組成：先接成封閉環，再取面積最大的
+function stitchOuterRings(members) {
+  const segs = members.filter((m) => m && m.role === 'outer').map((m) => boundaryPts(m.geometry)).filter((s) => s.length >= 2);
+  const rings = [];
+  while (segs.length) {
+    let ring = segs.shift();
+    let grew = true;
+    while (!samePt(ring[0], ring[ring.length - 1]) && grew) {
+      grew = false;
+      for (let i = 0; i < segs.length; i++) {
+        const s = segs[i], end = ring[ring.length - 1];
+        if (samePt(s[0], end)) ring = ring.concat(s.slice(1));
+        else if (samePt(s[s.length - 1], end)) ring = ring.concat(s.slice(0, -1).reverse());
+        else continue;
+        segs.splice(i, 1); grew = true; break;
+      }
+    }
+    if (ring.length >= 4 && samePt(ring[0], ring[ring.length - 1])) rings.push(ring.slice(0, -1));
+  }
+  return rings.sort((a, b) => ringArea(b) - ringArea(a))[0] || null;
+}
+function elementRing(el) {
+  if (el.type === 'way') {
+    const r = boundaryPts(el.geometry);
+    return r.length >= 4 && samePt(r[0], r[r.length - 1]) ? r.slice(0, -1) : null; // 開放線（道路/步道）不要
+  }
+  if (el.type === 'relation' && Array.isArray(el.members)) return stitchOuterRings(el.members);
+  return null;
+}
+function simplifyRing(ring, maxPts) {
+  if (ring.length <= maxPts) return ring;
+  const step = Math.ceil(ring.length / maxPts);
+  const out = [];
+  for (let i = 0; i < ring.length; i += step) out.push(ring[i]);
+  return out;
+}
+
+async function exportBoundaries() {
+  const poiFile = path.resolve(__dirname, '..', 'app', 'poi-data.js');
+  const sandbox = { window: {} };
+  require('vm').runInNewContext(fs.readFileSync(poiFile, 'utf8'), sandbox);
+  const data = sandbox.window.WAI_POI_DATA || {};
+  const pois = [];
+  const seen = new Set();
+  for (const key of Object.keys(data)) {
+    if (!Array.isArray(data[key])) continue;
+    for (const p of data[key]) {
+      if (!p || p.kind !== 'scenic' || !Number.isFinite(p.lat) || !Number.isFinite(p.lng)) continue;
+      const term = boundaryNameRegex(p.name);
+      const k = `${boundaryNorm(p.name)}@${p.lat.toFixed(3)},${p.lng.toFixed(3)}`;
+      if (!term || seen.has(k)) continue;
+      seen.add(k);
+      pois.push({ key: k, name: p.name, norm: boundaryNorm(p.name), lat: p.lat, lng: p.lng, term });
+    }
+  }
+
+  // 可續跑：公共實例常常一次跑不完，已查過的景點記在檔案的 __done，下次只補沒查到的（--force 全部重查）
+  const byId = new Map(); // `${type}/${id}` → { n, r }
+  const done = new Set();
+  if (!FORCE && fs.existsSync(BOUNDARY_DATA_PATH)) {
+    try {
+      const prev = { window: {} };
+      require('vm').runInNewContext(fs.readFileSync(BOUNDARY_DATA_PATH, 'utf8'), prev);
+      const old = prev.window.WAI_OSM_BOUNDARY_DATA || {};
+      (old.items || []).forEach((it) => byId.set(it.id, { n: it.n, r: it.r }));
+      (old.__done || []).forEach((k) => done.add(k));
+    } catch (e) { console.warn('既有邊界檔讀取失敗，從頭開始：', e.message); }
+  }
+  const todo = pois.filter((p) => !done.has(p.key));
+  const limited = argv.limit !== undefined ? todo.slice(0, LIMIT) : todo;
+  console.log(`Export-boundaries：景點 ${pois.length} 個，已完成 ${done.size}，本次查 ${limited.length} 個（每批 ${BOUNDARY_BATCH}）`);
+
+  const write = () => {
+    const items = [...byId.entries()].map(([id, v]) => ({ id, ...v })).sort((a, b) => a.id.localeCompare(b.id));
+    const body = `// Auto-generated by crawler (npm run export:boundaries). Do not edit by hand.
+// 景點邊界 © OpenStreetMap contributors，ODbL 1.0 授權（https://www.openstreetmap.org/copyright）
+window.WAI_OSM_BOUNDARY_DATA = ${JSON.stringify({
+      __generatedAt: new Date().toISOString(),
+      __attribution: '© OpenStreetMap contributors (ODbL)',
+      __done: [...done].sort(),
+      items
+    })};
+`;
+    if (DRY) return { items: items.length, kb: Math.round(body.length / 1024) };
+    fs.writeFileSync(BOUNDARY_DATA_PATH, body, 'utf8');
+    return { items: items.length, kb: Math.round(body.length / 1024) };
+  };
+
+  let failedBatches = 0;
+  for (let i = 0; i < limited.length; i += BOUNDARY_BATCH) {
+    const batch = limited.slice(i, i + BOUNDARY_BATCH);
+    const groups = batch.map((p) => `wr["name"~"${p.term}"](around:${BOUNDARY_AROUND_M},${p.lat},${p.lng});`).join('');
+    const query = `[out:json][timeout:60];(${groups});out geom;`;
+    console.log(`批次 ${i / BOUNDARY_BATCH + 1}/${Math.ceil(limited.length / BOUNDARY_BATCH)}：${batch.map((p) => p.name).join('、')}`);
+    const elements = await fetchOverpassElements(query, { allowEmpty: true, timeoutMs: 90000 });
+    if (!elements) { failedBatches += 1; console.warn('  → 這批全部端點都失敗，略過'); continue; }
+    let kept = 0;
+    for (const el of elements) {
+      const tags = (el && el.tags) || {};
+      if (!tags.name || tags.boundary || tags.place || tags.waterway || tags.water) continue;
+      if (tags.natural && OSM_BAD_NATURAL.test(tags.natural)) continue;
+      const ring = elementRing(el);
+      if (!ring || ring.length < 3) continue;
+      const cen = { lat: ring.reduce((s, p) => s + p.lat, 0) / ring.length, lng: ring.reduce((s, p) => s + p.lng, 0) / ring.length };
+      const n = boundaryNorm(tags.name);
+      // 名稱與這批某個景點互相包含、且質心在 3 km 內才收；海灣、行政區那種超大面前端也會擋，這裡先擋 3 km 以上
+      const near = batch.some((p) => (n.includes(p.norm) || p.norm.includes(n)) && boundaryDistM(cen, p) <= BOUNDARY_AROUND_M);
+      const ringR = ring.reduce((mx, p) => Math.max(mx, boundaryDistM(cen, p)), 0);
+      if (!near || ringR > 3000) continue;
+      byId.set(`${el.type}/${el.id}`, {
+        n: tags.name,
+        r: simplifyRing(ring, BOUNDARY_MAX_PTS).map((p) => [Math.round(p.lat * 1e5) / 1e5, Math.round(p.lng * 1e5) / 1e5])
+      });
+      kept += 1;
+    }
+    batch.forEach((p) => done.add(p.key));
+    const w = write(); // 每批成功就存檔，中途中斷也不會白跑
+    console.log(`  → Overpass 回 ${elements.length} 筆，收 ${kept} 個面（累計 ${w.items} 個面、${w.kb} KB）`);
+  }
+
+  const w = write();
+  const left = pois.filter((p) => !done.has(p.key)).length;
+  console.log(`${DRY ? 'DRY（未寫檔）' : '已寫入 ' + BOUNDARY_DATA_PATH}：${w.items} 個面、${w.kb} KB；尚未查到的景點 ${left} 個${failedBatches ? `（${failedBatches} 批失敗，Overpass 公共實例滿載時常見，稍後再跑同一個指令會只補這些）` : ''}`);
+}
+
 async function main() {
+  // 邊界匯出只讀 app/poi-data.js、打 Overpass，不需要 Firestore 憑證
+  if (EXPORT_BOUNDARIES_MODE) {
+    await exportBoundaries();
+    process.exit(0);
+  }
   const db = initFirebase();
   if (CLEANUP_COLLAB_MODE) {
     await cleanupCollab(db);

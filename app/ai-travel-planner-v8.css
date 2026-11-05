@@ -9084,3 +9084,6 @@ body.poster-viewer-open { overflow: hidden; }
 .memory-ai-meta { margin: -2px 0 8px; }
 .memory-ai-meta:empty { display: none; }
 .recap-idea-hint { text-wrap: pretty; }
+/* OSM 景點邊界的來源標示（ODbL 要求），地圖左下角 */
+.osm-attribution { margin: 0 0 2px 4px; padding: 0 5px; border-radius: 3px; font-size: 11px; line-height: 1.6; color: #444; background: rgba(255, 255, 255, .8); white-space: nowrap; }
+.osm-attribution a { color: inherit; }
