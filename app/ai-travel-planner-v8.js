@@ -20651,12 +20651,44 @@
     return _osmInFlight;
   }
 
+  // 離線邊界檔（app/osm-boundary-data.js，crawler `npm run export:boundaries` 產生）：
+  // 公開 Overpass 常滿載，所以先查本地；候選面照樣交給 pickOsmBoundary，挑選規則與即時查詢完全相同。
+  // 本地沒有符合的才退回 Overpass（代理在端點全掛時會立刻回失敗，不會卡住）。
+  const _OSM_LOCAL_ITEMS = (window.WAI_OSM_BOUNDARY_DATA && Array.isArray(window.WAI_OSM_BOUNDARY_DATA.items))
+    ? window.WAI_OSM_BOUNDARY_DATA.items : [];
+  function _localOsmBoundary(name, center, radiusMeters) {
+    if (!_OSM_LOCAL_ITEMS.length) return null;
+    const elements = [];
+    for (const it of _OSM_LOCAL_ITEMS) {
+      if (!it || !it.n || !Array.isArray(it.r) || it.r.length < 3) continue;
+      // 先用第一個頂點粗篩：pickOsmBoundary 的質心上限是 2 km、環半徑上限 2.5 km，5 km 外不可能入選
+      if (measureDistanceMeters({ lat: it.r[0][0], lng: it.r[0][1] }, center) > 5000) continue;
+      const geometry = it.r.map(([lat, lng]) => ({ lat, lon: lng }));
+      geometry.push(geometry[0]); // 檔案存的是開放環，補回封閉點才會被當成面
+      elements.push({ type: 'way', tags: { name: it.n }, geometry });
+    }
+    return elements.length ? pickOsmBoundary({ elements }, name, center, radiusMeters) : null;
+  }
+
+  // OSM 資料採 ODbL 授權：地圖上一旦畫出 OSM 邊界，就在左下角標示來源
+  let _osmAttributionMap = null;
+  function _ensureOsmAttribution() {
+    if (!map || _osmAttributionMap === map || !(window.google && google.maps && google.maps.ControlPosition)) return;
+    const el = document.createElement('div');
+    el.className = 'osm-attribution';
+    el.innerHTML = '景點邊界 © <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a>';
+    map.controls[google.maps.ControlPosition.LEFT_BOTTOM].push(el);
+    _osmAttributionMap = map;
+  }
+
   // 批次：把同一波 render 的多個大景點請求合併成「一支」Overpass union 查詢
   let _osmBatchQueue = [];
   let _osmBatchTimer = null;
   function fetchOsmBoundaryPath(name, center, radiusMeters) {
     const nm = String(name || '').trim();
     if (!nm || !center || !Number.isFinite(Number(center.lat)) || !Number.isFinite(Number(center.lng))) return Promise.resolve(null);
+    const local = _localOsmBoundary(nm, center, radiusMeters);
+    if (local) return Promise.resolve(local);
     const key = _osmKey(nm, center);
     if (_osmBoundaryCache.has(key)) return Promise.resolve(_osmBoundaryCache.get(key));
     return new Promise(resolve => {
@@ -20727,6 +20759,7 @@
         // 抓 OpenStreetMap 真實輪廓；回來後若該圖層仍是當前物件（未被重繪），換成真實邊界並加強描邊
         fetchOsmBoundaryPath(_stop.name, position, Math.max(Number(_stop.mergedRadiusMeters) || 0, 800)).then((path) => {
           if (path && path.length >= 3 && mergedAreaShapes[id] === _poly) {
+            _ensureOsmAttribution();
             _poly.setPaths(path);
             _poly.setOptions({ strokeColor: '#1f5f9e', strokeOpacity: 0.95, strokeWeight: 2 });
           }
