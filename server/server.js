@@ -8,7 +8,7 @@
  * 安全：
  *  - /api/vertex 需要 Firebase 登入（Authorization: Bearer <idToken>，firebase-admin 驗證），
  *    未登入一律 401 —— 否則任何人都能燒 Vertex 額度（帳單風險）。
- *  - 速率限制（express-rate-limit）：vertex 每 IP 10 分鐘 20 次；tdx 每 IP 10 分鐘 60 次。
+ *  - 速率限制（express-rate-limit）：vertex 每 IP 10 分鐘 200 次＋每帳號 60 次；tdx 每 IP 10 分鐘 60 次。
  *  - 路徑白名單：vertex 只放行實際使用的 model 與端點；tdx 只放行景點/停車場兩個資料路徑。
  *  - 只監聽 127.0.0.1：外部一律經 nginx 反向代理進來（nginx 需帶 X-Forwarded-For 供限流辨識來源 IP）。
  *
@@ -298,12 +298,26 @@ const VERTEX_ALLOWED_PATH = new RegExp(
   ')$'
 );
 
+// 兩層限流：
+//  - IP 層（登入驗證之前）：只擋灌爆 token 驗證的濫用，給得寬——同一個手機熱點／電信 CGNAT
+//    底下的旅伴共用同一個 IP，原本每 IP 20 次會讓整團一起被擋。
+//  - 帳號層（驗證之後，以 uid 計）：真正的用量上限。60 次＝管家聊三、四十句，或代理人失敗退回
+//    一般生成幾次（AMD 站生成預設走 /api/agent/plan，那條有自己的 planLimiter，不算這裡）。
+// 與網頁版（UIUX）2026-11-05 的修正一致。
 const vertexLimiter = rateLimit({
   windowMs: 10 * 60 * 1000,
-  max: 20, // 每 IP 10 分鐘 20 次（一次行程生成含重試/補站約 3–6 次呼叫）
+  max: 200,
   standardHeaders: true,
   legacyHeaders: false,
   message: { error: 'rate limited', message: '請求過於頻繁，請稍後再試。' }
+});
+const vertexUserLimiter = rateLimit({
+  windowMs: 10 * 60 * 1000,
+  max: 60,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: (req, res) => (req.user && req.user.uid) || ipKeyGenerator(req, res),
+  message: { error: 'rate limited', message: 'AI 使用次數暫時達到上限，請稍後再試。' }
 });
 
 // 驗證 Firebase ID token（前端登入後由 SDK 取得，隨請求帶在 Authorization 標頭）
@@ -943,7 +957,7 @@ app.post('/api/collab/join-requests/resolve', collabLimiter, requireFirebaseUser
   }
 });
 
-app.post('/api/vertex/*', vertexLimiter, requireFirebaseUser, async (req, res) => {
+app.post('/api/vertex/*', vertexLimiter, requireFirebaseUser, vertexUserLimiter, async (req, res) => {
   const upstreamPath = '/' + (req.params[0] || '');
   if (!VERTEX_ALLOWED_PATH.test(upstreamPath)) {
     return res.status(403).json({ error: 'path not allowed' });
@@ -1565,7 +1579,7 @@ app.use((err, req, res, next) => {
 
 app.listen(PORT, '127.0.0.1', () => {
   console.log(`[proxy] 代理已啟動 http://127.0.0.1:${PORT}（僅本機；對外請經 nginx /api/）`);
-  console.log('[proxy] /api/vertex：需登入 + 20req/10min/IP；/api/tdx：60req/10min/IP；/api/cwa：60req/10min/IP＋10min 快取；/api/overpass：60req/10min/IP＋24h 快取');
+  console.log('[proxy] /api/vertex：需登入 + 200req/10min/IP＋60req/10min/帳號；/api/tdx：60req/10min/IP；/api/cwa：60req/10min/IP＋10min 快取；/api/overpass：60req/10min/IP＋24h 快取');
   if (amdLlm.isEnabled()) {
     console.log('[proxy] AI_PROVIDER=amd：文字生成改走 AMD gpt-oss-120b；圖片生成仍走 Vertex'
       + (amdLlm.hasFallback() ? '；直連連不上時自動改走備援代理' : '；未設定備援代理'));
