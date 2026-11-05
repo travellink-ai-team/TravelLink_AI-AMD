@@ -706,7 +706,7 @@ window.WAI_RESTAURANT_DATA = {
       "costNote": "$200–400"
     },
     {
-      "name": "綠島哈嘍木木早午餐（歡迎線上點餐@342uizcv)公休日參考IG",
+      "name": "綠島哈嘍木木早午餐",
       "lat": 22.6696236,
       "lng": 121.46772259999999,
       "businessHours": "星期一: 06:40 – 13:40\n星期二: 06:40 – 13:40\n星期三: 06:40 – 13:40\n星期四: 06:40 – 13:40\n星期五: 06:40 – 13:40\n星期六: 06:40 – 13:40\n星期日: 06:40 – 13:40",
@@ -716,7 +716,8 @@ window.WAI_RESTAURANT_DATA = {
       "costMin": 1,
       "costMax": 200,
       "costPerPerson": 101,
-      "costNote": "$200 內"
+      "costNote": "$200 內",
+      "nameNote": "歡迎線上點餐@342uizcv；公休日參考IG"
     },
     {
       "name": "日日麵所．Daily Pasta",
@@ -1123,7 +1124,7 @@ window.WAI_RESTAURANT_DATA = {
       "costNote": "$200–400"
     },
     {
-      "name": "博文臭豆腐《池上必吃銅板美食》6/22（ㄧ）-6/24（三）公休3日",
+      "name": "博文臭豆腐",
       "lat": 23.103828399999998,
       "lng": 121.22223899999999,
       "businessHours": "星期一: 10:30 – 16:00\n星期二: 休息\n星期三: 休息\n星期四: 10:30 – 17:30\n星期五: 10:30 – 17:30\n星期六: 10:30 – 17:30\n星期日: 10:30 – 17:30",
@@ -1133,7 +1134,8 @@ window.WAI_RESTAURANT_DATA = {
       "costMin": 1,
       "costMax": 200,
       "costPerPerson": 101,
-      "costNote": "$200 內"
+      "costNote": "$200 內",
+      "nameNote": "6/22（ㄧ）-6/24（三）公休3日；池上必吃銅板美食"
     },
     {
       "name": "小虞手打烏龍麵",
