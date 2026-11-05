@@ -4,7 +4,7 @@
 //      safetySettings、client 自帶的 systemInstruction 一律丟掉
 //   2. maxOutputTokens 上限 8192（前端最大就是 8192）
 //   3. 文字模型一律加上「只做旅遊」的 systemInstruction（Vertex 與 AMD 兩條路都吃這個欄位）
-// 這是 prompt 層的限制，模型仍可能被繞過；搭配 vertexLimiter（每 IP 10 分鐘 20 次）與登入驗證一起用。
+// 這是 prompt 層的限制，模型仍可能被繞過；搭配 vertexLimiter（IP 層）＋ vertexUserLimiter（每帳號 10 分鐘 60 次）與登入驗證一起用。
 'use strict';
 
 const MAX_OUTPUT_TOKENS = 8192;
