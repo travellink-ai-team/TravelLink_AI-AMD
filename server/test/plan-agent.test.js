@@ -118,6 +118,16 @@ const last = (results, name) => (results[name] || [])[(results[name] || []).leng
   ok('sameAttraction：「三和海濱公園」與「海濱公園」相距 15 km 不算', !P.sameAttraction({ name: '三和海濱公園', lat: 22.62, lng: 121.03 }, { name: '海濱公園', lat: 22.755, lng: 121.158 }));
   // 名稱不共用字、但在同一個園區裡：看 OSM 輪廓（app/osm-boundary-data.js）
   const dpark = require('../agent/data');
+  // 店名夾營業備註：拆到 nameNote，名稱只留店名；分店名不動
+  const SN = require('../agent/data').splitNameNote;
+  const sn = (n) => SN(n);
+  ok('店名備註：括號內的店休說明', sn('台東客來吃樂（店休不固定，請查詢粉絲專頁））').name === '台東客來吃樂');
+  ok('店名備註：括號內外都有（線上點餐＋公休日）', (() => { const r = sn('綠島哈嘍木木早午餐（歡迎線上點餐@342uizcv)公休日參考IG'); return r.name === '綠島哈嘍木木早午餐' && /點餐/.test(r.note) && /公休日/.test(r.note); })(), JSON.stringify(sn('綠島哈嘍木木早午餐（歡迎線上點餐@342uizcv)公休日參考IG')));
+  ok('店名備註：半形括號、需預約', sn('小虞手打烏龍麵 （需預約）').name === '小虞手打烏龍麵' && sn('小虞手打烏龍麵 （需預約）').note === '需預約');
+  ok('店名備註：日期區間公休＋書名號宣傳詞', (() => { const r = sn('博文臭豆腐《池上必吃銅板美食》6/22（ㄧ）-6/24（三）公休3日'); return r.name === '博文臭豆腐' && /6\/22/.test(r.note) && /必吃/.test(r.note); })(), JSON.stringify(sn('博文臭豆腐《池上必吃銅板美食》6/22（ㄧ）-6/24（三）公休3日')));
+  ok('店名備註：斜線後的預約說明', sn('順大新港 黑潮海鮮餐廳/FB預約制').name === '順大新港 黑潮海鮮餐廳' && sn('順大新港 黑潮海鮮餐廳/FB預約制').note === 'FB預約制');
+  ok('店名備註：沒有斜線的「預約」不拆', sn('預約制私房菜').name === '預約制私房菜');
+  ok('店名備註：分店名不動', sn('SP夏帕義大利麵 台東正氣店').name === 'SP夏帕義大利麵 台東正氣店' && sn('東粄香傳統米食坊（台東新生店）').note === '');
   ok('sameAttraction：鷺鷥湖在臺東森林公園裡算同一處', P.sameAttraction(dpark.findPlace('台東森林公園'), dpark.findPlace('鷺鷥湖')));
   ok('sameAttraction：龍鳳佛堂在鯉魚山上算同一處', P.sameAttraction(dpark.findPlace('鯉魚山'), dpark.findPlace('臺東龍鳳佛堂')));
   ok('sameAttraction：鷺鷥湖與活水湖都在森林公園裡算同一處', P.sameAttraction(dpark.findPlace('鷺鷥湖'), dpark.findPlace('活水湖')));
