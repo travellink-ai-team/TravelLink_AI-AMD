@@ -2707,6 +2707,25 @@ function placeMealStopsAtMealTimes(stops, wizardData = {}) {
   return out;
 }
 
+// applyTripPlanningRules 會重算時刻與停留（一對一、不增刪站）；AI 規劃代理人的站要保留代理人排的結果。
+// before[i] 是重算前同一站。終點站改成代理人算好的「回到終點」時刻。
+function keepAgentSchedule(after, before, agentPlanned, wizardData) {
+  if (!agentPlanned || !Array.isArray(after) || !Array.isArray(before)) return;
+  const isClock = (t) => /^\d{1,2}:\d{2}$/.test(String(t || ''));
+  after.forEach((s, i) => {
+    const b = before[i];
+    if (!s || !b) return;
+    if (s.type === 'end') {
+      if (isClock(wizardData && wizardData._agentReturnTime)) s.time = wizardData._agentReturnTime;
+      return;
+    }
+    if (s.type === 'start') return;
+    if (isClock(b.time)) s.time = b.time;
+    const d = Number(b.duration);
+    if (Number.isFinite(d) && d > 0) s.duration = d;
+  });
+}
+
 function applyTripPlanningRules(stops, wizardData = {}) {
   const pace = wizardData.pace || '平衡';
   const maxGapMinutes = Number(wizardData.slotMinutes) || getDefaultSlotMinutes(pace);
@@ -2977,7 +2996,19 @@ function matchStopsToLivePlaces(stops, livePlaces) {
   });
 }
 
-async function fetchCoordinateFromGooglePlaces(name, destination) {
+// 同一次生成裡，起訖點會先被 AI 規劃代理人查一次、後處理再查一次：同名同目的地只打一次 Places。
+// 只快取成功的結果；查不到（null）或出錯就移除，下次再查。
+const _coordLookupCache = new Map();
+function fetchCoordinateFromGooglePlaces(name, destination) {
+  const cacheKey = `${String(name || '').trim()}|${destination || ''}`;
+  if (_coordLookupCache.has(cacheKey)) return _coordLookupCache.get(cacheKey);
+  const pending = _fetchCoordinateFromGooglePlaces(name, destination);
+  _coordLookupCache.set(cacheKey, pending);
+  pending.then((v) => { if (!v) _coordLookupCache.delete(cacheKey); }, () => _coordLookupCache.delete(cacheKey));
+  return pending;
+}
+
+async function _fetchCoordinateFromGooglePlaces(name, destination) {
   const key = window.TRAVEL_APP_CONFIG && window.TRAVEL_APP_CONFIG.GOOGLE_MAPS_API_KEY;
   if (!key || !name) return null;
   try {
@@ -2999,7 +3030,7 @@ async function fetchCoordinateFromGooglePlaces(name, destination) {
         }
       };
     }
-    const res = await placesFetch('searchText', 'places.location,places.displayName',
+    const res = await placesFetch('searchText', 'places.location,places.displayName,places.types',
       body, 10000, '座標查詢', key);
     const data = await res.json();
     const places = Array.isArray(data.places) ? data.places : [];
@@ -3009,10 +3040,29 @@ async function fetchCoordinateFromGooglePlaces(name, destination) {
       && placeNameMatchesQuery(p.displayName && p.displayName.text, name)
       && (!destCenter || getDistanceMeters(destCenter, { lat: p.location.latitude, lng: p.location.longitude }) <= maxDist));
     if (matched && matched.location) {
-      return { lat: matched.location.latitude, lng: matched.location.longitude, source: 'google_places' };
+      // 只填路名（「常德路」）時 Places 回的是 route：座標只是這條路上的一個代表點，不是使用者實際的位置
+      const isRoute = Array.isArray(matched.types) && matched.types.includes('route');
+      return { lat: matched.location.latitude, lng: matched.location.longitude, source: 'google_places', ...(isRoute ? { isRoute: true } : {}) };
     }
   } catch (e) { /* silent */ }
   return null;
+}
+
+// 使用者自填的起訖點只是路名、或根本查不到時提醒一次：路線與車程會照這個點估算，不是使用者實際的位置。
+// 起點和終點同一個字串時只講一次。
+function notifyEndpointPrecision(points) {
+  if (typeof showToast !== 'function') return;
+  const seen = new Set();
+  const notes = [];
+  for (const p of points) {
+    const text = String(p.text || '').trim();
+    if (!text || seen.has(text)) continue;
+    seen.add(text);
+    if (!p.coord) notes.push(`找不到「${text}」的位置，車程先用目的地中心估算`);
+    else if (p.coord.isRoute) notes.push(`「${text}」只是路名，會定在這條路上的一個點`);
+  }
+  if (!notes.length) return;
+  showToast(`📍 ${notes.join('；')}。填門牌或附近地標會更準。`, 'orange');
 }
 
 async function enrichMissingCoordinates(stops, destinationText) {
@@ -3444,8 +3494,12 @@ function deriveBigAreaName(memberNames, nearbyNames) {
 }
 
 // 補子景點 + 大景點名解析：對每個非端點站（含已合併站），用 Places 附近搜尋補子景點並把顯示名換成大景點名
-async function enrichBigAttractionSubSpots(stops, destination) {
+// opts.keepIdentity：AI 規劃代理人的站。代理人已用本地資料挑好景點、排好停留與時刻，
+// 這裡只補子景點標籤（地圖畫大景點範圍用），不改站名、不搬座標、不加長停留——
+// 實測會把「臺東環市自行車道」改名成附近的「鯉魚山」並把停留拉到 120 分，行程就超時了。
+async function enrichBigAttractionSubSpots(stops, destination, opts = {}) {
   if (!Array.isArray(stops) || !stops.length) return stops;
+  const keepIdentity = opts.keepIdentity === true;
   const key = window.TRAVEL_APP_CONFIG && window.TRAVEL_APP_CONFIG.GOOGLE_MAPS_API_KEY;
   if (!key) return stops;
   const otherNorms = new Set(stops.map(s => normalizeLookupText(s && s.name)).filter(Boolean));
@@ -3518,7 +3572,7 @@ async function enrichBigAttractionSubSpots(stops, destination) {
     const bigName = deriveBigAreaName([parentName, ...subs], nearbyNames);
     const bigNorm = normalizeLookupText(bigName);
     const usedByOthers = stops.some(x => x !== stop && normalizeLookupText(x.name) === bigNorm);
-    if (bigName && bigNorm !== parentNorm && !usedByOthers) {
+    if (!keepIdentity && bigName && bigNorm !== parentNorm && !usedByOthers) {
       stop.name = bigName;
       subs = [parentName, ...subs];
       stop.isMergedAttraction = true;
@@ -3529,7 +3583,7 @@ async function enrichBigAttractionSubSpots(stops, destination) {
 
     // 合併站的代表座標應落在它的大地標上（如卑南遺址→卑南遺址公園），而非沿用 AI 給的錯位座標。
     // 用 Places 以「站名」查大地標（fetchCoordinateFromGooglePlaces 內含嚴格名稱比對），在範圍內且偏移 >300m 才校正。
-    if (stop.isMergedAttraction) {
+    if (stop.isMergedAttraction && !keepIdentity) {
       try {
         const lm = await fetchCoordinateFromGooglePlaces(String(stop.name || ''), destination);
         if (lm && Number.isFinite(Number(lm.lat)) && Number.isFinite(Number(lm.lng))) {
@@ -3560,7 +3614,7 @@ async function enrichBigAttractionSubSpots(stops, destination) {
       if (finalSubs.length) stop.isMergedAttraction = true;
       // 補了子景點 → 大景點實際遊覽時間變長，依子景點數加長建議停留（只加長、不縮短）。
       // target 以固定基準算（非當前值），確保重開重跑時冪等、不會逐次累加。
-      if (finalSubs.length) {
+      if (finalSubs.length && !keepIdentity) {
         const cur = Number(stop.duration) || Number(stop.stayMin) || 30;
         const target = Math.min(120, 30 + 20 * finalSubs.length);
         const bumped = Math.max(cur, target);
@@ -3802,6 +3856,10 @@ async function optimizeGeneratedTripStops(stops, wizardData = {}, livePlaces = [
   const [_startCoords, _rawEndCoords] = await Promise.all([_resolveStart, _resolveEnd]);
   const _endCoords = _startLocCalc === _endLocCalc ? _startCoords : _rawEndCoords;
   _genPerf.mark('opt: 起訖點解析');
+  notifyEndpointPrecision([
+    { label: '起點', text: _userStartLoc, coord: _startCoords },
+    { label: '終點', text: _userEndLoc, coord: _endCoords }
+  ]);
 
   const sanitizedStops = sanitizeStopCoordinates(preMatchedStops, wizardData, poiCache);
   _sub('補齊景點座標中…');
@@ -3841,7 +3899,7 @@ async function optimizeGeneratedTripStops(stops, wizardData = {}, livePlaces = [
   const mergedNearby = _agentPlanned ? geographicallySorted : mergeNearbySubAttractions(geographicallySorted);
   // 大景區以單站進來、合併不到鄰近站時，用 Places 附近搜尋補出子景點並標記合併（只貼標籤，不加站）
   _sub('比對大景區子景點中…');
-  const enrichedNearby = await enrichBigAttractionSubSpots(mergedNearby, destination).catch(() => mergedNearby);
+  const enrichedNearby = await enrichBigAttractionSubSpots(mergedNearby, destination, { keepIdentity: _agentPlanned }).catch(() => mergedNearby);
   _genPerf.mark('opt: 大景區子景點');
   // 合併後若時間縮水，沿路線補景點填回目標時段（含回終點交通、不超時）
   _sub('檢查行程時段長度中…');
@@ -3853,6 +3911,11 @@ async function optimizeGeneratedTripStops(stops, wizardData = {}, livePlaces = [
   // 上面兩次排序只看路線順不順，會把晚餐排到第 3 站；這裡把用餐站移回時鐘走到那一餐的位置
   const mealArrangedStops = _agentPlanned ? orderedStops : placeMealStopsAtMealTimes(orderedStops, wizardData);
   const ruledStops = applyTripPlanningRules(mealArrangedStops, wizardData);
+  // AI 規劃代理人排的時刻已經含車程、營業時間、用餐時段（後端驗證過不會超時）。
+  // applyTripPlanningRules 用「不含車程、首尾相接」的方式重算，生成畫面顯示的時刻會和代理人、
+  // 行程頁都對不上（實測同一趟生成畫面寫 17:13 結束、行程頁 16:13），代理人的站一律保留原時刻。
+  // 停留時間也一樣：normalizeGeneratedStop 會把大景點改成前端自己的建議時長（實測鯉魚山 70 → 120 分），總時長就超出了。
+  keepAgentSchedule(ruledStops, mealArrangedStops, _agentPlanned, wizardData);
   const withTransport = assignTransportModes(ruledStops, wizardData.transportMode);
 
   const enrichedWizardData = {
@@ -3865,7 +3928,8 @@ async function optimizeGeneratedTripStops(stops, wizardData = {}, livePlaces = [
   const withEndpoints = injectEndpointStops(withTransport, enrichedWizardData);
   const finalStops = assignTransportModes(withEndpoints, enrichedWizardData.transportMode);
   // 建立行程：若仍超出設定時長，平均分攤縮短各景點停留（餐廳例外、每站最多縮 35%）
-  fitGeneratedStopsToTimeLimit(finalStops, wizardData);
+  // 代理人的行程後端已用車程驗證過不超時；這裡的估算不含車程差異，再壓一次只會把停留縮短、提早收尾
+  if (!_agentPlanned) fitGeneratedStopsToTimeLimit(finalStops, wizardData);
   // F5 多日：把 AI 輸出的 dayIndex 重新掛回最終站點（中間各步驟可能建新物件或增刪站）。
   // 名稱命中 → 用 AI 給的 dayIndex；未命中（合併/補站）→ 沿用前一站的天次；end 站＝最後一天。
   if (isLongTrip(wizardData.days)) {
@@ -3969,6 +4033,7 @@ async function optimizeGeneratedTripStops(stops, wizardData = {}, livePlaces = [
   // 前面的補站、刪站與缺日修正都可能改變 dayIndex；最後才依確定的天次排時間。
   // 替換景點若改了停留時長，也一併在此重新計算後續站點。
   const scheduledStops = applyTripPlanningRules(finalStops, wizardData);
+  keepAgentSchedule(scheduledStops, finalStops, _agentPlanned, wizardData);
   finalStops.splice(0, finalStops.length, ...scheduledStops);
   return finalStops;
 }

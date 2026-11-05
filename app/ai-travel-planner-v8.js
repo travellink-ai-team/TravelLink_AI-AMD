@@ -3368,7 +3368,11 @@
             // 先重驗中段站座標：修正已存檔的錯誤定位（如成功漁港→富岡漁港、比西里岸→海上）。
             // 放在合併/enrich 之前，讓後續的距離合併與附近搜尋都用校正後的座標，避免誤併或吸入別處子景點。
             await verifyStopCoordinatesWithPlaces(trip.stops, trip.region, currentTripTitle).catch(() => {});
-            const dedupedStops = mergeNearbySubAttractions(deduplicateAdjacentTripStops(trip.stops));
+            // AI 規劃代理人的行程：站與停留是代理人用車程、營業時間驗證過的，不再用距離把鄰站併成一站
+            const _agentTrip = trip.stops.some((s) => s && s.agentPlanned === true);
+            const dedupedStops = _agentTrip
+              ? deduplicateAdjacentTripStops(trip.stops)
+              : mergeNearbySubAttractions(deduplicateAdjacentTripStops(trip.stops));
             const islandConfig = getIslandFerryConfig(trip.region);
             const normalizedStops = islandConfig ? normalizeIslandHarborStops(dedupedStops, islandConfig) : dedupedStops;
             // 大景區以單站存檔時，重開即用 Places 附近搜尋補出子景點並標記合併（就地貼標籤，欄位於下方 map 帶入）
@@ -3434,6 +3438,7 @@
                     businessHours: s.businessHours || null,
                     desc: s.desc || '',
                     plannerNote: s.plannerNote || '',
+                    agentPlanned: s.agentPlanned === true,
                     isMergedAttraction: s.isMergedAttraction || false,
                     mergedSubSpots: s.mergedSubSpots || null,
                     mergedRadiusMeters: s.mergedRadiusMeters || null,
@@ -3529,6 +3534,7 @@
                 businessHours: s.businessHours || scenicRecord?.businessHours || null,
                 desc: (scenicRecord?.desc || s.desc || ''),
                 plannerNote: s.plannerNote || '',
+                agentPlanned: s.agentPlanned === true,
                 isMergedAttraction: s.isMergedAttraction || false,
                 mergedSubSpots: s.mergedSubSpots || null,
                 mergedRadiusMeters: s.mergedRadiusMeters || null,
@@ -4196,7 +4202,8 @@
       const bigName = deriveBigAreaName([parentName, ...subs], nearbyNames);
       const bigNorm = normalizeText(bigName);
       const usedByOthers = stops.some(x => x !== stop && normalizeText(x.name) === bigNorm);
-      if (bigName && bigNorm !== parentNorm && !usedByOthers) {
+      // 代理人排的站不改名：實測會把「臺東環市自行車道」換成附近的「鯉魚山」
+      if (stop.agentPlanned !== true && bigName && bigNorm !== parentNorm && !usedByOthers) {
         stop.name = bigName;
         subs = [parentName, ...subs]; // 舊名收進子景點（setMergedSubSpots 會去掉等於新名者）
         stop.isMergedAttraction = true;
@@ -4208,7 +4215,7 @@
 
       // 合併站的代表座標應落在它的大地標上（如卑南遺址→卑南遺址公園），而非沿用 AI 給的錯位座標。
       // 用 Places 以「站名」查大地標，命中且在範圍內、偏移現座標 >300m 才校正（原本就在地標上的站不動）。
-      if (stop.isMergedAttraction) {
+      if (stop.isMergedAttraction && stop.agentPlanned !== true) {
         try {
           const landmark = await searchStrictPlaceCandidate(String(stop.name || ''), stop, region, '');
           if (landmark && landmark.position && !isCoordinatesOutsideRegion(landmark.position, region, stop.name)) {
@@ -4230,7 +4237,7 @@
       }
       // 合併大景點：依子景點數加長建議停留（固定基準、冪等；只加長不縮短，含重開既有行程的補正）
       // 使用者手動設定過的停留（durationLocked）不加長：原本重開行程會把手動的 60 分撐成 120 分
-      if (stop.durationLocked !== true && stop.isMergedAttraction && Array.isArray(stop.mergedSubSpots) && stop.mergedSubSpots.length) {
+      if (stop.durationLocked !== true && stop.agentPlanned !== true && stop.isMergedAttraction && Array.isArray(stop.mergedSubSpots) && stop.mergedSubSpots.length) {
         const cur = Number(stop.duration) || Number(stop.stayMin) || 30;
         const target = Math.min(120, 30 + 20 * stop.mergedSubSpots.length);
         const bumped = Math.max(cur, target);
@@ -12899,6 +12906,8 @@
         coordVerified: s.coordVerified || false,
         desc: s.desc || '',
         plannerNote: s.plannerNote || '',
+        // AI 規劃代理人排的站：載入時不改名、不加長停留、不和鄰站合併（代理人已用本地資料排好）
+        agentPlanned: s.agentPlanned === true,
         manualStartMin: s.manualStartMin ?? null,
         manualEndMin: s.manualEndMin ?? null,
         durationLocked: s.durationLocked === true,

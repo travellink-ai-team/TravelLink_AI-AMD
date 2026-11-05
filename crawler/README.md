@@ -260,6 +260,17 @@ npm run crawl:food
 - 成本：改用 `searchNearby` 後每目的地 1 次呼叫（原本 `searchText` 3 詞需 3 次）。
 - 由 `..\ai-travel-explore-final.html` 以 `<script src="restaurant-data.js">` 載入；檔案不存在時前端自動回退即時抓。
 
+### 店名夾營業備註（clean:food-names）
+
+店家在 Google 登記的名稱常夾備註，例如「台東客來吃樂（店休不固定，請查詢粉絲專頁））」「日日麵所．Daily Pasta (3月底營業)」。
+`crawl:food` 寫檔前會把括號裡含「店休／公休／營業／請看／IG／粉絲／預約…」的備註拆到 `nameNote`，名稱只留店名。
+既有檔案不用重爬（不花 API）：
+
+```powershell
+node worker.js --clean-food-names --dry-run   # 預覽
+npm run clean:food-names                      # 寫回 app/restaurant-data.js
+```
+
 ## 停車場資料（crawl:parking → parking-data.js）
 
 TDX 對台東這種鄉村縣的路外停車場覆蓋很稀疏，改用**臺東縣政府自己維護的開放資料**
