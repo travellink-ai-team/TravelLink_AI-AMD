@@ -4148,11 +4148,25 @@
   // AI 生成的景點無 type 欄位，故以 tag（社群範例）＋ emoji ＋ 名稱關鍵字判定。
   const FOOD_EMOJI_SET = new Set(['🍜','🍱','☕','🍽️','🍽','🍦','🍢','🐟','🍲','🍛','🍔','🍕','🍻','🍸','🧋','🍵','🥟','🍤','🍧','🍨','🥘','🍰']);
   const FOOD_NAME_RE = /餐廳|食堂|小吃|料理|美食|便當|海鮮|餐酒|甜點|冰淇淋|冰品|火鍋|燒烤|烘焙|早午餐|咖啡|茶館|茶屋|夜市|cafe|coffee|restaurant/i;
+  // AI 給的 emoji 不可靠（中寮漁港標 🐟）：名稱明顯不是餐廳，或本地資料確定是景點的不看 emoji。與生成端相同
+  const NON_FOOD_NAME_RE = /遊客中心|服務中心|原創館|文創|圖書館|博物館|美術館|藝文中心|公園|步道|車站|部落|教堂|教會|廟|宮|寺|佛堂|遺址|漁港|燈塔|海灘|沙灘|牧場/;
+  const foodNameKey = (name) => String(name || '').replace(/[（(][^）)]*[）)]/g, '').replace(/\s/g, '').replace(/臺/g, '台').toLowerCase();
+  let localScenicNameSet = null;
+  function isKnownLocalScenicName(name) {
+    if (!localScenicNameSet) {
+      localScenicNameSet = new Set();
+      const data = window.WAI_POI_DATA || null;
+      if (data) Object.keys(data).forEach((k) => {
+        if (Array.isArray(data[k])) data[k].forEach((p) => { if (p && p.name && (!p.kind || p.kind === 'scenic')) localScenicNameSet.add(foodNameKey(p.name)); });
+      });
+    }
+    return localScenicNameSet.has(foodNameKey(name));
+  }
   function isFoodStop(stop) {
     if (!stop) return false;
     if (stop.tag === 'food') return true;
-    if (stop.emoji && FOOD_EMOJI_SET.has(String(stop.emoji).trim())) return true;
     const name = String(stop.name || stop.title || '');
+    if (stop.emoji && FOOD_EMOJI_SET.has(String(stop.emoji).trim()) && !NON_FOOD_NAME_RE.test(name) && !isKnownLocalScenicName(name)) return true;
     if (!name) return false;
     if (/飯店|飯館|麵店/.test(name)) return false; // 防誤判：飯店（住宿）等含「飯/麵」但非用餐站
     return FOOD_NAME_RE.test(name);
@@ -11145,7 +11159,8 @@
       // 塞不下的行程會一路被壓到個位數（2026-11-06 實測 50 分變 9 分）。只存在記憶體。
       if (!Number.isFinite(s._fitBaseStay)) s._fitBaseStay = Math.max(0, curStayOf(sch, i, s));
       const orig = s._fitBaseStay;
-      return { stop: s, i, eligible, orig, floor: Math.ceil(orig * MIN_RATIO) };
+      // 與生成端相同：壓縮不壓到 20 分以下（20 分的站壓成 13 分就不算一站了），本來就更短的不動
+      return { stop: s, i, eligible, orig, floor: Math.max(Math.ceil(orig * MIN_RATIO), Math.min(20, orig)) };
     });
 
     let changed = false;
