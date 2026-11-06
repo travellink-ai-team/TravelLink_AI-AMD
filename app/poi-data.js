@@ -5003,14 +5003,13 @@ window.WAI_POI_DATA = {
     },
     {
       "name": "東河舊橋休憩區",
-      "lat": 23.1057,
-      "lng": 121.3502,
+      "lat": 22.9767374,
+      "lng": 121.3049519,
       "desc": "橫跨馬武窟溪的造型舊橋，連結新舊時代的記憶，幸運時還能見到野生臺灣獼猴與溪谷絕景。",
       "businessHours": "週一至週日 24小時開放",
       "duration": 30,
       "kind": "scenic",
-      "district": "成功",
-      "districtInferred": true
+      "district": "東河"
     },
     {
       "name": "東粄香客家米食",

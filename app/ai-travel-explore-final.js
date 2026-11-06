@@ -2911,6 +2911,19 @@ function collectDesiredStopNotices(stops, wizardData) {
       }
     }
   }
+  // 距離很近但沒有合併：可能是同一處，由使用者決定（最多提醒兩組，避免市區行程被洗版）
+  const nearPairs = [];
+  const sights = mid.filter((s) => !food(s) && getStopCoordinate(s));
+  for (let i = 0; i < sights.length; i++) {
+    for (let j = i + 1; j < sights.length; j++) {
+      if (dayOf(sights[i]) !== dayOf(sights[j]) || (sights[i].userDesired && sights[j].userDesired)) continue;
+      const meters = getDistanceMeters(getStopCoordinate(sights[i]), getStopCoordinate(sights[j]));
+      if (meters <= SUB_SPOT_SAME_SPOT_RADIUS_M) nearPairs.push([sights[i].name, sights[j].name, meters]);
+    }
+  }
+  nearPairs.slice(0, 2).forEach(([a, b, meters]) => notices.push(meters <= SUB_SPOT_LIKELY_SAME_M
+    ? `「${a}」和「${b}」幾乎在同一個位置，可能是同一處。不需要的話可以刪掉一站。`
+    : `「${a}」和「${b}」不到 300 公尺，可以順路一起逛。不需要的話可以刪掉一站。`));
   return [...new Set(notices)].slice(0, 5);
 }
 
@@ -3592,7 +3605,8 @@ async function verifyAndFilterStopsWithPlaces(stops, destination, wizardData = {
 // 單一「三仙台」站；同名（同前綴家族）再放寬到 2km；缺座標才退回名稱判定。避免景點密集擠在目的地端。
 const SUB_SPOT_MERGE_RADIUS_M = 800;
 const SUB_SPOT_NAME_MERGE_RADIUS_M = 2000;
-const SUB_SPOT_SAME_SPOT_RADIUS_M = 300; // 不同名景點僅在此極近距離內才視為「同一處」而合併
+const SUB_SPOT_SAME_SPOT_RADIUS_M = 300; // 不同名景點在此距離內：不合併，只提醒
+const SUB_SPOT_LIKELY_SAME_M = 50; // 這麼近才提醒「可能是同一處」，再遠只說可以順路（鐵道藝術村和 TTstyle 相距約 150 公尺，是兩個地方）
 
 // 計算一組名稱的最長共同前綴（作為「大景點」顯示名）
 function subSpotCommonPrefix(names) {
@@ -3610,6 +3624,13 @@ function subSpotCommonPrefix(names) {
 }
 
 // 是否為同一大景區的兄弟子景點（名稱共享主體）
+// 共同前綴要扣掉開頭的鄉鎮名再算：「成功海洋環境教室」和「成功海濱公園」共同前綴「成功海」，其實只差在都在成功鎮。
+const NAME_TOWN_PREFIX_RE = /^(台東縣|台東市|台東|成功|關山|卑南|鹿野|池上|東河|長濱|太麻里|大武|綠島|蘭嶼|延平|海端|金峰|達仁)/;
+function isSharedAttractionPrefix(prefix) {
+  const unified = String(prefix || '').replace(/臺/g, '台');
+  const town = unified.match(NAME_TOWN_PREFIX_RE);
+  return town ? unified.length - town[0].length >= 2 : unified.length >= 3;
+}
 function isSameAttractionFamily(a, b) {
   const aN = normalizeLookupText((a && a.name) || '');
   const bN = normalizeLookupText((b && b.name) || '');
@@ -3617,7 +3638,8 @@ function isSameAttractionFamily(a, b) {
   const shorter = aN.length <= bN.length ? aN : bN;
   if (shorter.length >= 3 && (aN.includes(bN) || bN.includes(aN))) return true;
   // 正規化後共同前綴 ≥ 3 字（涵蓋「三仙台」案例，避免「台東」這類兩字地名誤判）
-  if (subSpotCommonPrefix([aN, bN]).length >= 3) return true;
+  const sharedPrefix = subSpotCommonPrefix([aN, bN]);
+  if (sharedPrefix.length >= 3 && isSharedAttractionPrefix(sharedPrefix)) return true;
   return false;
 }
 
@@ -3670,12 +3692,17 @@ function shouldClusterStops(a, b, ignoreDesired = false) {
   const cb = getStopCoordinate(b);
   if (ca && cb) {
     const d = getDistanceMeters(ca, cb);
-    // 只併「真正同一景區」：同名家族放寬到 2km；不同名僅在極近(同一入口/同一處)才併，
-    // 避免市區密集但不同的景點(海濱公園/生命之樹…)被 800m 規則塌成一站、壓縮整日時數。
+    // 只有名稱明確相關或人工確認清單才合併；距離再近也只提醒（collectDesiredStopNotices）
     if (isSameAttractionFamily(a, b)) return d <= SUB_SPOT_NAME_MERGE_RADIUS_M;
-    return d <= SUB_SPOT_SAME_SPOT_RADIUS_M;
+    return isListedSamePlace(a, ca, b, cb);
   }
-  return isSameAttractionFamily(a, b); // 缺座標退回名稱判定
+  return isSameAttractionFamily(a, b) || isListedSamePlace(a, null, b, null); // 缺座標只看名稱
+}
+
+// 人工確認清單（big-attraction-config.js）：同一個地方的不同名稱，或屬於同一個大景點
+function isListedSamePlace(a, ca, b, cb) {
+  const list = window.WAI_BIG_ATTRACTIONS;
+  return !!list && list.isSamePlace(a && (a.name || a.title), ca, b && (b.name || b.title), cb);
 }
 
 // 將多個兄弟子景點合併成一個大景點站
@@ -3920,6 +3947,10 @@ async function enrichBigAttractionSubSpots(stops, destination, opts = {}) {
       if (!pn || pn === parentNorm) continue;
       if (otherNorms.has(pn)) continue;
       if (isFoodStop({ name: p.name })) continue; // 餐廳閘門：附近餐廳 POI 不被拉進景點子景點
+      if (window.WAI_BIG_ATTRACTIONS && window.WAI_BIG_ATTRACTIONS.isFacility(p.name)) continue; // 公廁、球場不是子景點
+      // 只因為在附近不算子景點（中寮漁港不該含綠島燈塔）：要名稱相關或在人工確認清單裡
+      const related = { name: p.name };
+      if (!isSameAttractionFamily(stop, related) && !isListedSamePlace(stop, coord, related, { lat: p.lat, lng: p.lng })) continue;
       const dist = getDistanceMeters(coord, { lat: p.lat, lng: p.lng });
       if (dist < 60 || dist > SUB_SPOT_MERGE_RADIUS_M) continue;
       cands.push({ name: p.name, lat: p.lat, lng: p.lng, dist });
@@ -3956,7 +3987,9 @@ async function enrichBigAttractionSubSpots(stops, destination, opts = {}) {
     const bigName = deriveBigAreaName([parentName, ...subs], nearbyNames);
     const bigNorm = normalizeLookupText(bigName);
     const usedByOthers = stops.some(x => x !== stop && normalizeLookupText(x.name) === bigNorm);
-    if (!keepIdentity && bigName && bigNorm !== parentNorm && !usedByOthers) {
+    // 改站名也要名稱相關或在清單裡，不能只因為附近有大景點（臺東環市自行車道→鯉魚山）
+    const bigNameRelated = !!bigName && (isSameAttractionFamily(stop, { name: bigName }) || isListedSamePlace(stop, coord, { name: bigName }, null));
+    if (!keepIdentity && bigName && bigNorm !== parentNorm && !usedByOthers && bigNameRelated) {
       stop.name = bigName;
       subs = [parentName, ...subs];
       stop.isMergedAttraction = true;
@@ -4122,7 +4155,7 @@ function fitGeneratedStopsToTimeLimit(stops, wizardData = {}) {
 }
 
 // 合併後時間偏短時：沿路線補景點填滿剩餘時段（不要集中同一點）
-function buildTimeFillPrompt(dest, needed, shortfallMin, excludedNames, wizardData = {}) {
+function buildTimeFillPrompt(dest, needed, shortfallMin, excludedNames, wizardData = {}, inRoute = null) {
   const interests = (wizardData.interests || []).join('、') || '多元體驗';
   const theme = wizardData.theme || '經典旅人';
   const startLoc = (wizardData.startLocation || '').trim();
@@ -4133,7 +4166,8 @@ function buildTimeFillPrompt(dest, needed, shortfallMin, excludedNames, wizardDa
   const _norm = (s) => String(s || '').replace(/\s/g, '').replace(/臺/g, '台');
   const _excludeSet = new Set((excludedNames || []).map(_norm));
   const _localPool = (typeof getLocalPoiList === 'function' ? getLocalPoiList(dest) : [])
-    .filter((p) => p && p.name && !_excludeSet.has(_norm(p.name)));
+    .filter((p) => p && p.name && !_excludeSet.has(_norm(p.name)))
+    .filter((p) => !inRoute || inRoute(p));
   const _localBlock = _localPool.length
     ? `景點「只能」從以下本地清單挑選未使用者（名稱需完全一致，嚴禁清單以外的任何景點）：\n${_localPool.slice(0, 40).map((p) => `・${p.name}`).join('\n')}`
     : `景點須為 ${dest} 周邊真實存在、能在 Google Maps 搜尋到的正式名稱`;
@@ -4158,6 +4192,11 @@ async function fillTripTimeBudget(middleStops, wizardData, destination, startCoo
   const fullSeq = (arr) => [startStub, ...arr, endStub].filter(Boolean);
   let stops = [...middleStops];
   const usedNorm = new Set(stops.map(s => normalizeLookupText(s.name)));
+  // 一日遊只補路線 10 公里內的站（和一開始的路廊過濾同一個範圍）；多天行程會移動，不限制
+  const _routeCenter = getDestinationCenter(destination) || startCoords;
+  const inRoute = (!isLongTrip(wizardData.days) && startCoords && endCoords && _routeCenter)
+    ? (place) => { const c = getStopCoordinate(place); return !c || isWithinCorridorKm(c, startCoords, _routeCenter, endCoords, 10); }
+    : null;
   // 由 3 輪縮為 1 輪：每輪＝1 次 Gemini＋2 波 Places，3 輪串行是生成尾端最大延遲；
   // 改以「單輪多要 3 個備用候選」補足命中率（buildTimeFillPrompt 的 needed+3）。
   for (let iter = 0; iter < 1; iter++) {
@@ -4167,7 +4206,7 @@ async function fillTripTimeBudget(middleStops, wizardData, destination, startCoo
     let text;
     try {
       const payload = {
-        contents: [{ role: 'user', parts: [{ text: buildTimeFillPrompt(destination, need, shortfall, stops.map(s => s.name), wizardData) }] }],
+        contents: [{ role: 'user', parts: [{ text: buildTimeFillPrompt(destination, need, shortfall, stops.map(s => s.name), wizardData, inRoute) }] }],
         generationConfig: buildGenConfig({ temperature: 0.9, maxOutputTokens: 2048, thinking: 0 })
       };
       text = extractGeminiResponseText(await fetchGeminiJson({ apiKey: '', model: GEMINI_MODEL, payload }));
@@ -4184,6 +4223,7 @@ async function fillTripTimeBudget(middleStops, wizardData, destination, startCoo
     for (const c of cands) {
       const nrm = normalizeLookupText(c.name);
       if (usedNorm.has(nrm)) continue;
+      if (inRoute && !inRoute(c)) continue;
       // 補時段也不能把「卑南遊客中心」補回已有「卑南遺址公園」的行程（反之亦然）
       if (dropRedundantVisitorCenters([...stops, c]).length !== stops.length + 1) continue;
       stops.push(c);
@@ -4294,6 +4334,7 @@ async function optimizeGeneratedTripStops(stops, wizardData = {}, livePlaces = [
   _sub('檢查行程時段長度中…');
   const filledStops = _agentPlanned ? enrichedNearby : await fillTripTimeBudget(enrichedNearby, wizardData, destination, _startCoords, _endCoords).catch(() => enrichedNearby);
   _genPerf.mark('opt: 補時段(fillTripTimeBudget)');
+  if (window.WAI_BIG_ATTRACTIONS) window.WAI_BIG_ATTRACTIONS.cleanSubSpots(filledStops);
   _sub('整理路線順序中…');
   // 最後輸出前再重排一次，避免合併/補景點後路線南北來回跑
   markDesiredStops(filledStops, wizardData); // 合併／補站會建新物件，再標一次

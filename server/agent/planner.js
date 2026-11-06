@@ -58,8 +58,7 @@ const normDest = (s) => String(s || '').replace(/臺/g, '台').trim();
 // 只比景點對景點，景點旁邊的餐廳不算重複。
 const LANDMARK_SUFFIX = /(觀景平台|觀景台|休憩區|遊憩區|風景區|步道|公園|遺址|部落|海灘|沙灘|園區|燈塔|漁港|岩|洞)$/;
 const LANDMARK_STOPWORDS = new Set(['台東', '臺東', '綠島', '蘭嶼', '東河', '成功', '長濱', '池上', '關山', '鹿野', '太麻里',
-  '知本', '卑南', '大武', '金峰', '達仁', '延平', '海端', '小長城', '海濱']);
-const SAME_SPOT_KM = 0.025;
+  '知本', '卑南', '大武', '金峰', '達仁', '延平', '海端', '小長城', '海濱', '金樽', '都蘭', '都歷']);
 const SAME_LANDMARK_KM = 3;
 
 function landmarkTokens(name) {
@@ -97,11 +96,10 @@ function sameAttraction(a, b) {
   if (!a || !b || a === b) return false;
   const km = D.haversineKm(a, b);
   if (!Number.isFinite(km)) return false;   // 缺座標就無法用距離把關，寧可不合併
-  if (km <= SAME_SPOT_KM) return true;
+  // 人工確認清單優先；距離再近都不算（資料座標不準時，不同景點也會疊在一起）
+  if (B.isListedSamePlace(a, b)) return true;
   if (km <= VISITOR_CENTER_KM && (visitorCenterOf(a, b) || visitorCenterOf(b, a))) return true;
   if (km > SAME_LANDMARK_KM) return false;
-  // 名稱不共用字、但在同一個園區裡（鷺鷥湖在臺東森林公園裡、龍鳳佛堂在鯉魚山上）：看座標是否落在對方的 OSM 輪廓內
-  if (B.contains(a, b) || B.contains(b, a) || B.sharedOutline(a, b)) return true;
   const ta = landmarkTokens(a.name);
   const tb = landmarkTokens(b.name);
   return ta.some((t) => tb.some((u) => u === t || (t.length >= 3 && u.includes(t)) || (u.length >= 3 && t.includes(u))));
@@ -290,7 +288,9 @@ const STAY_FILL_MAX = 120;
 const STAY_FILL_MARGIN = 20;
 function fillIdleWithStay(seq, req) {
   let out = seq;
+  // 餐前的景點拉長會把用餐往後推：實測蘭嶼站少、停留一拉長午餐就排到 14:10，LLM 怎麼改都修不好
   const tooLate = (s) => s.returnMin > req.endMin - STAY_FILL_MARGIN
+    || s.stops.some((x) => x.slot && x.start > x.slot.to)
     || s.stops.some((x) => { const h = D.hoursOn(x.place, req.date); return h.status === 'open' && h.windows.length && !D.fitsHours(h, x.start, x.end); });
   for (let round = 0; round < 12; round++) {
     let grew = false;
@@ -471,8 +471,9 @@ function buildDraft(req, picks, opts = {}) {
   }
   // 站數與空檔
   const range = stopRange(req.durationMin, req.pace);
-  if (items.length && items.length < range.min) {
-    violations.push({ code: 'too_few', message: `只有 ${items.length} 站，${Math.round(req.durationMin / 60)} 小時的行程建議至少 ${range.min} 站` });
+  const missingStops = items.length ? Math.max(0, range.min - items.length) : 0;
+  if (missingStops) {
+    violations.push({ code: 'too_few', message: `只有 ${items.length} 站，${Math.round(req.durationMin / 60)} 小時的行程建議至少 ${range.min} 站：請再加 ${missingStops} 個景點（不是餐廳）` });
   }
   // 原本 120 分才擋，實測 09–18 的行程 16:00 就回到終點也會通過；前端還會在起點加約 30 分停留，
   // 所以這裡收到 90 分：實際畫面上的空檔約 1 小時內
@@ -480,7 +481,10 @@ function buildDraft(req, picks, opts = {}) {
   if (items.length && idle > 60) {
     // 空檔不大就延長停留（加一站常常一下子超時），差很多才加站；目標是回到終點時離結束還有 30–60 分
     const need = idle - 30;
-    const fix = idle <= 120
+    // 站數已經不夠時，兩個問題要給同一個修法：實測一邊要加站、一邊說不要加站，蘭嶼常卡到驗證失敗
+    const fix = missingStops
+      ? '加景點後再看要不要延長停留'
+      : idle <= 120
       ? `請把幾站的 stayMin 合計延長約 ${need} 分鐘（不要加站）`
       : `請再加 ${Math.max(1, Math.round(need / 90))} 站（每站約 60–75 分），或延長停留合計約 ${need} 分鐘`;
     violations.push({ code: 'idle', message: `行程 ${I.toClock(sch.returnMin)} 就結束，離 ${I.toClock(req.endMin)} 還空 ${idle} 分鐘：${fix}` });

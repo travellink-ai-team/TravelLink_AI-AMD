@@ -158,9 +158,33 @@ const last = (results, name) => (results[name] || [])[(results[name] || []).leng
     ok('遊客中心：鄉鎮名前綴不算（鹿野遊客中心×鹿野高台）', !P.sameAttraction(DD.findPlace('鹿野遊客中心'), DD.findPlace('鹿野高台')));
     ok('遊客中心：卑南只認卑南遺址', !P.sameAttraction(DD.findPlace('卑南遊客中心'), DD.findPlace('卑南大圳水利公園')) && P.sameAttraction(DD.findPlace('卑南遊客中心'), DD.findPlace('卑南遺址公園')));
     ok('遊客中心：專屬前綴仍算（八仙洞、小野柳）', P.sameAttraction(DD.findPlace('八仙洞遊客中心'), DD.findPlace('八仙洞')) && P.sameAttraction(DD.findPlace('小野柳遊客中心'), DD.findPlace('小野柳')));
+    for (const [x, y] of [['金樽漁港', '金樽遊憩區'], ['天龍古道', '天龍吊橋'], ['泰源幽谷', '東河橋遊憩區'], ['綠島梅花鹿生態園區', '綠島紫坪生態保育區'], ['忠勇社區自行車道', '金剛大道'], ['都蘭', '都蘭遺址']]) {
+      ok(`同一處：${x}×${y} 不算（只靠距離或地名不合併）`, !P.sameAttraction(DD.findPlace(x), DD.findPlace(y)));
+    }
+    ok('同一處：清單列的同名仍算（霧鹿砲台、野銀）', P.sameAttraction(DD.findPlace('霧鹿砲台'), DD.findPlace('霧鹿古砲台')) && P.sameAttraction(DD.findPlace('野銀舊部落'), DD.findPlace('野銀部落地下屋')));
     ok('遊客中心：前綴只是地區名不算同一處', !P.sameAttraction(DD.findPlace('綠島遊客中心'), DD.findPlace('綠島人權文化園區')));
     const filled = dr({}, [...sc('鯉魚山', '臺東森林公園', '小野柳').map((x) => ({ name: x.name })), { name: reals[0] }]);
     ok('空檔由程式拉長停留：不必 LLM 重送', !codes(filled).includes('idle') && filled.stops.some((x) => x.stayMin > 60), filled.returnTime + JSON.stringify(codes(filled)));
+    // 蘭嶼站少，停留拉長不能把午餐推過 14:00；站數不夠時不能同時叫它不要加站
+    const lanyuReq = P.normalizeRequest({ ...TAITUNG, dest: '蘭嶼', startLocation: '', endLocation: '' });
+    const lanyu = P.buildDraft(lanyuReq, [{ name: '蘭嶼燈塔', stayMin: 90 }, { name: '東清灣', stayMin: 90 }, { name: '蘭嶼漂流木餐廳' }]);
+    const lunch = lanyu.stops.find((x) => x.meal === 'lunch');
+    ok('停留拉長：午餐不會被推過 14:00', !!lunch && lunch.time <= '14:00' && !codes(lanyu).includes('meal_time'), JSON.stringify(lanyu.stops.map((x) => x.time + x.name)));
+    const fewMsg = lanyu.violations.map((v) => v.message).join('；');
+    ok('站數不足：要加景點，不會同時說不要加站', /請再加 \d+ 個景點/.test(fewMsg) && !fewMsg.includes('不要加站'), fewMsg);
+    ok('同一處：哈巴狗岩與睡美人岩的別名算同一處', P.sameAttraction(DD.findPlace('哈巴狗岩'), DD.findPlace('哈巴狗與睡美人岩')) && P.sameAttraction(DD.findPlace('哈巴狗岩'), DD.findPlace('小長城步道 & 睡美人與哈巴狗')));
+    const fixedBridge = DD.findPlace('東河舊橋休憩區');
+    ok('資料：東河舊橋休憩區座標已更正', Math.abs(fixedBridge.lat - 22.9767) < 0.001, String(fixedBridge.lat));
+    const listSandbox = { window: {} };
+    require('vm').runInNewContext(require('fs').readFileSync(require('path').join(__dirname, '..', '..', 'app', 'big-attraction-config.js'), 'utf8'), listSandbox);
+    const trip = [
+      { name: '小長城', mergedSubSpots: ['小長城步道 & 睡美人與哈巴狗', '小長城觀景台'] },
+      { name: '哈巴狗岩', mergedSubSpots: ['哈巴狗與睡美人岩'] },
+      { name: '卑南遺址公園', mergedSubSpots: ['卑南遺址公園公廁', '卑南遺址公園月形石柱', '哈巴狗岩'] },
+      { name: '海濱公園', mergedSubSpots: ['海濱公園籃球場', '小長城觀景台'] }
+    ];
+    listSandbox.window.WAI_BIG_ATTRACTIONS.cleanSubSpots(trip);
+    ok('子景點：別站的內容與設施都拿掉', JSON.stringify(trip.map((x) => x.mergedSubSpots)) === JSON.stringify([['小長城觀景台'], ['哈巴狗與睡美人岩'], ['卑南遺址公園月形石柱'], []]), JSON.stringify(trip.map((x) => x.mergedSubSpots)));
     const dA = DD.travelMinutes({ lat: 22.75, lng: 121.13 }, { lat: 22.76, lng: 121.14 });
     ok('車程：市區約 1.5 km 不超過 6 分', dA <= 6, String(dA));
   }

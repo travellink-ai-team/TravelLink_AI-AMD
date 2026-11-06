@@ -22,6 +22,7 @@ const MAX_TOOL_CALLS = 20;
 const MAX_LLM_CALLS = 18;
 // 3 輪時，短行程偶爾在「太短 → 加站變太長 → 刪站」之間來回用完次數；多給一輪，每輪約 0.5 秒
 const MAX_FAILED_ROUNDS = 4;
+const MAX_NUDGES = 2;
 const SEARCH_LIMIT = 8;
 // 第一層分流：所有人用同一個公式排序，前幾名每次都一樣，大家會擠到同一批景點與同一家餐廳。
 // 分數加一點隨機（差距在這個範圍內的視為一樣好），最近排過的站再扣一點；明顯比較好的照樣排前面。
@@ -187,6 +188,7 @@ const IMPL = {
     const maxPop = inWindow.length ? Math.max(...inWindow) : null;
     return {
       source: f.source,
+      ...(r.island ? { islandNote: '離島室內景點很少：就算下雨也照常排戶外景點，程式只會提醒不會擋；不要拿餐廳充當室內景點，一天排一家午餐就好' } : {}),
       periods: periods.map((p) => ({ from: p.start.replace('T', ' '), to: p.end.replace('T', ' '), wx: p.wx, pop: p.pop, ...(p.simulated ? { simulated: true } : {}) })),
       maxPopInTrip: maxPop,
       advice: maxPop === null ? '旅遊日超出一週預報範圍，室內外混搭' : (maxPop >= 50 ? `行程時段降雨機率最高 ${maxPop}%，以室內景點為主，戶外最多 1 個` : `降雨機率最高 ${maxPop}%，可以安排戶外景點`)
@@ -261,7 +263,8 @@ const IMPL = {
     const mealsOf = (p) => {
       const h = D.hoursOn(p, r.date);
       if (h.status !== 'open' || !h.windows.length) return h.status === 'closed' ? [] : slots;   // 未知：不排除
-      return slots.filter((s) => h.windows.some((w) => Math.min(w.close, s.to) - Math.max(w.open, s.from) >= 60));
+      // 重疊要 90 分：12:00 打烊的早餐店（東清三十三號）只重疊 60 分，抵達時間差一點就排不進去
+      return slots.filter((s) => h.windows.some((w) => Math.min(w.close, s.to) - Math.max(w.open, s.from) >= 90));
     };
     const results = P.poolOf(r, 'food')
       .filter((p) => openDuringTrip(p, r))
@@ -419,7 +422,7 @@ async function runPlanAgent({ request, scenario, onEvent, onUsage, chat, signal,
     { role: 'user', content: `請幫我規劃 ${req.dest} 的一日遊（${req.date}，${I.toClock(req.startMin)}–${I.toClock(req.endMin)}）。今天是 ${I.todayIso()}。` }
   ];
   const tools = definitions(req);
-  let nudged = false;
+  let nudged = 0;
 
   // 交出行程：present_itinerary 的結果，或（模型忘了呼叫時）用已通過驗證的草稿補上預設說明
   const finishItinerary = (meta) => finish({
@@ -479,9 +482,10 @@ async function runPlanAgent({ request, scenario, onEvent, onUsage, chat, signal,
         if (ctx.draft && ctx.draft.ok) {
           return finishItinerary({ title: String(ctx.req.title || `${req.dest}一日遊`).slice(0, 30), summary: '', reasons: [] });
         }
-        if (nudged) throw Object.assign(new Error('model stopped calling tools'), { code: 'no_tools' });
-        nudged = true;
-        messages.push({ role: 'user', content: '請用工具繼續，最後一定要呼叫 present_itinerary。' });
+        if (nudged >= MAX_NUDGES) throw Object.assign(new Error('model stopped calling tools'), { code: 'no_tools' });
+        nudged += 1;
+        const pending = ctx.draft && !ctx.draft.ok ? `草稿還要修：${ctx.draft.violations.map((v) => v.message).join('；')}。` : '';
+        messages.push({ role: 'user', content: `${pending}請用工具繼續，最後一定要呼叫 present_itinerary。` });
         continue;
       }
 
