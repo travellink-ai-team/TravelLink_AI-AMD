@@ -28,12 +28,13 @@ const { ipKeyGenerator } = require('express-rate-limit');
 // firebase-admin v14 起僅支援模組化 API（admin.credential.* 已移除）
 const { initializeApp, cert } = require('firebase-admin/app');
 const { getAuth } = require('firebase-admin/auth');
-const { getFirestore, Timestamp } = require('firebase-admin/firestore');
+const { getFirestore, Timestamp, FieldValue } = require('firebase-admin/firestore');
 // API 成本統計（docs/API成本統計-實作計畫.md）
 const pricing = require('./pricing');
 const genRuns = require('./generation-runs');
 const { createUsageTap, modelIdFromPath } = require('./usage-tap');
 const { guardVertexBody } = require('./scope-guard');
+const crowd = require('./crowd-signals');
 // AI_PROVIDER=amd 時，文字生成改走 AMD／工研院的 gpt-oss-120b（Gemini 格式在這裡轉換）
 const amdLlm = require('./amd-llm');
 // 旅程應變 Agent（docs/amd-agent/agent-tools-and-replanning.md）
@@ -1554,11 +1555,78 @@ async function loadTripCover(user, tripId) {
   return typeof data.imageUrl === 'string' && data.imageUrl ? data.imageUrl : null;
 }
 
+// 分流第二、三層：只儲存每趟行程的去重標記、景點計數與時段，不儲存旅客身分。
+const crowdLimiter = rateLimit({ windowMs: 10 * 60 * 1000, max: 60,
+  standardHeaders: true, legacyHeaders: false, message: { error: 'rate limited' } });
+
+async function readCrowdSignals(dest, date) {
+  const stats = adminDb.collection('crowd_stats');
+  const [totalSnap, daySnap, reportSnap] = await Promise.all([
+    stats.doc(`${dest}_total`).get(),
+    crowd.isValidDate(date) ? stats.doc(`${dest}_${date}`).get() : Promise.resolve(null),
+    date === new Date(Date.now() + 8 * 3600000).toISOString().slice(0, 10)
+      ? adminDb.collection(PARKING_REPORT_COLLECTION)
+        .where('updatedAt', '>=', Timestamp.fromMillis(crowd.startOfTaiwanDay())).limit(300).get()
+      : Promise.resolve(null)
+  ]);
+  return {
+    total: (totalSnap.exists && totalSnap.data().counts) || {},
+    day: (daySnap && daySnap.exists && daySnap.data().counts) || {},
+    fullToday: reportSnap ? crowd.fullSpotsFromReports(reportSnap.docs.map((doc) => doc.data())) : []
+  };
+}
+
+// 使用者儲存行程後，後端以資料庫內的站與日期計數；同一趟只記一次。
+app.post('/api/crowd/record', crowdLimiter, requireFirebaseUser, async (req, res) => {
+  if (!adminReady) return res.status(503).json({ error: 'storage unavailable' });
+  const tripId = String((req.body && req.body.tripId) || '').trim().slice(0, 120);
+  if (!tripId) return res.status(400).json({ error: 'invalid trip' });
+  try {
+    const snap = await adminDb.collection('micro_trips').doc(tripId).get();
+    if (!snap.exists) return res.status(404).json({ error: 'trip not found' });
+    const data = snap.data() || {};
+    if (!isTripOwner(req.user, data)) return res.status(403).json({ error: 'not your trip' });
+    const dest = crowd.stopKey(data.region || (data.wizardData && data.wizardData.dest));
+    if (!dest) return res.json({ ok: true, recorded: false });
+    const counts = crowd.countsFromTrip(data.stops, data.wizardData && data.wizardData.departureDate);
+    const batch = adminDb.batch();
+    batch.create(adminDb.collection('crowd_recorded').doc(tripId), { at: Timestamp.now() });
+    const total = {}, days = new Map();
+    counts.forEach(({ date, key, slot }) => {
+      total[key] = FieldValue.increment(1);
+      if (!date) return;
+      const day = days.get(date) || {};
+      day[key] = { total: FieldValue.increment(1), ...(slot ? { [slot]: FieldValue.increment(1) } : {}) };
+      days.set(date, day);
+    });
+    if (Object.keys(total).length) batch.set(adminDb.collection('crowd_stats').doc(`${dest}_total`), { counts: total }, { merge: true });
+    days.forEach((day, date) => batch.set(adminDb.collection('crowd_stats').doc(`${dest}_${date}`), { counts: day }, { merge: true }));
+    await batch.commit();
+    return res.json({ ok: true, recorded: true });
+  } catch (err) {
+    if (err && err.code === 6) return res.json({ ok: true, recorded: false });
+    console.error('[proxy] crowd record 失敗：', err && err.message);
+    return res.status(500).json({ error: 'write failed' });
+  }
+});
+
+app.get('/api/crowd/signals', crowdLimiter, requireFirebaseUser, async (req, res) => {
+  if (!adminReady) return res.status(503).json({ error: 'storage unavailable' });
+  const dest = crowd.stopKey(req.query.dest);
+  if (!dest) return res.status(400).json({ error: 'invalid destination' });
+  try { return res.json(await readCrowdSignals(dest, String(req.query.date || ''))); }
+  catch (err) {
+    console.error('[proxy] crowd signals 失敗：', err && err.message);
+    return res.status(500).json({ error: 'read failed' });
+  }
+});
+
 // 回顧短片渲染 job 端點（需登入 + 每人每小時 5 次 + 序列化渲染）
 mountRecapJobs(app, { requireFirebaseUser, rateLimit, ipKeyGenerator, loadTripCover });
 
 // 行程生成 Agent 端點（需登入 + 每帳號 60 次／10 分鐘 + SSE；usage 記到 generation_runs）
-mountAgentPlan(app, { requireFirebaseUser, rateLimit, genRuns, amdLlm, ipKeyGenerator });
+mountAgentPlan(app, { requireFirebaseUser, rateLimit, genRuns, amdLlm, ipKeyGenerator,
+  loadCrowdSignals: (dest, date) => adminReady ? readCrowdSignals(crowd.stopKey(dest), date) : null });
 
 // 文字 AI 小任務（標題、描述、版面…）：需登入 + 限流；AI_PROVIDER=amd 走 gpt-oss-120b 結構化輸出
 mountAiTasks(app, { requireFirebaseUser, rateLimit, ipKeyGenerator, vertexUpstream: VERTEX_UPSTREAM, vertexApiKey: VERTEX_API_KEY });

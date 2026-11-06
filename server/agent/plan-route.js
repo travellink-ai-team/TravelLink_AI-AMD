@@ -56,7 +56,7 @@ function parsePlanBody(body) {
 
 /**
  * @param {import('express').Express} app
- * @param {{ requireFirebaseUser: Function, rateLimit: Function, genRuns: object, amdLlm: object, ipKeyGenerator?: Function, run?: Function, pingMs?: number }} deps
+ * @param {{ requireFirebaseUser: Function, rateLimit: Function, genRuns: object, amdLlm: object, ipKeyGenerator?: Function, loadCrowdSignals?: Function, run?: Function, pingMs?: number }} deps
  */
 function mountAgentPlan(app, deps) {
   const { requireFirebaseUser, rateLimit, genRuns, amdLlm, ipKeyGenerator } = deps;
@@ -94,8 +94,18 @@ function mountAgentPlan(app, deps) {
     const ping = setInterval(() => { if (!closed) res.write(': ping\n\n'); }, deps.pingMs || PING_MS);
 
     try {
+      let crowdSignals = null;
+      if (deps.loadCrowdSignals) {
+        try {
+          crowdSignals = await Promise.race([
+            deps.loadCrowdSignals(parsed.request.dest, parsed.request.date),
+            new Promise((resolve) => setTimeout(() => resolve(null), 2500))
+          ]);
+        } catch (_e) { /* 訊號不可用時仍正常規劃 */ }
+      }
       const last = await run({
         request: parsed.request,
+        crowdSignals,
         scenario: parsed.scenario,
         signal: controller.signal,
         onEvent: send,

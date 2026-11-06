@@ -71,6 +71,21 @@ const last = (results, name) => (results[name] || [])[(results[name] || []).leng
   const food = await A.runTool(ctx0, 'search_restaurants', { nearName: poi.results[0].name });
   ok('search_local_poi 有結果且附營業時間', poi.results.length >= 5 && poi.results.every((r) => r.hours));
   ok('search_restaurants 有結果且附每人花費', food.results.length >= 2 && 'costPerPerson' in food.results[0]);
+  ok('補抓餐廳：煮蛋與愛玉不算正餐', P.isSnack({ name: '溫泉煮蛋' }) && P.isSnack({ name: '痴愛玉' }));
+  const taimaliReq = P.normalizeRequest({ dest: '太麻里', startLocation: '太麻里車站', date: SAT, durationMin: 600 });
+  const taimaliCtx = { req: taimaliReq, allowed: new Set(), random: () => 0 };
+  const taimaliPoi = await A.runTool(taimaliCtx, 'search_local_poi', { radiusKm: 60 });
+  const taimaliFood = await A.runTool(taimaliCtx, 'search_restaurants', { radiusKm: 40 });
+  ok('太麻里出發點落在太麻里鎮內', taimaliReq.startPoint.lat < 22.7 && taimaliReq.startPoint.lng < 121.05);
+  ok('太麻里景點搜尋不繞去台東市區', taimaliPoi.results.length >= 5 && taimaliPoi.results.every((p) => p.distanceKm <= 15), taimaliPoi.results.map((p) => `${p.name} ${p.distanceKm}km`).join('、'));
+  ok('太麻里餐廳搜尋放大半徑仍留在鎮內', taimaliFood.results.length >= 2 && taimaliFood.results.every((p) => p.distanceKm <= 15), taimaliFood.results.map((p) => `${p.name} ${p.distanceKm}km`).join('、'));
+  const cityPoi = require('../agent/data').findPlace('鯉魚山');
+  if (cityPoi) taimaliCtx.allowed.add(cityPoi._key);
+  const nearCityFood = await A.runTool(taimaliCtx, 'search_restaurants', { nearName: '鯉魚山', radiusKm: 40 });
+  ok('太麻里餐廳 nearName 不能把搜尋移到市區', nearCityFood.results.every((p) => require('../agent/data').haversineKm(P.centerOf('太麻里'), require('../agent/data').findPlace(p.name)) <= 15));
+  const crossTownReq = P.normalizeRequest({ dest: '太麻里', startLocation: '台東車站', endLocation: '太麻里車站', date: SAT, durationMin: 600 });
+  const crossTownFood = await A.runTool({ req: crossTownReq, allowed: new Set(), random: () => 0 }, 'search_restaurants', { radiusKm: 40 });
+  ok('使用者指定從台東市出發時保留沿途餐廳', crossTownFood.results.some((p) => require('../agent/data').haversineKm(P.centerOf('太麻里'), require('../agent/data').findPlace(p.name)) > 15));
 
   const picks = poi.results.slice(0, 4).map((r) => ({ name: r.name })).concat([{ name: food.results[0].name }]);
   const d1 = P.buildDraft(req, picks.slice().reverse(), { allowed: ctx0.allowed });
@@ -223,6 +238,11 @@ const last = (results, name) => (results[name] || [])[(results[name] || []).leng
   const avoidReq = P.normalizeRequest({ ...TAITUNG, avoidNames: [firstName] });
   const avoidRes = await A.runTool({ req: avoidReq, allowed: new Set(), random: () => 0 }, 'search_local_poi', {});
   ok('分流：上次排過的第一名會往後放', avoidRes.results[0].name !== firstName, `${firstName} → ${avoidRes.results[0].name}`);
+  const crowdKey = require('../crowd-signals').stopKey(firstName);
+  const crowded = await A.runTool({ req: divReq, allowed: new Set(), random: () => 0,
+    crowdSignals: { total: { [crowdKey]: 10 }, day: { [crowdKey]: { total: 5, am: 5 } }, fullToday: [] }
+  }, 'search_local_poi', {});
+  ok('分流：當日熱門景點會往後放', crowded.results[0].name !== firstName, `${firstName} → ${crowded.results[0].name}`);
   const foodBase = await A.runTool({ req: divReq, allowed: new Set(), random: () => 0 }, 'search_restaurants', {});
   const foodAvoid = await A.runTool({ req: P.normalizeRequest({ ...TAITUNG, avoidNames: [foodBase.results[0].name] }), allowed: new Set(), random: () => 0 }, 'search_restaurants', {});
   ok('分流：上次排過的餐廳也往後放', foodAvoid.results[0].name !== foodBase.results[0].name);
@@ -341,9 +361,11 @@ const last = (results, name) => (results[name] || [])[(results[name] || []).leng
   app.use(express.json());
   const genRuns = { getOwnedRun: () => null, retain() {}, release: async () => {}, addGeminiUsage() {}, markUpstreamError() {} };
   const requireFirebaseUser = (rq, rs, next) => (rq.headers.authorization ? (rq.user = { uid: 'u1' }, next()) : rs.status(401).json({ error: 'login required' }));
+  let agentCrowdSeen = false;
   mountAgentPlan(app, {
     requireFirebaseUser, rateLimit, genRuns, amdLlm: { USAGE_MODEL_ID: 'gpt-oss-120b' },
-    run: (opts) => A.runPlanAgent({ ...opts, chat: mockChat(script) })
+    loadCrowdSignals: async () => ({ total: { '鯉魚山': 10 }, day: {}, fullToday: [] }),
+    run: (opts) => { agentCrowdSeen = opts.crowdSignals && opts.crowdSignals.total['鯉魚山'] === 10; return A.runPlanAgent({ ...opts, chat: mockChat(script) }); }
   });
   const server = await new Promise((resolve) => { const s = app.listen(0, '127.0.0.1', () => resolve(s)); });
   const base = `http://127.0.0.1:${server.address().port}/api/agent/plan`;
@@ -354,6 +376,7 @@ const last = (results, name) => (results[name] || [])[(results[name] || []).leng
   const text = await sse.text();
   const sseEvents = text.split('\n\n').filter((b) => b.startsWith('data: ')).map((b) => JSON.parse(b.replace(/^data: /, '')));
   ok('端點：SSE content-type', String(sse.headers.get('content-type')).includes('text/event-stream'));
+  ok('端點：人潮訊號傳給代理人', agentCrowdSeen);
   ok('端點：SSE 逐步事件，最後是 itinerary', sseEvents[0].type === 'start' && sseEvents[sseEvents.length - 1].type === 'itinerary' && sseEvents.filter((e) => e.type === 'tool_call').length === 7);
   server.close();
 

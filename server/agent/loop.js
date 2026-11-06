@@ -335,6 +335,12 @@ async function runAgent({ trip: rawTrip, trigger, scenario, onEvent, onUsage }) 
     if (!issues.length) {
       return finish({ type: 'no_change', reason: pre.warnings.some((w) => w.code === 'weather_unknown') ? '拿不到天氣預報，暫時無法判斷' : (seaOn ? '行程時段沒有降雨、公休或船班停航風險' : '行程時段沒有降雨或公休問題'), llmSkipped: true });
     }
+    // 已存在的營業時段錯誤不應讓這次的避雨提案連續驗證失敗；只有該站
+    // 名稱、時間、停留及營業資料都沒變時才降為提醒，新造成的衝突仍會擋。
+    if (trigger && trigger.type === 'weather' && issues.some((v) => v.code === 'rain')) {
+      const rawCheck = ctx.check;
+      ctx.check = async (draft) => T.scopeUnchangedProblems(trip, draft, pre, await rawCheck(draft));
+    }
     emit({ type: 'check_result', label: `發現 ${issues.length} 個問題，啟動 AI 代理人`, issues: issues.map((v) => v.message) });
   }
 

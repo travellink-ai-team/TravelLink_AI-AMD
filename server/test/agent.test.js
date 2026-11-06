@@ -10,6 +10,7 @@ if (!LIVE) { process.env.AI_PROVIDER = 'off'; process.env.CWA_API_KEY = ''; }
 process.env.AGENT_SEA_RISK = 'on';
 
 const I = require('../agent/itinerary');
+const T = require('../agent/tools');
 const { runAgent } = require('../agent/loop');
 
 let pass = 0, fail = 0;
@@ -94,6 +95,17 @@ const STORM_ALL = { sea: [
   ok('使用者堅持要去的站不算違規', !I.validate(keep, forecast).violations.some((x) => x.stopId === 's3'));
   const late = I.normalizeTrip({ ...TRIP, endTime: '18:00' });
   ok('超過每天結束時間會被抓', I.validate(late, forecast).violations.some((x) => x.code === 'day_end'));
+
+  const beforeScoped = { stops: [{ id: 'old', name: '既有景點', day: 1, time: '10:00', stayMin: 45, businessHours: '17:00-22:00' }] };
+  const oldHours = { code: 'hours', stopId: 'old', message: '原本就不在營業時間內' };
+  const rainIssue = { code: 'rain', stopId: 'old', message: '下雨' };
+  const scoped = T.scopeUnchangedProblems(beforeScoped, { stops: [{ ...beforeScoped.stops[0] }] },
+    { violations: [oldHours, rainIssue] }, { violations: [oldHours, rainIssue], warnings: [] });
+  ok('避雨提案：未變的原有營業衝突只列提醒', scoped.violations.length === 1 && scoped.violations[0].code === 'rain'
+    && scoped.warnings.some((w) => w.code === 'existing_hours'));
+  const movedScoped = T.scopeUnchangedProblems(beforeScoped, { stops: [{ ...beforeScoped.stops[0], time: '11:00' }] },
+    { violations: [oldHours] }, { violations: [oldHours], warnings: [] });
+  ok('避雨提案：改過該站時間仍須通過營業驗證', !movedScoped.ok && movedScoped.violations.some((w) => w.code === 'hours'));
 
   // 臺東美術館週六「09:00–12:00, 13:30–17:00」：下午那段也要認得
   const saturday = (() => { const d = new Date(tomorrow + 'T00:00:00Z'); d.setUTCDate(d.getUTCDate() + ((6 - d.getUTCDay() + 7) % 7)); return d.toISOString().slice(0, 10); })();
@@ -180,6 +192,10 @@ const STORM_ALL = { sea: [
     const fb = await runAgent({ trip: TRIP, trigger: { type: 'weather' }, scenario: SCENARIO, onEvent: () => {} });
     ok('AI 未啟用時降級成規則式替換', fb.type === 'proposal' && fb.fallback && fb.changes.length >= 2, JSON.stringify(fb).slice(0, 300));
     ok('降級方案裡沒有下雨的戶外站', fb.type === 'proposal' && !fb.draft.stops.some((s) => ['臺東森林公園', '加路蘭'].includes(s.name)));
+    const oldHoursTrip = { ...TRIP, stops: TRIP.stops.map((s) => s.id === 's1' ? { ...s, businessHours: '17:00–22:00' } : s) };
+    const oldHoursResult = await runAgent({ trip: oldHoursTrip, trigger: { type: 'weather' }, scenario: SCENARIO, onEvent: () => {} });
+    ok('原行程上午營業時段錯誤不擋避雨提案', oldHoursResult.type === 'proposal'
+      && oldHoursResult.warnings.some((w) => w.includes('原行程已有')), JSON.stringify(oldHoursResult).slice(0, 500));
   }
 
   // ── 實際跑 gpt-oss（情境 B）──

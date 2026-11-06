@@ -1381,7 +1381,7 @@ function section21() {
   const panel = { classList: cls(), style: { display: 'block' }, offsetWidth: 240, parentElement: { clientWidth: 1000 },
     querySelectorAll: () => cards, scrollTo: (o) => scrolls.push(o.top) };
   const c = {
-    Math, Number, String, currentTripStatus: 'ongoing', currentStopIndex: 2, activeRouteStage: null, lastScrolledLiveRouteStage: null,
+    Math, Number, String, currentTripStatus: 'ongoing', currentStopIndex: 2, activeRouteStage: null, lastScrolledLiveRouteStage: null, _lastLiveRouteStage: null,
     routeStageCache: [0, 1, 2, 3].map((i) => ({ index: i, sourceStopIndex: i, destinationStopIndex: i + 1 })),
     document: { getElementById: () => panel }, isMobileLayout: () => false, map: { getDiv: () => ({ clientWidth: 1000 }) },
     // 階段面板會跟著行程列表的「第 N 天」切換一起過濾
@@ -1533,7 +1533,45 @@ function section22() {
 }
 section22();
 
-section19().catch((e) => check('第 19 節執行', false, e && e.stack)).then(() => {
+// ══════════════════════════════════════════════════════════════
+// 23. 生成路線：餐廳候選不能突破本趟 30 公里景點範圍
+// ══════════════════════════════════════════════════════════════
+async function section23() {
+  section('23. 台東行程餐廳範圍');
+  const foodData = { window: {} };
+  vm.createContext(foodData);
+  vm.runInContext(fs.readFileSync(path.join(APP, 'restaurant-data.js'), 'utf8'), foodData);
+  const center = { lat: 22.755, lng: 121.144 };
+  const c = makeSandbox({
+    window: foodData.window,
+    _activeTripReach: { center, maxM: 30000 },
+    _activeTripZones: [{ name: '市區', districts: ['台東', '卑南'] }],
+    TRIP_ZONES: [
+      { name: '市區', districts: ['台東', '卑南'] },
+      { name: '東海岸', districts: ['東河', '成功', '長濱'] },
+      { name: '縱谷', districts: ['鹿野', '關山', '池上', '海端', '延平'] },
+      { name: '南迴', districts: ['太麻里', '金峰', '大武', '達仁'] }
+    ],
+    normalizeCandidateName: (s) => String(s || '').trim().replace(/\s+/g, ''),
+    getLocalFoodList: () => foodData.window.WAI_RESTAURANT_DATA['台東']
+  });
+  ['haversineM', 'isPoiInActiveZones', 'mealCandidatesFor']
+    .forEach((name) => vm.runInContext(extractFunction(SRC, name), c));
+  vm.runInContext('async ' + extractFunction(SRC, 'fetchGoogleMapsFoodList'), c);
+  const all = foodData.window.WAI_RESTAURANT_DATA['台東'];
+  const far = all.filter((p) => c.haversineM(center, p) > 30000);
+  check('測試資料含 30 公里外餐廳', far.length > 0);
+  check('南迴遠端景點不在台東市區行程候選', !c.isPoiInActiveZones({ name: '大武之心南迴驛', district: '大武', lat: 22.367, lng: 120.9 }));
+  const cached = await c.fetchGoogleMapsFoodList('台東', center);
+  check('送給模型的餐廳候選在本趟範圍內', cached.length > 0 && cached.every((p) => c.haversineM(center, p) <= 30000));
+  const routed = c.mealCandidatesFor('台東');
+  check('排餐時不把遠端餐廳加回行程', routed.length > 0 && routed.every((p) => c.haversineM(center, p) <= 30000));
+}
+
+Promise.all([
+  section19().catch((e) => check('第 19 節執行', false, e && e.stack)),
+  section23().catch((e) => check('第 23 節執行', false, e && e.stack))
+]).then(() => {
   console.log('\n══════════════════════════════════════');
   console.log('通過 ' + pass + '，失敗 ' + fail);
   if (failures.length) {

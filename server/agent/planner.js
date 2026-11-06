@@ -29,6 +29,7 @@ const ISLANDS = new Set(['綠島', '蘭嶼']);
 const DEST_CENTER = {
   台東: { lat: 22.755, lng: 121.144 },
   台東市: { lat: 22.755, lng: 121.144 },
+  太麻里: { lat: 22.616, lng: 121.005 },
   綠島: { lat: 22.666, lng: 121.494 },
   蘭嶼: { lat: 22.046, lng: 121.548 },
   知本: { lat: 22.695, lng: 121.017 },
@@ -86,7 +87,7 @@ function visitorCenterOf(vc, other) {
 }
 
 // 飲料、冰品、咖啡、甜點不算正餐：不能當午餐或晚餐，也不算「兩餐太近」
-const SNACK_NAME_RE = /茶飲|飲料|手搖|冰城|冰店|冰品|豆花|甜點|咖啡|cafe|coffee|烘焙|麵包|甜湯|剉冰|雪花冰/i;
+const SNACK_NAME_RE = /茶飲|飲料|手搖|冰城|冰店|冰品|冰淇淋|豆花|愛玉|煮蛋|甜點|咖啡|cafe|coffee|烘焙|麵包|甜湯|剉冰|雪花冰/i;
 const isSnack = (place) => SNACK_NAME_RE.test(String((place && place.name) || ''));
 const MEAL_GAP_MIN = 150;       // 兩間正餐開始時間至少隔 2.5 小時
 const MEAL_GAP_NOTICE_MIN = 90; // 使用者指定時不擋，太近才提醒
@@ -117,7 +118,7 @@ function centerOf(dest) {
   if (DEST_CENTER[d]) return DEST_CENTER[d];
   const hit = Object.keys(DEST_CENTER).find((k) => d.includes(k));
   if (hit) return DEST_CENTER[hit];
-  const pts = D.data().pois.filter((p) => p.region === d);
+  const pts = D.data().pois.filter((p) => p.region === d || p.district === d);
   if (pts.length) {
     return { lat: pts.reduce((a, p) => a + p.lat, 0) / pts.length, lng: pts.reduce((a, p) => a + p.lng, 0) / pts.length };
   }

@@ -17,6 +17,7 @@ const D = require('./data');
 const I = require('./itinerary');
 const SEA = require('./sea');
 const P = require('./planner');
+const crowd = require('../crowd-signals');
 
 const MAX_TOOL_CALLS = 20;
 const MAX_LLM_CALLS = 18;
@@ -33,6 +34,18 @@ const FOOD_AVOID_KM = 2;
 const FOOD_SNACK_KM = 5;           // 飲料、冰品排在正餐後面
 const rnd = (ctx) => (typeof ctx.random === 'function' ? ctx.random() : Math.random());
 const avoided = (req, place) => !!(req.avoidKeys && req.avoidKeys.has(place._key));
+function crowdPenalty(place, signals) {
+  if (!signals || !place) return 0;
+  const key = crowd.stopKey(place.name);
+  const totals = Object.values(signals.total || {}).map(Number).filter(Number.isFinite);
+  const maxTotal = totals.length ? Math.max(...totals) : 0;
+  let penalty = maxTotal >= 5 ? 0.8 * (Number((signals.total || {})[key]) || 0) / maxTotal : 0;
+  const day = (signals.day || {})[key];
+  if (day && Number(day.total) >= 3) penalty += Math.min(1, 0.2 * Number(day.total));
+  if (Number.isFinite(Number(place.lat)) && Number.isFinite(Number(place.lng))
+    && (signals.fullToday || []).some((c) => D.haversineKm(place, c) <= 0.3)) penalty += 1;
+  return penalty;
+}
 const timeoutMs = () => Number(process.env.AGENT_PLAN_TIMEOUT_MS) || 90 * 1000;
 
 const SYSTEM_PROMPT = [
@@ -154,6 +167,11 @@ function originOf(ctx, nearName) {
   return ctx.req.center;
 }
 
+function taimaliLoopCenter(req) {
+  return req.dest === '太麻里' && /太麻里/.test(req.startPoint.name) && /太麻里/.test(req.endPoint.name)
+    ? P.centerOf('太麻里') : null;
+}
+
 const IMPL = {
   get_trip_request(ctx) {
     const r = ctx.req;
@@ -216,7 +234,10 @@ const IMPL = {
   search_local_poi(ctx, args) {
     const r = ctx.req;
     const origin = originOf(ctx, args.nearName);
-    const radius = Math.min(60, Math.max(1, Number(args.radiusKm) || (r.island ? 20 : 20)));
+    // 太麻里往返行程的搜尋範圍固定在鎮內；nearName 不能把中心移到台東市區。
+    const localCenter = taimaliLoopCenter(r);
+    const localCap = localCenter ? 15 : 60;
+    const radius = Math.min(localCap, Math.max(1, Number(args.radiusKm) || 20));
     const interests = args.interest ? [String(args.interest)] : r.interests;
     const kw = String(args.keyword || '').trim().slice(0, 12);
     const seenBase = [];
@@ -226,11 +247,12 @@ const IMPL = {
       .filter((p) => !kw || `${p.name}${p.desc || ''}`.includes(kw))
       .filter((p) => openDuringTrip(p, r))
       .map((p) => ({ p, km: D.haversineKm(origin, p) }))
-      .filter((x) => x.km <= radius)
+      .filter((x) => x.km <= radius && (!localCenter || D.haversineKm(localCenter, x.p) <= localCap))
       .map((x) => ({
         ...x,
         score: P.interestScore(x.p, interests) * 2 + (Number(x.p.rating) || 4) - x.km / 8
           + rnd(ctx) * SCORE_JITTER - (avoided(r, x.p) ? AVOID_PENALTY : 0)
+          - crowdPenalty(x.p, ctx.crowdSignals)
       }))
       .sort((a, b) => b.score - a.score)
       .filter((x) => {
@@ -257,7 +279,8 @@ const IMPL = {
   search_restaurants(ctx, args) {
     const r = ctx.req;
     const origin = originOf(ctx, args.nearName);
-    const radius = Math.min(40, Math.max(1, Number(args.radiusKm) || 10));
+    const localCenter = taimaliLoopCenter(r);
+    const radius = Math.min(localCenter ? 15 : 40, Math.max(1, Number(args.radiusKm) || 10));
     // 只列「這趟行程的用餐時段」有營業的店（早餐店、傍晚才開的鹹酥雞不給午餐用）
     const slots = P.mealSlots(r.startMin, r.endMin).filter((s) => !args.meal || s.meal === args.meal);
     const mealsOf = (p) => {
@@ -269,7 +292,7 @@ const IMPL = {
     const results = P.poolOf(r, 'food')
       .filter((p) => openDuringTrip(p, r))
       .map((p) => ({ p, km: D.haversineKm(origin, p), meals: mealsOf(p) }))
-      .filter((x) => x.km <= radius && (!slots.length || x.meals.length))
+      .filter((x) => x.km <= radius && (!localCenter || D.haversineKm(localCenter, x.p) <= 15) && (!slots.length || x.meals.length))
       .filter((x) => !args.meal || !P.isSnack(x.p))   // 找正餐時不列飲料店、冰店
       .map((x) => ({ ...x, rank: x.km + rnd(ctx) * FOOD_JITTER_KM + (avoided(r, x.p) ? FOOD_AVOID_KM : 0) + (P.isSnack(x.p) ? FOOD_SNACK_KM : 0) }))
       .sort((a, b) => a.rank - b.rank)
@@ -389,7 +412,7 @@ function itineraryView(draft) {
  * @param {function} [opts.random] 分流用的亂數（測試注入固定值）
  * @returns {Promise<object>} 最後一個事件（itinerary / error）
  */
-async function runPlanAgent({ request, scenario, onEvent, onUsage, chat, signal, random }) {
+async function runPlanAgent({ request, scenario, onEvent, onUsage, chat, signal, random, crowdSignals }) {
   const t0 = Date.now();
   const TIMEOUT_MS = timeoutMs();
   const emit = (e) => { try { onEvent && onEvent({ ...e, ms: Date.now() - t0 }); } catch (_e) {} };
@@ -398,6 +421,7 @@ async function runPlanAgent({ request, scenario, onEvent, onUsage, chat, signal,
   const ctx = {
     req,
     scenario: scenario && scenario.rain ? scenario : null,
+    crowdSignals: crowdSignals || null,
     allowed: new Set(),
     random: typeof random === 'function' ? random : Math.random,   // 測試可注入固定值
     draft: null,

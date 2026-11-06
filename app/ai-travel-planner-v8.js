@@ -178,14 +178,25 @@
   }
 
   let routeRefitTimer = null;
+  let pendingReplanFit = false;
+  let pendingReplanFitTimer = null;
+  function setPendingReplanFit(waiting) {
+    clearTimeout(pendingReplanFitTimer);
+    pendingReplanFit = !!waiting;
+    if (waiting) pendingReplanFitTimer = setTimeout(() => { pendingReplanFit = false; }, 45000);
+  }
   function scheduleDisplayRefit() {
-    if (tripUserDirty) return;
+    if (tripUserDirty && !pendingReplanFit) return;
     clearTimeout(routeRefitTimer);
     routeRefitTimer = setTimeout(() => {
       routeRefitTimer = null;
-      if (tripUserDirty) return;
+      if (tripUserDirty && !pendingReplanFit) return;
       try {
         const fit = fitScheduleToTimeLimit({ requireKnownTransit: true });
+        if (pendingReplanFit && !fit.deferred) {
+          setPendingReplanFit(false);
+          if (fit.changed) schedulePersistTrip();
+        }
         if (fit.changed) {
           renderItineraryDisplay(); // 內部會依新排程更新時間橫幅與 hero 時間
           try { syncRouteStageScheduleTimes(buildReplanSchedule()); } catch (_e) {}
@@ -11866,7 +11877,10 @@
     const result = addStopRespectingPlace(template, (tpl) => {
       const newStop = createStopFromTemplate(tpl);
       const targetIndex = preferredTargetId ? replanStops.findIndex((item) => item.id === preferredTargetId) : -1;
-      if (targetIndex >= 0 && replanStops[targetIndex].type !== 'end') {
+      const multiDay = isMultiDayTrip(currentTripPreferences && currentTripPreferences.days);
+      const targetOnOtherDay = multiDay && targetIndex >= 0 && Number(tpl.dayIndex) >= 1
+        && clampDayIndex(replanStops[targetIndex].dayIndex, 1) !== clampDayIndex(tpl.dayIndex, 1);
+      if (targetIndex >= 0 && replanStops[targetIndex].type !== 'end' && !targetOnOtherDay) {
         replanStops.splice(targetIndex + 1, 0, newStop);
       } else {
         replanStops.splice(findNewStopInsertIndex(tpl.dayIndex), 0, newStop);
@@ -14873,6 +14887,7 @@
   }
 
   function cancelReplan() {
+    setPendingReplanFit(false);
     isReplanning = false;
     activeStopMenuId = null;
     closeModifyWindow();
@@ -18114,7 +18129,8 @@
 
       // 重新規劃結果若仍超出設定時長，套用與匯出相同的壓縮（停留最久優先、每站最多縮 35%）
       try {
-        const _rgFit = fitScheduleToTimeLimit();
+        const _rgFit = fitScheduleToTimeLimit({ requireKnownTransit: true });
+        setPendingReplanFit(_rgFit.deferred === true);
         if (_rgFit.changed && typeof showToast === 'function') {
           const _endStr = _rgFit.limitEndMin != null ? minutesToClock(_rgFit.limitEndMin) : '';
           showToast(_rgFit.fits
@@ -22606,7 +22622,7 @@
                 //   載入路徑必須維持只讀不寫——否則每次重新整理都會用當下路況
                 //   覆寫掉 App 端剛寫入的資料（這是先前特意修過的行為，不可回退）。
                 if (recalculateTransport && tripUserDirty) schedulePersistTrip();
-                else scheduleDisplayRefit(); // 實測比估算長時，顯示端補壓縮
+                if (pendingReplanFit || !(recalculateTransport && tripUserDirty)) scheduleDisplayRefit(); // 實測比估算長時，顯示端補壓縮
               }
             }
 

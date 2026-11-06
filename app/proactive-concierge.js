@@ -10,7 +10,7 @@
 
    - 天氣／公休在顯示前會再問後端 /api/agent/precheck（同一套程式檢查、不呼叫 AI），
      後端也認為有問題才提醒，避免使用者點開後得到「程式檢查沒發現問題」。mock 模式不問。
-   - 去重：同一個問題（key）只提醒一次；按「不用」後，同類提醒冷卻 60 分鐘。
+   - 去重：同一個問題（key）只提醒一次；「稍後再看」可從小標籤重開，按 × 後同類提醒冷卻 60 分鐘。
      記在 localStorage（每份行程分開）；展示模擬與 ?agentMock 只記在記憶體，不影響正式紀錄。
    - 多人共編：只有行程擁有者的裝置做背景偵測（單人行程不受限），見 docs/amd-agent/proactive-concierge.md。
    - 依賴 ai-travel-planner-v8.js 的全域（replanStops、startAgentRun…），必須在它之後載入。
@@ -30,7 +30,7 @@
     lagMin: 20,                  // 落後門檻（分鐘）
     pollMs: 60 * 1000,           // 正式：每分鐘檢查一次（天氣有 30 分鐘快取，不會每次打 API）
     simPollMs: 4000,             // 展示模擬：虛擬時鐘跑得快，4 秒檢查一次
-    cooldownMin: 60,             // 按「不用」後，同類提醒冷卻多久
+    cooldownMin: 60,             // 按小標籤的 × 後，同類提醒冷卻多久
     eveningHour: 18,             // 出發前一晚幾點起做預檢
     precheckTtlMs: 30 * 60 * 1000
   }, window.WAI_PROACTIVE_CONFIG || {});
@@ -38,7 +38,7 @@
   const KIND_ORDER = { lag: 0, weather: 1, closed: 2 };
 
   const pc = {
-    lastRun: 0, checking: false, current: null, demoLagMin: null,
+    lastRun: 0, checking: false, current: null, deferred: null, demoLagMin: null,
     memory: {}, wasEphemeral: false, precheck: new Map(), lastTripId: ''
   };
 
@@ -337,12 +337,67 @@
       <div class="pc-body"><div class="pc-title"></div><div class="pc-detail"></div></div>
       <div class="pc-actions">
         <button type="button" class="pc-btn primary" data-pc-open>看建議</button>
-        <button type="button" class="pc-btn" data-pc-dismiss>不用</button>
+        <button type="button" class="pc-btn" data-pc-defer>稍後再看</button>
       </div>`;
     el.querySelector('[data-pc-open]').addEventListener('click', acceptCurrent);
-    el.querySelector('[data-pc-dismiss]').addEventListener('click', dismissCurrent);
+    el.querySelector('[data-pc-defer]').addEventListener('click', deferCurrent);
     document.body.appendChild(el);
     return el;
+  }
+
+  function ensureChip() {
+    let el = document.getElementById('proactiveChip');
+    if (el) return el;
+    el = document.createElement('div');
+    el.id = 'proactiveChip';
+    el.className = 'pc-chip';
+    el.hidden = true;
+    el.innerHTML = `<button type="button" class="pc-chip-open" data-pc-reopen>⚠️ 待看建議</button>
+      <button type="button" class="pc-chip-close" data-pc-dismiss-deferred aria-label="這次不再提醒" title="這次不再提醒">×</button>`;
+    el.querySelector('[data-pc-reopen]').addEventListener('click', reopenDeferred);
+    el.querySelector('[data-pc-dismiss-deferred]').addEventListener('click', dismissDeferred);
+    document.body.appendChild(el);
+    return el;
+  }
+
+  function showChip(issue) {
+    pc.deferred = issue;
+    const el = ensureChip();
+    placeBanner(el);
+    const reopen = el.querySelector('[data-pc-reopen]');
+    reopen.setAttribute('aria-label', `重新查看：${issue.title}`);
+    reopen.title = issue.title;
+    el.hidden = false;
+  }
+
+  function hideChip() {
+    const el = document.getElementById('proactiveChip');
+    if (el) el.hidden = true;
+    pc.deferred = null;
+  }
+
+  function deferCurrent() {
+    const issue = pc.current;
+    if (!issue) return;
+    markSeen(issue.key, 'deferred');
+    hideBanner();
+    showChip(issue);
+  }
+
+  function reopenDeferred() {
+    const issue = pc.deferred;
+    if (!issue) return;
+    hideChip();
+    showBanner(issue);
+  }
+
+  function dismissDeferred() {
+    const issue = pc.deferred;
+    if (!issue) return;
+    markSeen(issue.key, 'dismissed');
+    setCooldown(issue.kind);
+    hideChip();
+    toast(`這次已收起，${CFG.cooldownMin} 分鐘內不再提醒這類狀況`, 'blue');
   }
 
   function placeBanner(el) {
@@ -353,6 +408,7 @@
 
   function showBanner(issue) {
     const el = ensureBanner();
+    hideChip();
     pc.current = issue;
     el.className = `pc-banner is-${issue.kind}`;
     el.querySelector('.pc-icon').textContent = issue.icon;
@@ -424,22 +480,22 @@
     const o = opts || {};
     if (pc.checking) return { skipped: 'busy' };
     const tripId = String(currentItineraryId || '');
-    if (tripId !== pc.lastTripId) { pc.lastTripId = tripId; hideBanner(); pc.precheck.clear(); }
+    if (tripId !== pc.lastTripId) { pc.lastTripId = tripId; hideBanner(); hideChip(); pc.precheck.clear(); }
     const eph = ephemeral();
     if (eph && !pc.wasEphemeral) pc.memory = {};   // 每次進展示模擬都從乾淨的紀錄開始
     pc.wasEphemeral = eph;
 
     const hasTrip = tripId && tripId !== 'TRIP-EMPTY' && Array.isArray(replanStops) && replanStops.some((s) => s && s.name);
-    if (!hasTrip) { hideBanner(); return { skipped: 'no-trip' }; }
-    if (!leaderOk() && !o.force) { hideBanner(); return { skipped: 'not-leader' }; }
-    if (typeof collabReadOnly !== 'undefined' && collabReadOnly) { hideBanner(); return { skipped: 'readonly' }; }
+    if (!hasTrip) { hideBanner(); hideChip(); return { skipped: 'no-trip' }; }
+    if (!leaderOk() && !o.force) { hideBanner(); hideChip(); return { skipped: 'not-leader' }; }
+    if (typeof collabReadOnly !== 'undefined' && collabReadOnly) { hideBanner(); hideChip(); return { skipped: 'readonly' }; }
     if ((typeof agentState !== 'undefined' && agentState.running) || (typeof isAiResponding !== 'undefined' && isAiResponding)
       || (typeof isReplanning !== 'undefined' && isReplanning)) return { skipped: 'busy' };
     const nowMs = runtimeNow();
     let phase = phaseOf(nowMs);
     if (!phase && o.force) phase = currentTripStatus === 'ongoing' ? 'ongoing' : 'today';
-    if (!phase) { hideBanner(); return { skipped: 'out-of-window' }; }
-    if (!agentAvailability().ok) { hideBanner(); return { skipped: 'unavailable' }; }
+    if (!phase) { hideBanner(); hideChip(); return { skipped: 'out-of-window' }; }
+    if (!agentAvailability().ok) { hideBanner(); hideChip(); return { skipped: 'unavailable' }; }
 
     pc.checking = true;
     try {
@@ -448,6 +504,11 @@
       if (lag && !lag.quiet) found.push(lag);
       found.push(...await detectWeatherAndClosed(nowMs, phase));
       found.sort((a, b) => KIND_ORDER[a.kind] - KIND_ORDER[b.kind]);
+
+      const seen = bucket(loadStore()).seen;
+      const deferred = found.find((f) => seen[f.key] && seen[f.key].outcome === 'deferred');
+      if (deferred) showChip(deferred);
+      else hideChip();
 
       const candidates = found.filter((f) => !wasSeen(f.key) && (o.force || !coolingDown(f.kind)));
       // 正在顯示的提醒：問題還在就留著，除非出現更急的（落後 > 天氣 > 公休）；不在了（例如已經改過行程）就收起來
@@ -504,6 +565,7 @@
   function resetDemo() {
     resetMemory();
     hideBanner();
+    hideChip();
     pc.demoLagMin = null;
     toast('已清除這份行程的提醒紀錄', 'blue');
   }
@@ -545,7 +607,12 @@
       new MutationObserver(() => injectSimButton()).observe(document.body, { childList: true });
     } catch (_e) { /* 舊瀏覽器：模擬工具列少一顆按鈕，demo 面板仍可用 */ }
     injectSimButton();
-    window.addEventListener('resize', () => { const el = document.getElementById('proactiveBanner'); if (el && !el.hidden) placeBanner(el); });
+    window.addEventListener('resize', () => {
+      for (const id of ['proactiveBanner', 'proactiveChip']) {
+        const el = document.getElementById(id);
+        if (el && !el.hidden) placeBanner(el);
+      }
+    });
     document.addEventListener('visibilitychange', () => { if (!document.hidden) { pc.lastRun = 0; tick(); } });
     window.setInterval(tick, 1000);
     // 頁面載入後行程還在讀：稍等再做第一次檢查
@@ -554,7 +621,7 @@
 
   window.WAI_PROACTIVE = Object.freeze({
     check: (opts) => check(opts), forceCheck, simulateLag, reset: resetDemo,
-    dismiss: dismissCurrent, accept: acceptCurrent,
+    dismiss: dismissCurrent, defer: deferCurrent, reopen: reopenDeferred, accept: acceptCurrent,
     get current() { return pc.current; }, config: CFG
   });
 

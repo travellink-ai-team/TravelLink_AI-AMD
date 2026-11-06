@@ -79,6 +79,32 @@ const DEFINITIONS = [
 
 const TERMINAL = new Set(['ask_user', 'present_proposal', 'no_change_needed']);
 
+// 天氣提案只需解決本次天氣問題；原行程已存在且完全沒變的營業時段問題仍提醒，
+// 但不讓它擋住替換下雨景點。時間、站點或營業資料一變，就重新當成硬規則驗證。
+function scopeUnchangedProblems(beforeTrip, draft, beforeCheck, afterCheck) {
+  if (!beforeCheck || !afterCheck) return afterCheck;
+  const localCodes = new Set(['hours']);
+  const keyOf = (v) => `${v.code}|${v.stopId}|${v.message}`;
+  const existing = new Set((beforeCheck.violations || []).filter((v) => localCodes.has(v.code)).map(keyOf));
+  const original = new Map((beforeTrip.stops || []).map((s) => [s.id, s]));
+  const proposed = new Map((draft.stops || []).map((s) => [s.id, s]));
+  const ignored = [];
+  const violations = (afterCheck.violations || []).filter((v) => {
+    if (!localCodes.has(v.code) || !existing.has(keyOf(v))) return true;
+    const a = original.get(v.stopId), b = proposed.get(v.stopId);
+    if (!a || !b || a.name !== b.name || a.day !== b.day || a.time !== b.time
+        || Number(a.stayMin) !== Number(b.stayMin) || a.businessHours !== b.businessHours) return true;
+    ignored.push(v);
+    return false;
+  });
+  return {
+    ...afterCheck,
+    ok: violations.length === 0,
+    violations,
+    warnings: [...(afterCheck.warnings || []), ...ignored.map((v) => ({ ...v, code: `existing_${v.code}`, message: `原行程已有：${v.message}` }))]
+  };
+}
+
 // 給 UI 動態面板顯示的一句話
 const LABELS = {
   get_trip_state: () => '讀取目前行程',
@@ -316,4 +342,4 @@ function definitions() {
   });
 }
 
-module.exports = { definitions, DEFINITIONS, TERMINAL, runTool, labelOf, stopView };
+module.exports = { definitions, DEFINITIONS, TERMINAL, runTool, labelOf, stopView, scopeUnchangedProblems };

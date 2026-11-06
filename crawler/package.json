@@ -19,6 +19,7 @@
     "enrich:fees": "node worker.js --enrich-fees",
     "enrich:fees:dry": "node worker.js --enrich-fees --dry-run",
     "crawl:food": "node worker.js --crawl-food",
+    "crawl:food:gaps": "node worker.js --crawl-food-gaps --max-calls 3",
     "crawl:food:dry": "node worker.js --crawl-food --dry-run",
     "crawl:parking": "node worker.js --crawl-parking",
     "crawl:parking:dry": "node worker.js --crawl-parking --dry-run",

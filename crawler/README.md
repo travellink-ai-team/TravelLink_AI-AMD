@@ -258,6 +258,7 @@ npm run crawl:food
 - 欄位：`name / lat / lng / businessHours / address / rating`，另外從 Places 的 `priceLevel` / `priceRange` 換算出 **`costPerPerson`（人均消費估值）與 `costNote`（顯示文字，如「$300–500」或「約 $150（$）」）**；只有 `priceLevel` 沒有 `priceRange` 時用等級估值（免費/$150/$350/$700/$1200）代替。前端用它在用餐站顯示人均消費、並算進預算拆解。
 - 會過濾掉夾帶在 `restaurant` 類型結果裡的住宿（`primaryType` 命中飯店/民宿類別，或店名符合「飯店／旅館／民宿／resort／hotel」等關鍵字者不收）。
 - 成本：改用 `searchNearby` 後每目的地 1 次呼叫（原本 `searchText` 3 詞需 3 次）。
+- 台東本島三個餐廳空白區可執行 `npm run crawl:food:gaps`：以太麻里、知本、關山的景點座標為中心，各做一次 8 km Nearby Search，將新店追加到既有「台東」桶，其他餐廳不覆寫。固定最多 3 次 Google 呼叫；`--dry-run` 仍會發出查詢，不能當成免費預覽。請使用可供伺服器呼叫的 `GOOGLE_MAPS_API_KEY`。
 - 由 `..\ai-travel-explore-final.html` 以 `<script src="restaurant-data.js">` 載入；檔案不存在時前端自動回退即時抓。
 
 ### 店名夾營業備註（clean:food-names）
