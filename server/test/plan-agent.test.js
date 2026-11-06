@@ -158,6 +158,10 @@ const last = (results, name) => (results[name] || [])[(results[name] || []).leng
     ok('遊客中心：鄉鎮名前綴不算（鹿野遊客中心×鹿野高台）', !P.sameAttraction(DD.findPlace('鹿野遊客中心'), DD.findPlace('鹿野高台')));
     ok('遊客中心：卑南只認卑南遺址', !P.sameAttraction(DD.findPlace('卑南遊客中心'), DD.findPlace('卑南大圳水利公園')) && P.sameAttraction(DD.findPlace('卑南遊客中心'), DD.findPlace('卑南遺址公園')));
     ok('遊客中心：專屬前綴仍算（八仙洞、小野柳）', P.sameAttraction(DD.findPlace('八仙洞遊客中心'), DD.findPlace('八仙洞')) && P.sameAttraction(DD.findPlace('小野柳遊客中心'), DD.findPlace('小野柳')));
+    for (const [x, y] of [['金樽漁港', '金樽遊憩區'], ['天龍古道', '天龍吊橋'], ['泰源幽谷', '東河橋遊憩區'], ['綠島梅花鹿生態園區', '綠島紫坪生態保育區'], ['忠勇社區自行車道', '金剛大道'], ['都蘭', '都蘭遺址']]) {
+      ok(`同一處：${x}×${y} 不算（只靠距離或地名不合併）`, !P.sameAttraction(DD.findPlace(x), DD.findPlace(y)));
+    }
+    ok('同一處：清單列的同名仍算（霧鹿砲台、野銀）', P.sameAttraction(DD.findPlace('霧鹿砲台'), DD.findPlace('霧鹿古砲台')) && P.sameAttraction(DD.findPlace('野銀舊部落'), DD.findPlace('野銀部落地下屋')));
     ok('遊客中心：前綴只是地區名不算同一處', !P.sameAttraction(DD.findPlace('綠島遊客中心'), DD.findPlace('綠島人權文化園區')));
     const filled = dr({}, [...sc('鯉魚山', '臺東森林公園', '小野柳').map((x) => ({ name: x.name })), { name: reals[0] }]);
     ok('空檔由程式拉長停留：不必 LLM 重送', !codes(filled).includes('idle') && filled.stops.some((x) => x.stayMin > 60), filled.returnTime + JSON.stringify(codes(filled)));

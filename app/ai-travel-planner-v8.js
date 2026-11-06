@@ -3767,61 +3767,12 @@
 
   // ── 大景點導向 ──
   // 使用者加入大景點裡的小景點（鷺鷥湖），導向大景點（臺東森林公園）並提醒，可以按一下改回單獨一站。
-  // 只認這份人工確認過的清單：OSM 輪廓有不少不是「大景點」（阿美族民俗中心框住都歷遊客中心、
-  // 台東鐵道藝術村框住轉運站），全自動會導錯。name＝站名（對得到 poi-data），outline＝OSM 輪廓名，
-  // aliases＝不靠座標也認得的小景點。要加新的大景點，在這裡加一行。
-  const BIG_ATTRACTIONS = [
-    { name: '臺東森林公園', outline: '臺東森林公園', aliases: ['鷺鷥湖', '琵琶湖', '活水湖'] },
-    { name: '鯉魚山', outline: '鯉魚山公園', aliases: ['龍鳳佛堂'] },
-    { name: '台東海濱公園', outline: '海濱公園(馬卡巴嗨公園)', aliases: ['國際地標', '馬卡巴嗨'] },
-    { name: '小野柳', outline: '小野柳遊憩區', aliases: ['富岡地質公園'] },
-    { name: '臺東鐵道藝術村 (鐵花新聚落)', outline: '台東鐵道藝術村', aliases: ['鐵花村', '鐵花新聚落', '舊鐵道'] },
-    { name: '台東糖廠文創園區', outline: '台東糖廠', aliases: [] },
-    { name: '八仙洞', outline: '八仙洞', aliases: [] },
-    { name: '初鹿牧場', outline: '初鹿牧場', aliases: [] },
-    { name: '關山親水公園', outline: '關山親水公園', aliases: [] },
-    { name: '綠洲山莊', outline: '綠洲山莊(綠島感訓監獄)', aliases: ['八卦樓'] }
-  ];
-  const BIG_ATTRACTION_SKIP_RE = /火車站|車站|捷運|高鐵|轉運站|客運站|機場|航空站|停車場|公廁|廁所|萬富倉庫/; // 萬富倉庫是糖廠裡的甜點店，獨立一站
-
-  function bigAttractionRing(parent) {
-    if (parent.ring !== undefined) return parent.ring;
-    const items = (window.WAI_OSM_BOUNDARY_DATA && window.WAI_OSM_BOUNDARY_DATA.items) || [];
-    const hit = items.find((it) => it && it.n === parent.outline && Array.isArray(it.r) && it.r.length >= 3);
-    parent.ring = hit ? hit.r : null;
-    return parent.ring;
-  }
-
-  function pointInLatLngRing(ring, lat, lng) {
-    let inside = false;
-    for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
-      const a = ring[i], b = ring[j];
-      if ((a[0] > lat) !== (b[0] > lat) && lng < ((b[1] - a[1]) * (lat - a[0])) / (b[0] - a[0]) + a[1]) inside = !inside;
-    }
-    return inside;
-  }
-
-  // 這個地點屬於哪個大景點：{ parent, isSelf }（isSelf＝它自己就是大景點）；不屬於任何大景點回 null。
-  // 餐廳、住宿、交通站、廁所就算在園區內也是獨立的一站。先比對名稱，座標可能不準。
+  // 清單放在 big-attraction-config.js（explore 共用）：OSM 輪廓有不少不是「大景點」，全自動會導錯。
+  // 這個地點屬於哪個大景點：{ parent, isSelf }；不屬於回 null。餐廳、住宿就算在園區內也是獨立的一站。
   function classifyBigAttraction(place) {
     if (!place || place.type === 'start' || place.type === 'end') return null;
-    const raw = String(place.name || '');
-    const name = normalizePlaceName(raw);
-    if (!name || isFoodStop(place) || isLodgingStop(place) || BIG_ATTRACTION_SKIP_RE.test(raw)) return null;
-    for (const parent of BIG_ATTRACTIONS) {
-      const own = normalizePlaceName(parent.name);
-      if (name === own || name.includes(own) || name === normalizePlaceName(parent.outline)) return { parent, isSelf: true };
-    }
-    for (const parent of BIG_ATTRACTIONS) {
-      if (parent.aliases.some((a) => name.includes(normalizePlaceName(a)))) return { parent, isSelf: false };
-    }
-    const c = readStopCoordinates(place);
-    if (!c) return null;
-    for (const parent of BIG_ATTRACTIONS) {
-      const ring = bigAttractionRing(parent);
-      if (ring && pointInLatLngRing(ring, c.lat, c.lng)) return { parent, isSelf: false };
-    }
-    return null;
+    if (!window.WAI_BIG_ATTRACTIONS || isFoodStop(place) || isLodgingStop(place)) return null;
+    return window.WAI_BIG_ATTRACTIONS.classify(place.name, readStopCoordinates(place));
   }
 
   // 大景點的座標與介紹：優先用 poi-data，沒有就用輪廓中心
@@ -3833,7 +3784,7 @@
       const poi = data[key].find((p) => p && normalizePlaceName(p.name) === own && Number.isFinite(Number(p.lat)));
       if (poi) return { name: parent.name, lat: Number(poi.lat), lng: Number(poi.lng), desc: poi.desc || '', businessHours: poi.businessHours || null };
     }
-    const ring = bigAttractionRing(parent);
+    const ring = window.WAI_BIG_ATTRACTIONS.ringOf(parent);
     if (!ring) return null;
     return {
       name: parent.name,
@@ -4085,11 +4036,8 @@
     // 若較短的名稱（≥3字）是另一個名稱的子字串，視為同地點
     const shorter = aN.length <= bN.length ? aN : bN;
     if (shorter.length >= 3 && (aN.includes(bN) || bN.includes(aN))) return true;
-    // 若座標幾乎重疊（< 30 公尺），也視為同地點
-    const coordA = readCoordinateObject(a['景點座標'] || a.scenicCoordinates || a.coordinates);
-    const coordB = readCoordinateObject(b['景點座標'] || b.scenicCoordinates || b.coordinates);
-    if (coordA && coordB && approxDistanceMeters(coordA.lat, coordA.lng, coordB.lat, coordB.lng) < 30) return true;
-    return false;
+    // 座標重疊不算：資料座標不準時，不同景點也會疊在一起（天龍古道和天龍吊橋）。只認人工確認的同名
+    return !!window.WAI_BIG_ATTRACTIONS && window.WAI_BIG_ATTRACTIONS.isSameName(a.name, b.name);
   }
 
   function isReplanEndpointDuplicate(stop, endpoint) {
@@ -4147,7 +4095,7 @@
   // 以「距離為主」：同區 800m 內即合併；同名（同前綴家族）再放寬到 2km；缺座標才退回名稱判定。
   const SUB_SPOT_MERGE_RADIUS_M = 800;
   const SUB_SPOT_NAME_MERGE_RADIUS_M = 2000;
-  const SUB_SPOT_SAME_SPOT_RADIUS_M = 300; // 不同名景點僅在此極近距離內才視為「同一處」而合併
+  const SUB_SPOT_SAME_SPOT_RADIUS_M = 300; // 不同名景點在此距離內：不合併，只提醒可能是同一處
 
   function readStopCoordinates(stop) {
     if (!stop) return null;
@@ -4173,6 +4121,13 @@
   }
 
   // 是否為同一大景區的兄弟子景點（名稱共享主體）
+  // 共同前綴要扣掉開頭的鄉鎮名再算：「成功海洋環境教室」和「成功海濱公園」共同前綴「成功海」，其實只差在都在成功鎮。
+  const NAME_TOWN_PREFIX_RE = /^(台東縣|台東市|台東|成功|關山|卑南|鹿野|池上|東河|長濱|太麻里|大武|綠島|蘭嶼|延平|海端|金峰|達仁)/;
+  function isSharedAttractionPrefix(prefix) {
+    const unified = String(prefix || '').replace(/臺/g, '台');
+    const town = unified.match(NAME_TOWN_PREFIX_RE);
+    return town ? unified.length - town[0].length >= 2 : unified.length >= 3;
+  }
   function isSameAttractionFamily(a, b) {
     const aN = normalizeText((a && a.name) || '');
     const bN = normalizeText((b && b.name) || '');
@@ -4181,7 +4136,8 @@
     const shorter = aN.length <= bN.length ? aN : bN;
     if (shorter.length >= 3 && (aN.includes(bN) || bN.includes(aN))) return true;
     // 正規化後共同前綴 ≥ 3 字（涵蓋「三仙台」案例，避免「台東」這類兩字地名誤判）
-    if (commonNamePrefix([aN, bN]).length >= 3) return true;
+    const sharedPrefix = commonNamePrefix([aN, bN]);
+    if (sharedPrefix.length >= 3 && isSharedAttractionPrefix(sharedPrefix)) return true;
     return false;
   }
 
@@ -4207,13 +4163,18 @@
     const cb = readStopCoordinates(b);
     if (ca && cb) {
       const d = approxDistanceMeters(ca.lat, ca.lng, cb.lat, cb.lng);
-      // 只併「真正同一景區」：同名家族放寬到 2km；不同名僅在極近(同一入口/同一處)才併，
-      // 避免市區密集但不同的景點(海濱公園/生命之樹…)被 800m 規則塌成一站、壓縮整日時數。
+      // 只有名稱明確相關或人工確認清單才合併；距離再近也只提醒（describeAddReminder）
       if (isSameAttractionFamily(a, b)) return d <= SUB_SPOT_NAME_MERGE_RADIUS_M;
-      return d <= SUB_SPOT_SAME_SPOT_RADIUS_M;
+      return isListedSamePlace(a, ca, b, cb);
     }
-    // 缺座標：退回名稱判定（保守）
-    return isSameAttractionFamily(a, b);
+    // 缺座標：只看名稱
+    return isSameAttractionFamily(a, b) || isListedSamePlace(a, null, b, null);
+  }
+
+  // 人工確認清單（big-attraction-config.js）：同一個地方的不同名稱，或屬於同一個大景點
+  function isListedSamePlace(a, ca, b, cb) {
+    const list = window.WAI_BIG_ATTRACTIONS;
+    return !!list && list.isSamePlace(a && a.name, ca, b && b.name, cb);
   }
 
   // 從一組名稱挑出「大景點名」：有共同前綴就用前綴（如三仙台觀景台/跨海步橋→三仙台），
@@ -4475,6 +4436,9 @@
         if (isFoodStop({ name: p.name })) continue; // 餐廳閘門：附近餐廳 POI 不被拉進景點子景點
         const dist = approxDistanceMeters(coord.lat, coord.lng, p.lat, p.lng);
         if (dist < 60 || dist > SUB_SPOT_MERGE_RADIUS_M) continue;
+        // 只因為在附近不算子景點：要名稱相關或在人工確認清單裡
+        const related = { name: p.name };
+        if (!isSameAttractionFamily(stop, related) && !isListedSamePlace(stop, coord, related, { lat: p.lat, lng: p.lng })) continue;
         cands.push({ name: p.name, lat: p.lat, lng: p.lng, dist });
       }
       cands.sort((a, b) => a.dist - b.dist);
@@ -4514,7 +4478,9 @@
       const bigNorm = normalizeText(bigName);
       const usedByOthers = stops.some(x => x !== stop && normalizeText(x.name) === bigNorm);
       // 代理人排的站不改名：實測會把「臺東環市自行車道」換成附近的「鯉魚山」
-      if (stop.agentPlanned !== true && stop.bigAreaChecked !== true && bigName && bigNorm !== parentNorm && !usedByOthers) {
+      // 改站名也要名稱相關或在清單裡，不能只因為附近有大景點
+      const bigNameRelated = !!bigName && (isSameAttractionFamily(stop, { name: bigName }) || isListedSamePlace(stop, coord, { name: bigName }, null));
+      if (stop.agentPlanned !== true && stop.bigAreaChecked !== true && bigName && bigNorm !== parentNorm && !usedByOthers && bigNameRelated) {
         stop.name = bigName;
         subs = [parentName, ...subs]; // 舊名收進子景點（setMergedSubSpots 會去掉等於新名者）
         stop.isMergedAttraction = true;

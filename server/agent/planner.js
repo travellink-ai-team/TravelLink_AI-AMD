@@ -58,8 +58,7 @@ const normDest = (s) => String(s || '').replace(/臺/g, '台').trim();
 // 只比景點對景點，景點旁邊的餐廳不算重複。
 const LANDMARK_SUFFIX = /(觀景平台|觀景台|休憩區|遊憩區|風景區|步道|公園|遺址|部落|海灘|沙灘|園區|燈塔|漁港|岩|洞)$/;
 const LANDMARK_STOPWORDS = new Set(['台東', '臺東', '綠島', '蘭嶼', '東河', '成功', '長濱', '池上', '關山', '鹿野', '太麻里',
-  '知本', '卑南', '大武', '金峰', '達仁', '延平', '海端', '小長城', '海濱']);
-const SAME_SPOT_KM = 0.025;
+  '知本', '卑南', '大武', '金峰', '達仁', '延平', '海端', '小長城', '海濱', '金樽', '都蘭', '都歷']);
 const SAME_LANDMARK_KM = 3;
 
 function landmarkTokens(name) {
@@ -97,11 +96,10 @@ function sameAttraction(a, b) {
   if (!a || !b || a === b) return false;
   const km = D.haversineKm(a, b);
   if (!Number.isFinite(km)) return false;   // 缺座標就無法用距離把關，寧可不合併
-  if (km <= SAME_SPOT_KM) return true;
+  // 人工確認清單優先；距離再近都不算（資料座標不準時，不同景點也會疊在一起）
+  if (B.isListedSamePlace(a, b)) return true;
   if (km <= VISITOR_CENTER_KM && (visitorCenterOf(a, b) || visitorCenterOf(b, a))) return true;
   if (km > SAME_LANDMARK_KM) return false;
-  // 名稱不共用字、但在同一個園區裡（鷺鷥湖在臺東森林公園裡、龍鳳佛堂在鯉魚山上）：看座標是否落在對方的 OSM 輪廓內
-  if (B.contains(a, b) || B.contains(b, a) || B.sharedOutline(a, b)) return true;
   const ta = landmarkTokens(a.name);
   const tb = landmarkTokens(b.name);
   return ta.some((t) => tb.some((u) => u === t || (t.length >= 3 && u.includes(t)) || (u.length >= 3 && t.includes(u))));

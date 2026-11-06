@@ -187,6 +187,7 @@ const IMPL = {
     const maxPop = inWindow.length ? Math.max(...inWindow) : null;
     return {
       source: f.source,
+      ...(r.island ? { islandNote: '離島室內景點很少：就算下雨也照常排戶外景點，程式只會提醒不會擋；不要拿餐廳充當室內景點，一天排一家午餐就好' } : {}),
       periods: periods.map((p) => ({ from: p.start.replace('T', ' '), to: p.end.replace('T', ' '), wx: p.wx, pop: p.pop, ...(p.simulated ? { simulated: true } : {}) })),
       maxPopInTrip: maxPop,
       advice: maxPop === null ? '旅遊日超出一週預報範圍，室內外混搭' : (maxPop >= 50 ? `行程時段降雨機率最高 ${maxPop}%，以室內景點為主，戶外最多 1 個` : `降雨機率最高 ${maxPop}%，可以安排戶外景點`)
