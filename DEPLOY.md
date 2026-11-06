@@ -551,6 +551,7 @@ netstat -an | findstr ":3001"
   $trigger = New-ScheduledTaskTrigger -AtLogOn -User "$env:USERDOMAIN\$env:USERNAME"
   Register-ScheduledTask -TaskName "TravelLinkAI-AMD Proxy Autostart" -Action $action -Trigger $trigger -Force
   ```
+  - 這個排程已註冊，登入時會自動啟動。**維護時請用 `Start-ScheduledTask -TaskName "TravelLinkAI-AMD Proxy Autostart"` 重啟，不要從 Claude Code 或其他工具的 shell 直接啟動**：2026-11-05 從工具 shell 啟動的代理，在該工具結束時跟著被關掉，正式站 AI 生成回 502 直到手動重啟。
 - **控制台**：`TravelLink_AI-AMD\server\proxy-control.bat` 管 3011；舊網站的代理用 `UIUX\server` 那一份。
 - **AMD 端點備援**：`server/.env` 設了 `AMD_LLM_FALLBACK_BASE_URL`／`AMD_LLM_FALLBACK_API_KEY`（組員 VM 的反向代理，網址與金鑰不進 repo）時，直連工研院連不上或回 401/403 會**自動**改走備援，5 分鐘後再試直連，切換與恢復都會寫進 `server/logs/proxy.out.log`／`proxy.err.log`。改 `.env` 後要重啟 3011 代理。測試：`node server/test/amd-failover.test.js`（本機假伺服器，不打真端點）。
 - **行程生成代理人預設開啟（2026-11-04）**：`app/weather.env.js`（gitignored，換機器要手動加）的 `TRAVEL_APP_CONFIG` 加了 `AGENT_PLAN_ENABLED: true`，AMD 站的一日遊因此一律先由 gpt-oss-120b 代理人規劃（`POST /api/agent/plan`，SSE；前端是 `app/agent-plan-client.js`）。兩天一夜等多日行程仍走原本的一次生成。

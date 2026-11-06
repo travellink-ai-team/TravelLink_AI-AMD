@@ -111,6 +111,7 @@
       reply: [result.summary || ''].concat(reasons.length ? ['（' + reasons.join('；') + '）'] : []).join(' ').trim(),
       stops: result.stops,
       returnTime: result.returnTime || '',
+      notices: Array.isArray(result.notices) ? result.notices : [],
       agent: { ms: result.ms, steps: result.steps, llmCalls: result.usage && result.usage.llmCalls, draftRounds: result.draftRounds, warnings: result.warnings || [] }
     };
   }
@@ -145,7 +146,7 @@ function recentPlannedStopNames(dest) {
 
 async function tryAgentPlanForWizard(wData) {
   // 暫態旗標（同 _rainOutlook，不入庫）：optimizeGeneratedTripStops 看到它就保留後端排好的順序
-  if (wData) wData._agentPlanned = false;
+  if (wData) { wData._agentPlanned = false; wData._agentNotices = []; }
   try {
     var A = window.WAI_AGENT_PLAN;
     if (!A || !A.isEnabled() || !wData) return null;
@@ -195,6 +196,7 @@ async function tryAgentPlanForWizard(wData) {
     wData._agentPlanned = true;
     // 暫態：回到終點的時刻（後處理把它寫到終點站，不入庫）
     wData._agentReturnTime = plan.returnTime || '';
+    wData._agentNotices = plan.notices || [];
     console.info('[AI 規劃代理人] 完成：' + plan.stops.length + ' 站、' + ((Date.now() - t0) / 1000).toFixed(1) + ' 秒、LLM ' + plan.agent.llmCalls + ' 次、草稿 ' + plan.agent.draftRounds + ' 輪');
     return plan;
   } catch (err) {

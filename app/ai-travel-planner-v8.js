@@ -185,7 +185,7 @@
       routeRefitTimer = null;
       if (tripUserDirty) return;
       try {
-        const fit = fitScheduleToTimeLimit();
+        const fit = fitScheduleToTimeLimit({ requireKnownTransit: true });
         if (fit.changed) {
           renderItineraryDisplay(); // 內部會依新排程更新時間橫幅與 hero 時間
           try { syncRouteStageScheduleTimes(buildReplanSchedule()); } catch (_e) {}
@@ -202,7 +202,7 @@
     clearTimeout(parkWalkRefreshTimer);
     parkWalkRefreshTimer = setTimeout(() => {
       parkWalkRefreshTimer = null;
-      try { if (!tripUserDirty) fitScheduleToTimeLimit(); } catch (_e) {}
+      try { if (!tripUserDirty) fitScheduleToTimeLimit({ requireKnownTransit: true }); } catch (_e) {}
       try {
         renderItineraryDisplay();
         syncRouteStageScheduleTimes(buildReplanSchedule());
@@ -3318,6 +3318,8 @@
         }
 
         if (trip) {
+          // 個人行程也要有出發日：原本只有共編才寫入，旅伴頁一律顯示「待設定」
+          currentTripDepartureDate = derivePreferencesFromTrip(trip).departureDate || trip.departureDate || '';
           tripLoadFailureMessage = '';
           localStorage.setItem(ACTIVE_TRIP_LOCAL_KEY, trip.id);
           currentItineraryId = trip.id;
@@ -3369,7 +3371,7 @@
             // 放在合併/enrich 之前，讓後續的距離合併與附近搜尋都用校正後的座標，避免誤併或吸入別處子景點。
             await verifyStopCoordinatesWithPlaces(trip.stops, trip.region, currentTripTitle).catch(() => {});
             // AI 規劃代理人的行程：站與停留是代理人用車程、營業時間驗證過的，不再用距離把鄰站併成一站
-            const _agentTrip = trip.stops.some((s) => s && s.agentPlanned === true);
+            const _agentTrip = trip.stops.some((s) => s && (s.agentPlanned === true || s.bigAreaChecked === true));
             const dedupedStops = _agentTrip
               ? deduplicateAdjacentTripStops(trip.stops)
               : mergeNearbySubAttractions(deduplicateAdjacentTripStops(trip.stops));
@@ -3439,6 +3441,7 @@
                     desc: s.desc || '',
                     plannerNote: s.plannerNote || '',
                     agentPlanned: s.agentPlanned === true,
+                    bigAreaChecked: s.bigAreaChecked === true,
                     isMergedAttraction: s.isMergedAttraction || false,
                     mergedSubSpots: s.mergedSubSpots || null,
                     mergedRadiusMeters: s.mergedRadiusMeters || null,
@@ -3535,6 +3538,7 @@
                 desc: (scenicRecord?.desc || s.desc || ''),
                 plannerNote: s.plannerNote || '',
                 agentPlanned: s.agentPlanned === true,
+                bigAreaChecked: s.bigAreaChecked === true,
                 isMergedAttraction: s.isMergedAttraction || false,
                 mergedSubSpots: s.mergedSubSpots || null,
                 mergedRadiusMeters: s.mergedRadiusMeters || null,
@@ -3638,8 +3642,9 @@
               || (trip.stops[0] && trip.stops[0].time)
               || '09:00';
             try {
-              fitScheduleToTimeLimit();
+              fitScheduleToTimeLimit({ requireKnownTransit: true });
             } catch (_e) { console.warn('[load] 超時壓縮略過：', _e); }
+            try { showGenerationNotices(trip); } catch (_e) { /* 提醒失敗不影響載入 */ }
             // 以「完成載入與顯示正規化後」的內容作為三方合併基準；之後只把使用者真的改動的欄位
             // 套到交易內最新遠端資料，避免兩位成員修改不同站時整包互相覆蓋。
             collabBaseStops = replanStops.map(serializeStopForPersistence);
@@ -3724,17 +3729,323 @@
     return keywords.filter((keyword) => source.includes(keyword));
   }
 
-  function findDuplicateStopByName(name) {
-    const candidateName = normalizeText(name);
-    const candidateKeywords = extractStopKeywords(name);
+  // 比對地點用：去括號、臺→台（「臺東森林公園」和「台東森林公園 (琵琶湖)」是同一處）
+  function normalizePlaceName(name) {
+    const unified = String(name || '').replace(/臺/g, '台');
+    return normalizeText(unified.replace(/[（(][^）)]*[）)]/g, '')) || normalizeText(unified);
+  }
+
+  // 只認「真的同一處」：名稱相同或互相包含（較短者至少 3 字，避免「台東」吃掉所有景點）。
+  // 以前只要都有「咖啡／麵／海鮮」就算重複，兩間不同的店排不進去，改由 describeAddReminder 提醒。
+  // 名稱互相包含但相距超過 2.5 公里是兩個地方（海濱公園×成功海濱公園、瀧部落×瑪洛阿瀧部落）；
+  // 2.5 公里夠涵蓋最大的臺東森林公園，又能分開蘭嶼燈塔和舊蘭嶼燈塔。
+  function findDuplicateStopByName(name, coords = null) {
+    const candidate = normalizePlaceName(name);
+    if (!candidate) return null;
     return replanStops.find((stop) => {
-      const stopName = normalizeText(stop.name);
-      if (candidateName && stopName && (candidateName === stopName || candidateName.includes(stopName) || stopName.includes(candidateName))) {
-        return true;
-      }
-      const stopKeywords = extractStopKeywords(stop.name);
-      return candidateKeywords.some((keyword) => stopKeywords.includes(keyword));
+      const existing = normalizePlaceName(stop.name);
+      if (!existing) return false;
+      if (existing === candidate) return true;
+      const shorter = existing.length <= candidate.length ? existing : candidate;
+      if (shorter.length < 3 || !(candidate.includes(existing) || existing.includes(candidate))) return false;
+      const stopCoords = coords ? readStopCoordinates(stop) : null;
+      return !stopCoords || approxDistanceMeters(coords.lat, coords.lng, stopCoords.lat, stopCoords.lng) <= 2500;
     }) || null;
+  }
+
+  // 同類型的店（都是咖啡、都是麵）：只拿來提醒或挑推薦，不擋使用者
+  function findSameKindStop(name, excludeId) {
+    const keywords = extractStopKeywords(name);
+    if (!keywords.length) return null;
+    for (const stop of replanStops) {
+      if (stop.id === excludeId || stop.type === 'start' || stop.type === 'end') continue;
+      const shared = keywords.find((k) => extractStopKeywords(stop.name).includes(k));
+      if (shared) return { stop, keyword: shared };
+    }
+    return null;
+  }
+
+  // ── 大景點導向 ──
+  // 使用者加入大景點裡的小景點（鷺鷥湖），導向大景點（臺東森林公園）並提醒，可以按一下改回單獨一站。
+  // 只認這份人工確認過的清單：OSM 輪廓有不少不是「大景點」（阿美族民俗中心框住都歷遊客中心、
+  // 台東鐵道藝術村框住轉運站），全自動會導錯。name＝站名（對得到 poi-data），outline＝OSM 輪廓名，
+  // aliases＝不靠座標也認得的小景點。要加新的大景點，在這裡加一行。
+  const BIG_ATTRACTIONS = [
+    { name: '臺東森林公園', outline: '臺東森林公園', aliases: ['鷺鷥湖', '琵琶湖', '活水湖'] },
+    { name: '鯉魚山', outline: '鯉魚山公園', aliases: ['龍鳳佛堂'] },
+    { name: '台東海濱公園', outline: '海濱公園(馬卡巴嗨公園)', aliases: ['國際地標', '馬卡巴嗨'] },
+    { name: '小野柳', outline: '小野柳遊憩區', aliases: ['富岡地質公園'] },
+    { name: '臺東鐵道藝術村 (鐵花新聚落)', outline: '台東鐵道藝術村', aliases: ['鐵花村', '鐵花新聚落', '舊鐵道'] },
+    { name: '台東糖廠文創園區', outline: '台東糖廠', aliases: [] },
+    { name: '八仙洞', outline: '八仙洞', aliases: [] },
+    { name: '初鹿牧場', outline: '初鹿牧場', aliases: [] },
+    { name: '關山親水公園', outline: '關山親水公園', aliases: [] },
+    { name: '綠洲山莊', outline: '綠洲山莊(綠島感訓監獄)', aliases: ['八卦樓'] }
+  ];
+  const BIG_ATTRACTION_SKIP_RE = /火車站|車站|捷運|高鐵|轉運站|客運站|機場|航空站|停車場|公廁|廁所|萬富倉庫/; // 萬富倉庫是糖廠裡的甜點店，獨立一站
+
+  function bigAttractionRing(parent) {
+    if (parent.ring !== undefined) return parent.ring;
+    const items = (window.WAI_OSM_BOUNDARY_DATA && window.WAI_OSM_BOUNDARY_DATA.items) || [];
+    const hit = items.find((it) => it && it.n === parent.outline && Array.isArray(it.r) && it.r.length >= 3);
+    parent.ring = hit ? hit.r : null;
+    return parent.ring;
+  }
+
+  function pointInLatLngRing(ring, lat, lng) {
+    let inside = false;
+    for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+      const a = ring[i], b = ring[j];
+      if ((a[0] > lat) !== (b[0] > lat) && lng < ((b[1] - a[1]) * (lat - a[0])) / (b[0] - a[0]) + a[1]) inside = !inside;
+    }
+    return inside;
+  }
+
+  // 這個地點屬於哪個大景點：{ parent, isSelf }（isSelf＝它自己就是大景點）；不屬於任何大景點回 null。
+  // 餐廳、住宿、交通站、廁所就算在園區內也是獨立的一站。先比對名稱，座標可能不準。
+  function classifyBigAttraction(place) {
+    if (!place || place.type === 'start' || place.type === 'end') return null;
+    const raw = String(place.name || '');
+    const name = normalizePlaceName(raw);
+    if (!name || isFoodStop(place) || isLodgingStop(place) || BIG_ATTRACTION_SKIP_RE.test(raw)) return null;
+    for (const parent of BIG_ATTRACTIONS) {
+      const own = normalizePlaceName(parent.name);
+      if (name === own || name.includes(own) || name === normalizePlaceName(parent.outline)) return { parent, isSelf: true };
+    }
+    for (const parent of BIG_ATTRACTIONS) {
+      if (parent.aliases.some((a) => name.includes(normalizePlaceName(a)))) return { parent, isSelf: false };
+    }
+    const c = readStopCoordinates(place);
+    if (!c) return null;
+    for (const parent of BIG_ATTRACTIONS) {
+      const ring = bigAttractionRing(parent);
+      if (ring && pointInLatLngRing(ring, c.lat, c.lng)) return { parent, isSelf: false };
+    }
+    return null;
+  }
+
+  // 大景點的座標與介紹：優先用 poi-data，沒有就用輪廓中心
+  function buildBigAttractionPlace(parent) {
+    const own = normalizePlaceName(parent.name);
+    const data = window.WAI_POI_DATA || {};
+    for (const key of Object.keys(data)) {
+      if (!Array.isArray(data[key])) continue;
+      const poi = data[key].find((p) => p && normalizePlaceName(p.name) === own && Number.isFinite(Number(p.lat)));
+      if (poi) return { name: parent.name, lat: Number(poi.lat), lng: Number(poi.lng), desc: poi.desc || '', businessHours: poi.businessHours || null };
+    }
+    const ring = bigAttractionRing(parent);
+    if (!ring) return null;
+    return {
+      name: parent.name,
+      lat: ring.reduce((sum, p) => sum + p[0], 0) / ring.length,
+      lng: ring.reduce((sum, p) => sum + p[1], 0) / ring.length,
+      desc: '',
+      businessHours: null
+    };
+  }
+
+  function addSubSpotToStop(stop, subName) {
+    setMergedSubSpots(stop, [...(Array.isArray(stop.mergedSubSpots) ? stop.mergedSubSpots : []), subName]);
+    if (stop.durationLocked !== true && stop.expectedLeaveMin == null) {
+      stop.stayMin = Math.min(120, (Number(stop.stayMin) || 30) + 20);
+    }
+  }
+
+  // 正常加入後的提醒：照使用者的意思加進去，只告訴他可能要注意什麼。沒有疑慮回空字串。
+  function describeAddReminder(newStop) {
+    const added = newStop.name;
+    const coord = readStopCoordinates(newStop);
+    if (coord && !isFoodStop(newStop)) {
+      const near = replanStops.find((s) => {
+        if (s.id === newStop.id || s.type === 'start' || s.type === 'end' || isFoodStop(s)) return false;
+        const c = readStopCoordinates(s);
+        return c && approxDistanceMeters(coord.lat, coord.lng, c.lat, c.lng) <= 300;
+      });
+      if (near) return `已加入「${added}」。它和行程裡的「${near.name}」不到 300 公尺，可能是同一處，不需要可以刪掉一站。`;
+    }
+    if (isFoodStop(newStop) && !STOP_SNACK_NAME_RE.test(String(added))) {
+      const schedule = buildReplanSchedule();
+      const mine = schedule.find((row) => row.id === newStop.id);
+      if (mine) {
+        const close = schedule.find((row) => row.id !== newStop.id && row.type !== 'start' && row.type !== 'end'
+          && isFoodStop(row) && !STOP_SNACK_NAME_RE.test(String(row.name || ''))
+          && (row.dayIndex || 1) === (mine.dayIndex || 1) && Math.abs(row.start - mine.start) <= 90);
+        if (close) return `已加入「${added}」。它和「${close.name}」只隔大約 ${Math.abs(close.start - mine.start)} 分鐘，兩餐有點近，可以再調整時間。`;
+      }
+    }
+    const sameKind = findSameKindStop(added, newStop.id);
+    if (sameKind) return `已加入「${added}」。行程裡也有「${sameKind.stop.name}」，兩站都是${sameKind.keyword}類，需要的話可以再調整。`;
+    return '';
+  }
+
+  // 使用者要加一站時的唯一入口。placeStop(template) 負責把站放進 replanStops 並回傳。
+  // 回傳 { changed, stop, redirected, message, undoLabel, undo }；undo 把導向取消、改成使用者原本要的單獨一站。
+  function addStopRespectingPlace(template, placeStop) {
+    const forceAdd = () => {
+      const forced = placeStop(template);
+      forced.bigAreaChecked = true; // 使用者明確要單獨一站：重新載入時不再被合併或改名
+      activeStopMenuId = forced.id;
+      return forced;
+    };
+    const added = template.name;
+
+    const same = findDuplicateStopByName(added, readStopCoordinates(template));
+    if (same) {
+      activeStopMenuId = same.id;
+      return {
+        changed: false,
+        stop: same,
+        message: normalizePlaceName(same.name) === normalizePlaceName(added)
+          ? `「${same.name}」已經在行程裡，幫你跳到那一站。`
+          : `「${added}」和行程裡的「${same.name}」是同一處，幫你跳到那一站。`,
+        undoLabel: '仍要再加一站',
+        undo: forceAdd
+      };
+    }
+
+    const placeClass = classifyBigAttraction(template);
+    if (placeClass) {
+      const parent = placeClass.parent;
+      const parentName = parent.name;
+      const members = replanStops.filter((s) => {
+        const c = classifyBigAttraction(s);
+        return c && c.parent === parent;
+      });
+      const parentStop = members.find((s) => classifyBigAttraction(s).isSelf);
+
+      if (parentStop) {
+        const before = { stayMin: parentStop.stayMin, mergedSubSpots: parentStop.mergedSubSpots, isMergedAttraction: parentStop.isMergedAttraction };
+        addSubSpotToStop(parentStop, added);
+        activeStopMenuId = parentStop.id;
+        return {
+          changed: true, redirected: true, stop: parentStop,
+          message: `「${added}」在「${parentStop.name}」裡，行程已經有這一站，幫你併進去了。`,
+          undoLabel: '仍要單獨一站',
+          undo: () => { Object.assign(parentStop, before); return forceAdd(); }
+        };
+      }
+
+      if (members.length) {
+        const target = members[0];
+        const before = {
+          name: target.name, lat: target.lat, lng: target.lng, scenicCoordinates: target.scenicCoordinates,
+          placeId: target.placeId, desc: target.desc, businessHours: target.businessHours, stayMin: target.stayMin,
+          transitMin: target.transitMin, mergedSubSpots: target.mergedSubSpots, isMergedAttraction: target.isMergedAttraction
+        };
+        const targetName = target.name;
+        const place = buildBigAttractionPlace(parent);
+        // 已打卡或行程已開始就不改站名：旅記、照片是用站名對應的
+        const canRename = !!place && currentTripStatus === 'planning' && !isPlaceVisited(targetName);
+        if (canRename) {
+          target.name = place.name;
+          target.lat = place.lat;
+          target.lng = place.lng;
+          target.scenicCoordinates = { lat: place.lat, lng: place.lng };
+          target.placeId = null;
+          target.desc = place.desc || target.desc;
+          target.businessHours = place.businessHours || target.businessHours;
+          target.transitMin = null;
+          target.bigAreaChecked = true;
+          const index = replanStops.indexOf(target);
+          if (index > 0) replanStops[index - 1].transitMin = null; // 座標變了，前一段車程要重算
+          setMergedSubSpots(target, [...(Array.isArray(target.mergedSubSpots) ? target.mergedSubSpots : []), targetName]);
+        }
+        if (!placeClass.isSelf) addSubSpotToStop(target, added);
+        activeStopMenuId = target.id;
+        const pair = placeClass.isSelf ? `行程裡的「${targetName}」在「${parentName}」裡` : `「${added}」和行程裡的「${targetName}」都在「${parentName}」裡`;
+        return {
+          changed: true, redirected: true, stop: target,
+          message: canRename
+            ? `${pair}，幫你合成一站「${parentName}」。`
+            : `${pair}。這站已打卡或行程已開始，站名不改，幫你記在「${targetName}」這一站。`,
+          undoLabel: '仍要單獨一站',
+          undo: () => { Object.assign(target, before); return forceAdd(); }
+        };
+      }
+
+      if (!placeClass.isSelf) {
+        const place = buildBigAttractionPlace(parent);
+        if (place) {
+          const stop = placeStop({
+            ...template,
+            name: place.name,
+            desc: place.desc || template.desc || '',
+            address: '',
+            placeId: null,
+            lat: place.lat,
+            lng: place.lng,
+            scenicCoordinates: { lat: place.lat, lng: place.lng },
+            businessHours: place.businessHours || template.businessHours || null,
+            mapPinId: undefined
+          });
+          stop.bigAreaChecked = true;
+          setMergedSubSpots(stop, [added]);
+          activeStopMenuId = stop.id;
+          return {
+            changed: true, redirected: true, stop,
+            message: `「${added}」在「${parentName}」裡，幫你加入「${parentName}」這一站（含${added}）。`,
+            undoLabel: '仍要單獨一站',
+            undo: () => {
+              replanStops = replanStops.filter((s) => s.id !== stop.id);
+              return forceAdd();
+            }
+          };
+        }
+      }
+    }
+
+    const stop = placeStop(template);
+    activeStopMenuId = stop.id;
+    return { changed: true, stop, message: describeAddReminder(stop) };
+  }
+
+  // 加站提醒條：句子較長，放不下一般 toast；可帶一顆「改回使用者原意」的按鈕
+  let stopPlaceNoticeTimer = null;
+  function showStopPlaceNotice(message, actionLabel, onAction, options = {}) {
+    let el = document.getElementById('stopPlaceNotice');
+    if (!el) {
+      el = document.createElement('div');
+      el.id = 'stopPlaceNotice';
+      el.setAttribute('role', 'status');
+      el.innerHTML = '<div class="stop-place-notice-text"></div><button type="button" class="stop-place-notice-action"></button><button type="button" class="stop-place-notice-close" aria-label="關閉提醒">✕</button>';
+      document.body.appendChild(el);
+      el.querySelector('.stop-place-notice-close').addEventListener('click', () => { el.classList.remove('show'); });
+    }
+    el.querySelector('.stop-place-notice-text').textContent = message;
+    const action = el.querySelector('.stop-place-notice-action');
+    action.hidden = !actionLabel;
+    action.textContent = actionLabel || '';
+    action.onclick = onAction ? () => { el.classList.remove('show'); onAction(); } : null;
+    el.classList.add('show');
+    clearTimeout(stopPlaceNoticeTimer);
+    if (!options.sticky) stopPlaceNoticeTimer = setTimeout(() => el.classList.remove('show'), actionLabel ? 12000 : 7000);
+  }
+
+  function presentStopAddition(result) {
+    if (!result || !result.message) {
+      // 這次沒什麼要提醒：上一則不留著，免得看起來像在講這一站
+      const stale = document.getElementById('stopPlaceNotice');
+      if (stale) stale.classList.remove('show');
+      return;
+    }
+    showStopPlaceNotice(result.message, result.undoLabel || '', result.undo ? () => {
+      result.undo();
+      renderReplanBoard();
+      refreshRouteDirections();
+      schedulePersistTrip();
+    } : null);
+  }
+
+  // 生成時留下的提醒（使用者指定的站排得很擠、同一處排兩站）：每趟每台裝置只主動顯示一次
+  function showGenerationNotices(trip) {
+    const notices = trip && Array.isArray(trip.generationNotices) ? trip.generationNotices.filter(Boolean) : [];
+    if (!notices.length || collabReadOnly) return;
+    const key = `wai_gen_notice_seen_${trip.id || currentItineraryId}`;
+    try {
+      if (localStorage.getItem(key)) return;
+      localStorage.setItem(key, '1');
+    } catch (_e) { /* 無痕或封鎖儲存：照常顯示 */ }
+    showStopPlaceNotice(`📌 ${notices.join('\n📌 ')}`, '', null, { sticky: true });
   }
 
   function approxDistanceMeters(lat1, lng1, lat2, lng2) {
@@ -4203,7 +4514,7 @@
       const bigNorm = normalizeText(bigName);
       const usedByOthers = stops.some(x => x !== stop && normalizeText(x.name) === bigNorm);
       // 代理人排的站不改名：實測會把「臺東環市自行車道」換成附近的「鯉魚山」
-      if (stop.agentPlanned !== true && bigName && bigNorm !== parentNorm && !usedByOthers) {
+      if (stop.agentPlanned !== true && stop.bigAreaChecked !== true && bigName && bigNorm !== parentNorm && !usedByOthers) {
         stop.name = bigName;
         subs = [parentName, ...subs]; // 舊名收進子景點（setMergedSubSpots 會去掉等於新名者）
         stop.isMergedAttraction = true;
@@ -4215,7 +4526,7 @@
 
       // 合併站的代表座標應落在它的大地標上（如卑南遺址→卑南遺址公園），而非沿用 AI 給的錯位座標。
       // 用 Places 以「站名」查大地標，命中且在範圍內、偏移現座標 >300m 才校正（原本就在地標上的站不動）。
-      if (stop.isMergedAttraction && stop.agentPlanned !== true) {
+      if (stop.isMergedAttraction && stop.agentPlanned !== true && stop.bigAreaChecked !== true) {
         try {
           const landmark = await searchStrictPlaceCandidate(String(stop.name || ''), stop, region, '');
           if (landmark && landmark.position && !isCoordinatesOutsideRegion(landmark.position, region, stop.name)) {
@@ -4237,7 +4548,7 @@
       }
       // 合併大景點：依子景點數加長建議停留（固定基準、冪等；只加長不縮短，含重開既有行程的補正）
       // 使用者手動設定過的停留（durationLocked）不加長：原本重開行程會把手動的 60 分撐成 120 分
-      if (stop.durationLocked !== true && stop.agentPlanned !== true && stop.isMergedAttraction && Array.isArray(stop.mergedSubSpots) && stop.mergedSubSpots.length) {
+      if (stop.durationLocked !== true && stop.agentPlanned !== true && stop.bigAreaChecked !== true && stop.isMergedAttraction && Array.isArray(stop.mergedSubSpots) && stop.mergedSubSpots.length) {
         const cur = Number(stop.duration) || Number(stop.stayMin) || 30;
         const target = Math.min(120, 30 + 20 * stop.mergedSubSpots.length);
         const bumped = Math.max(cur, target);
@@ -10770,9 +11081,7 @@
       existingStop.transitMin = normalizeTransitMinutesValue(existingStop.transitMin);
       activeStopMenuId = existingStop.id;
     } else {
-      const returnIndex = replanStops.findIndex((stop) => normalizeText(stop.name).includes('回到車站') || stop.id === 'return');
-      const insertAt = returnIndex >= 0 ? returnIndex : replanStops.length;
-      replanStops.splice(insertAt, 0, targetStop);
+      replanStops.splice(findNewStopInsertIndex(), 0, targetStop);
       activeStopMenuId = targetStop.id;
     }
 
@@ -10819,6 +11128,17 @@
     const limitEndMin = dayWindows[dayWindows.length - 1].endMin;
     const dayOf = (s) => Math.max(1, Math.min(dayWindows.length, Math.round(Number(s && s.dayIndex)) || 1));
 
+    // 載入與路線回填時的背景壓縮：還有路段沒拿到實際車程（transitMin 空）就先不壓。
+    // 否則剛生成的行程每段都用預設 15 分估，8 小時行程被估成超時、各站停留被砍，
+    // 等 Google 實測車程回來只有 4～8 分，行程反而只排到 15:30 多（2026-11-05 實測 5 趟都提早結束）。
+    // 最後一段車程回填後 scheduleDisplayRefit 會再呼叫一次，那時才用實測值判斷要不要壓。
+    if (options.requireKnownTransit) {
+      const hasUnknownLeg = replanStops.some((s, i) => i < replanStops.length - 1
+        && dayOf(s) === dayOf(replanStops[i + 1])
+        && normalizeTransitMinutesValue(s.transitMin) === null);
+      if (hasUnknownLeg) return { changed: false, fits: true, limitEndMin, deferred: true };
+    }
+
     const scheduleEnd = () => {
       const sch = buildReplanSchedule();
       return { sch, end: sch.length ? sch[sch.length - 1].end : startMin };
@@ -10841,6 +11161,8 @@
     let ov = measureOverflow(sch);
     if (ov.total <= 0) return { changed: false, fits: true, limitEndMin };
 
+    const overflowBefore = ov.total;
+    const stayBefore = replanStops.map((s) => ({ stop: s, stayMin: s.stayMin, manualStartMin: s.manualStartMin, manualEndMin: s.manualEndMin }));
     // 以首次排程的有效停留為「原本」，算 35% 下限（最多減 35% → 保底 65%）；
     // 端點（起點/終點）與餐廳/用餐站皆為例外，不參與扣時。
     const MIN_RATIO = 0.65;
@@ -10848,7 +11170,10 @@
       // 使用者手動調整過的停留時間是明確決策，背景壓縮不可再改寫。
       const eligible = i >= minIndex && !(s.type === 'start' || s.type === 'end') && !isFoodStop(s)
         && s.durationLocked !== true && s.expectedLeaveMin == null;
-      const orig = Math.max(0, curStayOf(sch, i, s));
+      // 下限以第一次壓縮前的停留為準：載入、路線回填會重複呼叫，若每次都以「現在的值」算 65%，
+      // 塞不下的行程會一路被壓到個位數（2026-11-06 實測 50 分變 9 分）。只存在記憶體。
+      if (!Number.isFinite(s._fitBaseStay)) s._fitBaseStay = Math.max(0, curStayOf(sch, i, s));
+      const orig = s._fitBaseStay;
       return { stop: s, i, eligible, orig, floor: Math.ceil(orig * MIN_RATIO) };
     });
 
@@ -10916,6 +11241,13 @@
 
     const finalSch = scheduleEnd();
     const finalOverflow = measureOverflow(finalSch.sch).total;
+    // 背景壓縮完仍塞不下，而且砍掉的停留幾乎沒換到時間（後面的站被手動時間鎖住，縮前面也提早不了；
+    // 實測砍 80 分只提早 3 分）：白砍，全部還原，由「超出規劃時間」提醒使用者自己取捨。
+    const stayCut = stayBefore.reduce((sum, x) => sum + Math.max(0, (Number(x.stayMin) || 0) - (Number(x.stop.stayMin) || 0)), 0);
+    if (changed && options.userInitiated !== true && finalOverflow > 0 && overflowBefore - finalOverflow < stayCut / 2) {
+      stayBefore.forEach((x) => { x.stop.stayMin = x.stayMin; x.stop.manualStartMin = x.manualStartMin; x.stop.manualEndMin = x.manualEndMin; });
+      return { changed: false, fits: false, limitEndMin, overflowMin: overflowBefore };
+    }
     return { changed, fits: finalOverflow <= 0, limitEndMin, overflowMin: Math.max(0, finalOverflow) };
   }
 
@@ -11429,7 +11761,39 @@
     renderReplanBoard();
   };
 
-  function createStopFromTemplate(template) {
+  // Google 店名常夾營業備註：「墾墨咖啡 Community Cafe'（Last Order 17:00)」「…/FB預約制」。
+  // 規則與 crawler/worker.js 的 splitNameNote 相同（多一組 Last Order）；備註改寫進介紹，不丟資訊。
+  // 只在「建立新站」時套用：既有站改名會讓旅記、照片這些以店名對應的紀錄對不上。
+  const STOP_NAME_NOTE_RE = /\s*[（(]([^（）()]*(?:店休|公休|休息|營業|請(?:看|查|洽|參考)|IG|粉絲|臉書|FB|預約|月底|月初|點餐|訂位|外送|Last\s*Order|最後點餐|創始|首創|老店|老字號|別無分店|無分店|唯一|正宗|僅此一家|寵物友善|，)[^（）()]*)[）)]+\s*/gi;
+  const STOP_NAME_DATE = String.raw`\d{1,2}\/\d{1,2}(?:\s*[（(][^（）()]{1,2}[）)])?`;
+  const STOP_TRAILING_NOTE_RE = new RegExp(String.raw`\s*(?:[\/／，,、｜|]\s*)?((?:${STOP_NAME_DATE}\s*(?:[-~–至]\s*${STOP_NAME_DATE}\s*)?)?(?:店休|公休|休息(?![區站室])日?|營業時間|營業日)[^（）()]{0,30})$|\s*[\/／]\s*((?:FB|IG)?\s*預約[^（）()\/／]*)$`, 'i');
+  const STOP_SNACK_NAME_RE = /茶飲|飲料|手搖|冰城|冰店|冰品|豆花|甜點|咖啡|cafe|coffee|烘焙|麵包|甜湯|剉冰|雪花冰/i;
+  const STOP_NAME_SLOGAN_RE = /\s*《([^《》]*(?:必吃|推薦|人氣|銅板|美食|招牌)[^《》]*)》\s*/g;
+  function splitStopNameNote(name) {
+    const raw = String(name || '');
+    const notes = [];
+    const clean = raw.replace(STOP_NAME_NOTE_RE, (_m, note) => { notes.push(note.trim()); return ' '; })
+      .replace(STOP_TRAILING_NOTE_RE, (_m, a, b) => { notes.push(String(a || b).trim()); return ''; })
+      .replace(STOP_NAME_SLOGAN_RE, (_m, note) => { notes.push(note.trim()); return ' '; })
+      .replace(/\s*#([^#]{1,20})#\s*/g, (_m, note) => { notes.push(note.trim()); return ' '; }) // 「#無提供冷氣#」
+      .replace(/\s*[-－–]\s*([^-－–]*[，！!。][^-－–]*)$/, (_m, note) => { notes.push(note.trim()); return ''; }) // 店名後接一句話：「里漾餐廳-餐點現點現做，趕行程…請您跳過我們唷！」
+      .replace(/\s+/g, ' ').trim();
+    return clean.length >= 2 && notes.length ? { name: clean, note: notes.join('；') } : { name: raw, note: '' };
+  }
+  function withCleanStopName(template) {
+    if (!template || !template.name) return template;
+    const split = splitStopNameNote(template.name);
+    if (!split.note) return template;
+    const desc = String(template.desc || '').trim();
+    return {
+      ...template,
+      name: split.name,
+      desc: desc.includes(split.note) ? desc : (desc ? `${desc}（店家備註：${split.note}）` : `店家備註：${split.note}`)
+    };
+  }
+
+  function createStopFromTemplate(rawTemplate) {
+    const template = withCleanStopName(rawTemplate);
     replanStopSerial += 1;
     let assignedPinId = template.mapPinId;
     const scenicCoordinates = template.scenicCoordinates || template['景點座標'] || null;
@@ -11497,26 +11861,38 @@
       nearbyToiletLocations: template.toiletLocations || []
     };
   }
-  function insertUniqueTemplateStop(template, preferredTargetId = activeStopMenuId) {
-    const duplicate = findDuplicateStopByName(template.name);
-    if (duplicate) {
-      activeStopMenuId = duplicate.id;
-      renderReplanBoard();
-      return duplicate;
+  // 沒指定插在哪一站時的位置：終點之前；多日行程則是選定那一天的最後一站之後。
+  // 以前直接接在陣列尾端，新站會排到終點後面（13:25 回到起點，13:49 才去下一站）。
+  function findNewStopInsertIndex(dayIndex) {
+    const endIndex = replanStops.findIndex((stop) => stop.type === 'end' || stop.id === 'return' || normalizeText(stop.name).includes('回到車站'));
+    const limit = endIndex >= 0 ? endIndex : replanStops.length;
+    if (isMultiDayTrip(currentTripPreferences && currentTripPreferences.days) && Number(dayIndex) >= 1) {
+      const day = clampDayIndex(dayIndex, 1);
+      for (let i = limit - 1; i >= 0; i--) {
+        if (clampDayIndex(replanStops[i].dayIndex, 1) <= day) return i + 1;
+      }
+      return Math.min(1, limit);
     }
+    return limit;
+  }
 
-    const newStop = createStopFromTemplate(template);
-    const targetIndex = preferredTargetId ? replanStops.findIndex((item) => item.id === preferredTargetId) : -1;
-    if (targetIndex >= 0) {
-      replanStops.splice(targetIndex + 1, 0, newStop);
-    } else {
-      replanStops.push(newStop);
-    }
-    activeStopMenuId = newStop.id;
+  function insertUniqueTemplateStop(template, preferredTargetId = activeStopMenuId) {
+    const result = addStopRespectingPlace(template, (tpl) => {
+      const newStop = createStopFromTemplate(tpl);
+      const targetIndex = preferredTargetId ? replanStops.findIndex((item) => item.id === preferredTargetId) : -1;
+      if (targetIndex >= 0 && replanStops[targetIndex].type !== 'end') {
+        replanStops.splice(targetIndex + 1, 0, newStop);
+      } else {
+        replanStops.splice(findNewStopInsertIndex(tpl.dayIndex), 0, newStop);
+      }
+      return newStop;
+    });
     renderReplanBoard();
-    refreshRouteDirections();
-    schedulePersistTrip();
-    return newStop;
+    if (result.changed) {
+      refreshRouteDirections();
+      schedulePersistTrip();
+    }
+    return result;
   }
 
   function modifyStopById(stopId) {
@@ -12485,7 +12861,6 @@
         if (status !== ok || !Array.isArray(places)) return resolve([]);
         resolve(places
           .filter((place) => place && place.name && place.geometry && place.geometry.location)
-          .filter((place) => !findDuplicateStopByName(place.name))
           .slice(0, isNearbySearch ? 6 : 8)
           .map((place) => ({
             name: place.name,
@@ -12593,7 +12968,7 @@
     if (!place) return;
     const daySelect = document.getElementById('addPlaceDaySelect');
     const selectedDay = clampDayIndex(daySelect && daySelect.value, 1);
-    const inserted = insertUniqueTemplateStop({
+    const addition = insertUniqueTemplateStop({
       baseId: place.placeId ? `place-${place.placeId}` : `place-${Date.now()}`,
       emoji: getPlaceEmoji(place.types),
       name: place.name,
@@ -12609,7 +12984,8 @@
       dayIndexLocked: true
     }, activeStopMenuId || null);
     closeAddPlaceDialog();
-    if (inserted) feedbackToast(`已加入「${place.name}」`, 'green');
+    presentStopAddition(addition);
+    if (!addition.message && addition.changed) feedbackToast(`已加入「${place.name}」`, 'green');
   }
 
   function stopDurationForCascade(stop, scheduledStop) {
@@ -12908,6 +13284,7 @@
         plannerNote: s.plannerNote || '',
         // AI 規劃代理人排的站：載入時不改名、不加長停留、不和鄰站合併（代理人已用本地資料排好）
         agentPlanned: s.agentPlanned === true,
+        bigAreaChecked: s.bigAreaChecked === true,
         manualStartMin: s.manualStartMin ?? null,
         manualEndMin: s.manualEndMin ?? null,
         durationLocked: s.durationLocked === true,
@@ -13114,6 +13491,8 @@
       coordVerified: stop.coordVerified || false,
       desc: stop.desc || '',
       plannerNote: stop.plannerNote || '',
+      agentPlanned: stop.agentPlanned === true,
+      bigAreaChecked: stop.bigAreaChecked === true,
       isMergedAttraction: stop.isMergedAttraction || false,
       mergedSubSpots: stop.mergedSubSpots || null,
       mergedRadiusMeters: stop.mergedRadiusMeters || null,
@@ -15689,6 +16068,7 @@
 
     const logs = [];
     let changed = false;
+    let redirected = false; // 加入時被導向大景點：呼叫端不能再說「已把 X 加入」
 
     for (const actionRaw of actions) {
       const action = actionRaw || {};
@@ -15703,30 +16083,25 @@
           logs.push(`忽略：${template.name} 無法驗證為指定地區的真實景點`);
           continue;
         }
-        const duplicate = findDuplicateStopByName(template.name);
-        if (duplicate) {
-          logs.push(`已有同名景點：${duplicate.name}`);
-          continue;
-        }
-
-        const created = createStopFromTemplate(validatedTemplate);
         const beforeStop = findStopByHint(action.insertBefore);
         const afterStop = findStopByHint(action.insertAfter);
-
-        if (beforeStop) {
-          const beforeIndex = replanStops.findIndex((s) => s.id === beforeStop.id);
-          replanStops.splice(Math.max(0, beforeIndex), 0, created);
-        } else if (afterStop) {
-          const afterIndex = replanStops.findIndex((s) => s.id === afterStop.id);
-          replanStops.splice(afterIndex + 1, 0, created);
-        } else {
-          const returnIndex = replanStops.findIndex((stop) => normalizeText(stop.name).includes('回到車站') || stop.id === 'return');
-          const insertAt = returnIndex >= 0 ? returnIndex : replanStops.length;
-          replanStops.splice(insertAt, 0, created);
-        }
-
-        changed = true;
-        logs.push(`新增：${created.name}`);
+        const addition = addStopRespectingPlace(validatedTemplate, (tpl) => {
+          const created = createStopFromTemplate(tpl);
+          if (beforeStop && replanStops.includes(beforeStop)) {
+            const beforeIndex = replanStops.findIndex((s) => s.id === beforeStop.id);
+            replanStops.splice(Math.max(0, beforeIndex), 0, created);
+          } else if (afterStop && afterStop.type !== 'end' && replanStops.includes(afterStop)) {
+            const afterIndex = replanStops.findIndex((s) => s.id === afterStop.id);
+            replanStops.splice(afterIndex + 1, 0, created);
+          } else {
+            replanStops.splice(findNewStopInsertIndex(tpl.dayIndex), 0, created);
+          }
+          return created;
+        });
+        if (addition.changed) changed = true;
+        if (addition.redirected) redirected = true;
+        logs.push(addition.message || `新增：${addition.stop.name}`);
+        presentStopAddition(addition);
         continue;
       }
 
@@ -15764,6 +16139,14 @@
         if (activeStopMenuId === target.id) activeStopMenuId = created.id;
         changed = true;
         logs.push(`替換：${target.name} → ${created.name}`);
+        // 換進來的站和行程裡其他站在同一個大景點（換成森林公園，行程已有活水湖）：照使用者的意思換，但要提醒
+        const createdBig = classifyBigAttraction(created);
+        const sameBig = createdBig && replanStops.find((stop) => {
+          if (stop.id === created.id) return false;
+          const c = classifyBigAttraction(stop);
+          return c && c.parent === createdBig.parent;
+        });
+        if (sameBig) logs.push(`提醒：「${created.name}」和行程裡的「${sameBig.name}」在同一個景點，不需要可以刪掉一站`);
         continue;
       }
 
@@ -15817,7 +16200,7 @@
       });
     }
 
-    return { changed, logs };
+    return { changed, logs, redirected };
   }
 
   // ── 管家聊天的「建議修改」確認卡 ──
@@ -15905,7 +16288,7 @@
       const result = await applyAiItineraryActions(actions);
       if (result.changed) {
         chatActionSnapshot = snapshot;
-        finish('已套用到重新規劃畫面', `${result.logs.join('、')}。確認沒問題請按「完成重新規劃」；按「維持原行程」會還原。`, 'ok');
+        finish('已套用到重新規劃畫面', `${result.logs.join('、').replace(/。$/, '')}。確認沒問題請按「完成重新規劃」；按「維持原行程」會還原。`, 'ok');
         aiConversationHistory.push({ role: 'ai', text: `已套用修改建議：${result.logs.join('、')}（待使用者在重新規劃畫面確認）` });
       } else {
         finish('沒有套用成功', result.logs.length ? result.logs.join('、') : '找不到可以套用的站，行程沒有變動。', 'error');
@@ -15992,7 +16375,21 @@
       </div>
     `;
 
-    if (cardData && cardData.title) {
+    // Gemini 回的 recommendation 只有 title/subtitle、沒有 stop：以前照樣畫成帶「+」的按鈕，
+    // 按下去 handleAiRecommendationAction 直接 return，使用者以為壞了（2026-11-05 實測）。
+    // 沒有 stop 的只畫成摘要，不給「+」；要加入行程照回覆的引導跟管家說。
+    if (cardData && cardData.title && !cardData.stop) {
+      const contentWrap = wrapper.querySelector('.chat-bubble').parentElement;
+      const noteEl = document.createElement('div');
+      noteEl.className = 'action-card action-card--info';
+      noteEl.innerHTML = `
+        <div>
+          <div style="font-weight: 600; font-size: 13px; color: var(--accent-dark);">${escapeHtml(cardData.title)}</div>
+          ${cardData.subtitle ? `<div style="font-size: 11px; color: var(--accent);">${escapeHtml(cardData.subtitle)}</div>` : ''}
+        </div>
+      `;
+      contentWrap.appendChild(noteEl);
+    } else if (cardData && cardData.title) {
       const contentWrap = wrapper.querySelector('.chat-bubble').parentElement;
       const cardEl = document.createElement('div');
       cardEl.className = 'action-card';
@@ -16133,6 +16530,7 @@
     if (recName) {
       const recNorm = (recName || '').replace(/\s/g, '').toLowerCase();
       const conflicts = findDuplicateStopByName(recName)
+        || findSameKindStop(recName)
         || (typeof isPlaceVisited === 'function' && isPlaceVisited(recName))
         || ((typeof getBlockedSpotNames === 'function')
             && getBlockedSpotNames(currentTripRegion || '').some(n => n.replace(/\s/g, '').toLowerCase() === recNorm));
@@ -16295,7 +16693,9 @@
     updateItineraryStageUI();
     renderReplanBoard();
     refreshRouteDirections();
-    appendAiMessage('ai', `已幫你把「${addedName}」加入行程，接在順路的位置。你現在可以直接調整順序，或再叫我幫你換成別種風格。`);
+    appendAiMessage('ai', applyResult.redirected
+      ? applyResult.logs.join('\n')
+      : `已幫你把「${addedName}」加入行程，接在順路的位置。你現在可以直接調整順序，或再叫我幫你換成別種風格。`);
     logTripEvent('chat_recommendation_applied', {
       recommendation: cardData,
       itinerary: buildItinerarySnapshot()
@@ -16351,6 +16751,7 @@
       '【天氣】天氣、溫度、降雨機率只能引用 context 裡【天氣預報】的資料；那是中央氣象署的臺東縣整體預報。context 沒有那一天（查不到預報，或日期超出預報範圍）時，要明說「目前查不到這天的預報」，並提醒可以看「天氣」分頁；絕對不可以自己估數字，也不可以用往年氣候代替。',
       '【離島】綠島、蘭嶼屬於臺東縣：問到它們的天氣時，引用【天氣預報】的臺東縣預報回答，並說明這是全縣預報、離島實際天氣可能不同；不要因為預報寫的是臺東縣就說查不到。回答要加一句「離島海況請以航班公告為準」，不要自己推論能不能開船。',
       '【修改行程】actions 只是給使用者的建議：畫面會列出來，使用者按「套用」才會真的修改。reply 不要說「已經幫你改好」「已為您將…」，要用建議的語氣，例如「建議把加路蘭換成臺東美術館，確認後按『套用』」。',
+      '【指定地點】使用者明確要把某個地點加入或替換進行程時，即使它不在清單中也要照做（用 add_stop 或 replace_stop），不可回答「不在清單中」或改推別的地點；程式會驗證它是不是真實地點。',
       '【延續對話】context 的【先前對話】是這次聊天的前文。使用者說「換一間」「別間」「再推薦」「太貴了」等沒講類型的話時，一律延續前文正在談的類型與時段（例如在談早午餐、早餐店，就繼續推早午餐／早餐店，不可改推午餐、晚餐或景點），並保留前文的條件（地點、預算、營業時間）。',
       '【已否決】先前對話中使用者嫌棄過（太貴、沒開、不喜歡、人太多）或放棄過的店家與景點，之後都不可再推薦或放進 actions；說「太貴」時，新推薦要明顯比被嫌貴的那間便宜。不可把前面已推薦過、使用者沒接受的店換個說法再推一次。',
       '【行程以目前為準】哪些站在行程裡，只看 context 的「目前行程」。先前對話裡提出但沒套用的建議（例如新增某間店）並不在行程中：使用者要換掉那個建議時，改提新的 add_stop，不可對它用 replace_stop 或 remove_stop。',

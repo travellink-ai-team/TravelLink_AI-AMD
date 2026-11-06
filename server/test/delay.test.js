@@ -131,7 +131,7 @@ const run = (trip, trig, scenario) => runAgent({ trip, trigger: trig, scenario, 
   ok('有實際車程時算出校正比例', nt.travelFactor !== 1 && plain.travelFactor === 1, `factor=${nt.travelFactor}`);
   const est02 = I.travel(plain, plain.stops[0], plain.stops[2]);
   ok('刪站後才相鄰的新路段用校正後的估算', I.travel(nt, s0, s2) === Math.max(5, Math.round(est02 * nt.travelFactor)), `${I.travel(nt, s0, s2)} vs ${est02}×${nt.travelFactor}`);
-  ok('反方向（不是原本的下一站）不會誤用', I.travel(nt, s1, s0) !== 40);
+  ok('反方向（不是原本的下一站）不會誤用', I.travel(nt, s1, s0) === Math.max(5, Math.round(I.travel(plain, plain.stops[1], plain.stops[0]) * nt.travelFactor)));
   const tLeg = trigger(30); tLeg.from.transitToNextMin = 35;
   const legReq = DL.parseDelayRequest(tLeg, nt);
   const legBase = DL.dayTrip(nt, legReq);

@@ -29,6 +29,7 @@ const SCORE_JITTER = 0.6;          // 景點分數＝興趣×2＋評分－距離
 const AVOID_PENALTY = 0.8;         // 同一個人最近排過的景點
 const FOOD_JITTER_KM = 1.5;        // 餐廳照距離排，近 1.5 km 以內的視為一樣近
 const FOOD_AVOID_KM = 2;
+const FOOD_SNACK_KM = 5;           // 飲料、冰品排在正餐後面
 const rnd = (ctx) => (typeof ctx.random === 'function' ? ctx.random() : Math.random());
 const avoided = (req, place) => !!(req.avoidKeys && req.avoidKeys.has(place._key));
 const timeoutMs = () => Number(process.env.AGENT_PLAN_TIMEOUT_MS) || 90 * 1000;
@@ -41,8 +42,10 @@ const SYSTEM_PROMPT = [
   '2. 呼叫 get_weather_forecast。降雨機率 ≥ 50% 的時段要以室內景點（indoor=indoor）為主，戶外景點最多 1 個；天氣好就以戶外與興趣相符的景點為主。',
   '3. 用 search_local_poi 找候選景點（可依興趣帶 interest、下雨帶 indoor=true、或用 nearName 以某個景點為中心再找）。旅客指定想去的景點要優先放進去。',
   '4. 離島（綠島／蘭嶼）行程要呼叫 get_ferry_status 確認船班與停航公告。',
-  '5. 時段涵蓋午餐（或晚餐）時，用 search_restaurants 找餐廳，每一餐選一家（nearName 帶附近的景點，比較順路）。',
+  '5. 時段涵蓋午餐（或晚餐）時，用 search_restaurants 找餐廳，每一餐選一家（nearName 帶附近的景點，比較順路）。飲料店、冰店（snack=true）不能當正餐；不要連續排三間吃喝，兩間正餐要隔 2.5 小時以上。',
+  '旅客在 desiredSpots 指定的地方一定要全部排進 stops，不可省略或換掉；排不下就拿掉你自己選的站。',
   '6. 呼叫 draft_itinerary，stops 只放「名稱」與可選的 stayMin，順序不重要，程式會排。站名只能用搜尋工具回傳的名稱，不可自己編。',
+  '不用自己把時間排滿：有空檔時程式會自動拉長景點停留，你只要選站。',
   '7. draft_itinerary 回傳 violations 時，針對問題增刪或替換站點後重送（stops 每次都要完整重給）；最多改 3 次。',
   '8. ok=true 之後呼叫 present_itinerary：title 是行程標題（15 字內），summary 一句話介紹這趟行程，reasons 2–4 點說明安排理由（引用降雨機率、營業時間、距離等工具給的數字，不可宣稱沒做到的事）。',
   '9. 每一輪都要呼叫工具，不要只回文字。全程使用繁體中文。'
@@ -158,7 +161,7 @@ const IMPL = {
     desired.forEach((d) => { if (d.name) ctx.allowed.add(D.normName(d.name)); });
     return {
       dest: r.dest,
-      ...(r.island ? { island: r.island, note: '離島一日遊：起訖點是島內港，只排島上的站' } : {}),
+      ...(r.island ? { island: r.island, note: '離島一日遊：起訖點是島內港，只排島上的站。島上室內景點很少，下雨也不必一直找室內，戶外景點一樣可以排；不要重複搜尋，搜尋 2、3 次就送 draft_itinerary' } : {}),
       date: r.date, weekday: '星期' + WEEKDAY[day],
       startTime: I.toClock(r.startMin), endTime: I.toClock(r.endMin), durationHours: Math.round(r.durationMin / 6) / 10,
       start: r.startPoint.name, end: r.endPoint.name,
@@ -264,13 +267,16 @@ const IMPL = {
       .filter((p) => openDuringTrip(p, r))
       .map((p) => ({ p, km: D.haversineKm(origin, p), meals: mealsOf(p) }))
       .filter((x) => x.km <= radius && (!slots.length || x.meals.length))
-      .map((x) => ({ ...x, rank: x.km + rnd(ctx) * FOOD_JITTER_KM + (avoided(r, x.p) ? FOOD_AVOID_KM : 0) }))
+      .filter((x) => !args.meal || !P.isSnack(x.p))   // 找正餐時不列飲料店、冰店
+      .map((x) => ({ ...x, rank: x.km + rnd(ctx) * FOOD_JITTER_KM + (avoided(r, x.p) ? FOOD_AVOID_KM : 0) + (P.isSnack(x.p) ? FOOD_SNACK_KM : 0) }))
       .sort((a, b) => a.rank - b.rank)
       .slice(0, SEARCH_LIMIT);
     results.forEach((x) => ctx.allowed.add(x.p._key));
     return {
       date: r.date,
-      results: results.map((x) => ({ ...candidateView(x.p, origin, r.date), ...(x.meals.length ? { goodFor: x.meals.map((m) => m.label) } : {}) })),
+      results: results.map((x) => (P.isSnack(x.p)
+        ? { ...candidateView(x.p, origin, r.date), snack: true, note: '飲料／點心，不能當正餐' }
+        : { ...candidateView(x.p, origin, r.date), ...(x.meals.length ? { goodFor: x.meals.map((m) => m.label) } : {}) })),
       note: results.length ? undefined : '範圍內沒有餐廳，可加大 radiusKm 或換 nearName'
     };
   },
@@ -426,6 +432,7 @@ async function runPlanAgent({ request, scenario, onEvent, onUsage, chat, signal,
     startTime: I.toClock(req.startMin),
     endTime: ctx.draft.endTime,
     returnTime: ctx.draft.returnTime,
+    notices: ctx.draft.notices || [],
     start: ctx.draft.startPoint.name,
     end: ctx.draft.endPoint.name,
     costPerPerson: ctx.draft.costPerPerson,
