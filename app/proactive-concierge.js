@@ -547,6 +547,7 @@
     else if (r.seen) toast('這個狀況已經提醒過了（可以按「清除提醒紀錄」重新展示）', 'orange');
     else if (r.lagQuiet != null) toast(`落後 ${r.lagQuiet} 分，但後面仍排得下，管家不打擾你`, 'blue');
     else if (r.showing) toast('提醒已經在頁面頂端了', 'blue');
+    else if (demoRain() && !r.found) toast('已套用模擬降雨；這段雨沒有影響待前往的戶外景點，因此不需提醒', 'blue');
     else toast('管家檢查過了，目前沒有需要提醒的事', 'blue');
     return r;
   }

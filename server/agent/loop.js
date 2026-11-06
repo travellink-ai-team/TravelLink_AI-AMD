@@ -333,7 +333,13 @@ async function runAgent({ trip: rawTrip, trigger, scenario, onEvent, onUsage }) 
     const pre = await ctx.check(trip);
     const issues = pre.violations.filter((v) => ['rain', 'closed', 'hours', 'suspended', 'ferry_risk'].includes(v.code));
     if (!issues.length) {
-      return finish({ type: 'no_change', reason: pre.warnings.some((w) => w.code === 'weather_unknown') ? '拿不到天氣預報，暫時無法判斷' : (seaOn ? '行程時段沒有降雨、公休或船班停航風險' : '行程時段沒有降雨或公休問題'), llmSkipped: true });
+      const simulatedRain = ctx.scenario && ctx.scenario.rain;
+      const reason = simulatedRain
+        ? '已套用模擬降雨，但行程中沒有受這段雨影響的戶外景點，因此不需調整'
+        : pre.warnings.some((w) => w.code === 'weather_unknown')
+          ? '拿不到天氣預報，暫時無法判斷'
+          : (seaOn ? '行程時段沒有降雨、公休或船班停航風險' : '行程時段沒有降雨或公休問題');
+      return finish({ type: 'no_change', reason, llmSkipped: true });
     }
     // 已存在的營業時段錯誤不應讓這次的避雨提案連續驗證失敗；只有該站
     // 名稱、時間、停留及營業資料都沒變時才降為提醒，新造成的衝突仍會擋。

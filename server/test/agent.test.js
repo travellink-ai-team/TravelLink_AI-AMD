@@ -188,6 +188,12 @@ const STORM_ALL = { sea: [
   const events = [];
   const sunny = await runAgent({ trip: TRIP, trigger: { type: 'weather' }, onEvent: (e) => events.push(e) });
   ok('沒有降雨時直接結束、不呼叫 LLM', sunny.type === 'no_change' && sunny.llmSkipped && sunny.usage.llmCalls === 0, JSON.stringify(sunny));
+  const indoorTrip = { ...TRIP, stops: [TRIP.stops[0]] };
+  const indoorRain = await runAgent({ trip: indoorTrip, trigger: { type: 'weather' },
+    scenario: { rain: { date: tomorrow, from: '07:00', to: '17:00', pop: 80 } }, onEvent: () => {} });
+  ok('模擬降雨時室內行程不調整，但明示已偵測到雨', indoorRain.type === 'no_change'
+    && indoorRain.llmSkipped && indoorRain.reason.includes('已套用模擬降雨')
+    && indoorRain.reason.includes('沒有受這段雨影響的戶外景點'), JSON.stringify(indoorRain));
   if (!LIVE) {
     const fb = await runAgent({ trip: TRIP, trigger: { type: 'weather' }, scenario: SCENARIO, onEvent: () => {} });
     ok('AI 未啟用時降級成規則式替換', fb.type === 'proposal' && fb.fallback && fb.changes.length >= 2, JSON.stringify(fb).slice(0, 300));
