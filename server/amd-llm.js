@@ -128,6 +128,8 @@ function fromOpenAiResponse(data) {
  */
 function createSseTranslator() {
   let buffer = '';
+  let collected = '';
+  let lastFinish = '';
 
   function translateLine(rawLine) {
     const line = rawLine.trim();
@@ -140,6 +142,8 @@ function createSseTranslator() {
     const choice = Array.isArray(evt.choices) && evt.choices[0];
     const text = choice && choice.delta && typeof choice.delta.content === 'string' ? choice.delta.content : '';
     const finish = choice && choice.finish_reason ? (FINISH_REASON[choice.finish_reason] || 'STOP') : '';
+    if (collected.length < 200000) collected += text;
+    if (finish) lastFinish = finish;
     const usage = toUsageMetadata(evt.usage);
     if (!text && !finish && !usage) return '';
 
@@ -162,6 +166,8 @@ function createSseTranslator() {
       buffer = lines.pop() || '';
       return lines.map(translateLine).join('');
     },
+    /** 串流結束後取完整輸出（留記錄用） */
+    output() { return { text: collected, finish: lastFinish }; },
     /** 上游結束時沖出殘行 */
     end() {
       const rest = buffer;
@@ -169,6 +175,26 @@ function createSseTranslator() {
       return rest ? translateLine(rest) : '';
     }
   };
+}
+
+// 行程生成偶爾沒有景點，事後查不到模型回了什麼。要求 stops 的請求若回得不對，把開頭記下來（內容是行程，沒有個資或金鑰）。
+function noteGenerationOutput(body, text, finish) {
+  try {
+    const prompt = (Array.isArray(body && body.contents) ? body.contents : []).map((c) => partsToText(c && c.parts)).join('');
+    if (!prompt.includes('"stops"')) return;
+    const out = String(text || '').trim();
+    let problem = '';
+    if (!out) problem = '回應是空的';
+    else if (finish === 'MAX_TOKENS') problem = '輸出被截斷';
+    else {
+      try {
+        const parsed = JSON.parse(out);
+        const plan = Array.isArray(parsed) ? parsed[0] : parsed;
+        if (!plan || !Array.isArray(plan.stops) || !plan.stops.length) problem = '沒有 stops';
+      } catch (_e) { problem = '不是有效 JSON'; }
+    }
+    if (problem) console.warn('[amd-llm] 行程輸出異常：' + problem + '｜finish=' + finish + '｜長度=' + out.length + '｜開頭=' + out.slice(0, 300).replace(/\s+/g, ' '));
+  } catch (_e) { /* 留記錄失敗不影響回應 */ }
 }
 
 function chatCompletionsUrl() {
@@ -355,6 +381,7 @@ module.exports = {
   shouldRoute,
   toOpenAiRequest,
   fromOpenAiResponse,
+  noteGenerationOutput,
   createSseTranslator,
   chatCompletionsUrl,
   upstreamHeaders
