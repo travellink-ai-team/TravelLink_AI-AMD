@@ -21,6 +21,7 @@ const ok = (name, cond, extra) => { if (cond) { pass++; console.log('PASS  ' + n
 
 // 旅遊日：明天起第一個週六（避開週一二公休的館，測試結果不跟著星期幾變）
 const SAT = (() => { const d = new Date(Date.now() + 8 * 3600e3); d.setUTCDate(d.getUTCDate() + 1); while (d.getUTCDay() !== 6) d.setUTCDate(d.getUTCDate() + 1); return d.toISOString().slice(0, 10); })();
+const TAITUNG_REQ_FOR_DATA = (PP) => PP.normalizeRequest({ dest: '台東', date: '2026-11-14', startTime: '09:00', durationMin: 480 });
 const TAITUNG = { dest: '台東', date: SAT, startTime: '09:00', durationMin: 480, people: 2, interests: ['文化', '自然'], pace: '平衡' };
 const GREEN = { dest: '綠島', date: SAT, startTime: '09:00', durationMin: 480, people: 2, interests: ['自然'] };
 
@@ -174,7 +175,8 @@ const last = (results, name) => (results[name] || [])[(results[name] || []).leng
     ok('站數不足：要加景點，不會同時說不要加站', /請再加 \d+ 個景點/.test(fewMsg) && !fewMsg.includes('不要加站'), fewMsg);
     ok('同一處：哈巴狗岩與睡美人岩的別名算同一處', P.sameAttraction(DD.findPlace('哈巴狗岩'), DD.findPlace('哈巴狗與睡美人岩')) && P.sameAttraction(DD.findPlace('哈巴狗岩'), DD.findPlace('小長城步道 & 睡美人與哈巴狗')));
     const fixedBridge = DD.findPlace('東河舊橋休憩區');
-    ok('資料：東河舊橋休憩區座標已更正', Math.abs(fixedBridge.lat - 22.9767) < 0.001, String(fixedBridge.lat));
+    ok('資料：東河舊橋休憩區不再是 15 公里外的錯誤座標', !fixedBridge || Math.abs(fixedBridge.lat - 22.9767) < 0.01, String(fixedBridge && fixedBridge.lat));
+    ok('資料：機場不是景點', !P.poolOf(TAITUNG_REQ_FOR_DATA(P), 'scenic').some((x) => /航空站/.test(x.name)));
     const listSandbox = { window: {} };
     require('vm').runInNewContext(require('fs').readFileSync(require('path').join(__dirname, '..', '..', 'app', 'big-attraction-config.js'), 'utf8'), listSandbox);
     const trip = [

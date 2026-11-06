@@ -11,6 +11,8 @@
     "import:taitung": "node worker.js --import --source=taitung",
     "import:taitung:dry": "node worker.js --import --source=taitung --dry-run",
     "export:local": "node worker.js --export-local",
+    "fix:poi": "node worker.js --fix-poi",
+    "fix:poi:dry": "node worker.js --fix-poi --dry-run",
     "export:local:dry": "node worker.js --export-local --dry-run",
     "verify:places": "node worker.js --verify-places",
     "verify:places:dry": "node worker.js --verify-places --dry-run",

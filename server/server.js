@@ -1112,7 +1112,10 @@ async function proxyToAmdLlm(req, res, upstreamPath, run) {
   if (!isStream) {
     let out;
     try {
-      out = Buffer.from(JSON.stringify(amdLlm.fromOpenAiResponse(await upstream.json())));
+      const converted = amdLlm.fromOpenAiResponse(await upstream.json());
+      const cand = converted.candidates[0];
+      amdLlm.noteGenerationOutput(req.body, cand.content.parts[0].text, cand.finishReason);
+      out = Buffer.from(JSON.stringify(converted));
     } catch (err) {
       console.error('[proxy] amd llm 回應解析失敗：', err && err.message);
       if (run) genRuns.markUpstreamError(run);
@@ -1146,6 +1149,8 @@ async function proxyToAmdLlm(req, res, upstreamPath, run) {
     }
     send(translator.push(decoder.decode()));
     send(translator.end());
+    const streamed = translator.output();
+    amdLlm.noteGenerationOutput(req.body, streamed.text, streamed.finish);
   } catch (err) {
     console.error('[proxy] amd llm 串流轉發中斷：', err && err.message);
     if (run) genRuns.markUpstreamError(run);
