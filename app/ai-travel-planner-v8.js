@@ -3737,7 +3737,9 @@
 
   // 只認「真的同一處」：名稱相同或互相包含（較短者至少 3 字，避免「台東」吃掉所有景點）。
   // 以前只要都有「咖啡／麵／海鮮」就算重複，兩間不同的店排不進去，改由 describeAddReminder 提醒。
-  function findDuplicateStopByName(name) {
+  // 名稱互相包含但相距超過 2.5 公里是兩個地方（海濱公園×成功海濱公園、瀧部落×瑪洛阿瀧部落）；
+  // 2.5 公里夠涵蓋最大的臺東森林公園，又能分開蘭嶼燈塔和舊蘭嶼燈塔。
+  function findDuplicateStopByName(name, coords = null) {
     const candidate = normalizePlaceName(name);
     if (!candidate) return null;
     return replanStops.find((stop) => {
@@ -3745,7 +3747,9 @@
       if (!existing) return false;
       if (existing === candidate) return true;
       const shorter = existing.length <= candidate.length ? existing : candidate;
-      return shorter.length >= 3 && (candidate.includes(existing) || existing.includes(candidate));
+      if (shorter.length < 3 || !(candidate.includes(existing) || existing.includes(candidate))) return false;
+      const stopCoords = coords ? readStopCoordinates(stop) : null;
+      return !stopCoords || approxDistanceMeters(coords.lat, coords.lng, stopCoords.lat, stopCoords.lng) <= 2500;
     }) || null;
   }
 
@@ -3885,7 +3889,7 @@
     };
     const added = template.name;
 
-    const same = findDuplicateStopByName(added);
+    const same = findDuplicateStopByName(added, readStopCoordinates(template));
     if (same) {
       activeStopMenuId = same.id;
       return {

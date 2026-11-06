@@ -155,6 +155,9 @@ const last = (results, name) => (results[name] || [])[(results[name] || []).leng
     ok('兩餐太近：使用者指定不擋', !codes(ds).includes('meal_gap'), JSON.stringify(codes(ds)));
     const branch = dr({ desiredSpots: '阿鋐炸雞' }, [...sc('鯉魚山', '臺東森林公園'), { name: '阿鋐炸雞-正氣店' }]);
     ok('希望景點：指定總店名，排到分店也算', !codes(branch).includes('desired_missing'), JSON.stringify(codes(branch)));
+    ok('遊客中心：鄉鎮名前綴不算（鹿野遊客中心×鹿野高台）', !P.sameAttraction(DD.findPlace('鹿野遊客中心'), DD.findPlace('鹿野高台')));
+    ok('遊客中心：卑南只認卑南遺址', !P.sameAttraction(DD.findPlace('卑南遊客中心'), DD.findPlace('卑南大圳水利公園')) && P.sameAttraction(DD.findPlace('卑南遊客中心'), DD.findPlace('卑南遺址公園')));
+    ok('遊客中心：專屬前綴仍算（八仙洞、小野柳）', P.sameAttraction(DD.findPlace('八仙洞遊客中心'), DD.findPlace('八仙洞')) && P.sameAttraction(DD.findPlace('小野柳遊客中心'), DD.findPlace('小野柳')));
     ok('遊客中心：前綴只是地區名不算同一處', !P.sameAttraction(DD.findPlace('綠島遊客中心'), DD.findPlace('綠島人權文化園區')));
     const filled = dr({}, [...sc('鯉魚山', '臺東森林公園', '小野柳').map((x) => ({ name: x.name })), { name: reals[0] }]);
     ok('空檔由程式拉長停留：不必 LLM 重送', !codes(filled).includes('idle') && filled.stops.some((x) => x.stayMin > 60), filled.returnTime + JSON.stringify(codes(filled)));

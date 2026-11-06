@@ -2871,9 +2871,19 @@ function markDesiredStops(stops, wizardData) {
   return stops;
 }
 // 排完後檢查使用者指定的站：連續吃喝、兩餐太近、同一處排兩站。只提醒，不改行程。
-function collectDesiredStopNotices(stops) {
+function collectDesiredStopNotices(stops, wizardData) {
   const notices = [];
   const mid = (Array.isArray(stops) ? stops : []).filter((s) => s && s.type !== 'start' && s.type !== 'end');
+  String((wizardData && wizardData.desiredSpots) || '').split(/[、，,;；\/\n]+/).map((t) => t.trim()).filter(Boolean).forEach((wish) => {
+    const t = _osmNorm(wish);
+    if (t.length < 2) return;
+    const hits = (n) => { const x = _osmNorm(n); return x.length >= 2 && (x.includes(t) || t.includes(x)); };
+    if (mid.some((s) => hits(s.name))) return;
+    const host = mid.find((s) => Array.isArray(s.mergedSubSpots) && s.mergedSubSpots.some(hits));
+    notices.push(host
+      ? `你指定的「${wish}」沒有單獨一站，記在「${host.name}」裡。想單獨去可以到行程頁加入。`
+      : `這趟沒排到你指定的「${wish}」，可能是時間不夠或查不到。想去可以到行程頁加入。`);
+  });
   const dayOf = (s) => Math.round(Number(s.dayIndex)) || 1;
   const food = (s) => isFoodStop(s);
   for (let i = 0; i < mid.length;) {
@@ -2892,15 +2902,8 @@ function collectDesiredStopNotices(stops) {
     if (gap > 0 && gap <= 90) notices.push(`「${a.name}」和「${b.name}」都是正餐，只隔大約 ${gap} 分鐘。已照你指定的保留，覺得太趕可以刪掉一間。`);
   }
   const desired = mid.filter((s) => s.userDesired && !food(s));
-  const vcNorm = (s) => String(s.name || '').replace(/[（(][^）)]*[）)]/g, '').replace(/臺/g, '台').replace(/\s/g, '');
-  const sameArea = (a, b) => {
-    if (shouldClusterStops(a, b, true)) return true;
-    const test = (vc, o) => {
-      const m = vcNorm(vc).match(VISITOR_CENTER_RE);
-      return !!m && vcNorm(o).startsWith(vcNorm(vc).slice(0, vcNorm(vc).length - m[0].length));
-    };
-    return test(a, b) || test(b, a);
-  };
+  const sameArea = (a, b) => shouldClusterStops(a, b, true)
+    || isVisitorCenterOf(a.name, b.name) || isVisitorCenterOf(b.name, a.name);
   for (let i = 0; i < desired.length; i++) {
     for (let j = i + 1; j < desired.length; j++) {
       if (dayOf(desired[i]) === dayOf(desired[j]) && sameArea(desired[i], desired[j])) {
@@ -2908,7 +2911,7 @@ function collectDesiredStopNotices(stops) {
       }
     }
   }
-  return [...new Set(notices)].slice(0, 4);
+  return [...new Set(notices)].slice(0, 5);
 }
 
 // 連續三站以上都是吃喝 → 把串裡「不是正餐」的那站挪到下一個景點之後（同一天內）；
@@ -3659,8 +3662,8 @@ function isLodgingStop(stop) {
 
 // 是否該歸入同一大景區（以距離為主）
 function shouldClusterStops(a, b, ignoreDesired = false) {
-  // 兩站都是使用者在「希望景點」指定的：照使用者的意思各排一站，不合併（結尾會提醒）
-  if (!ignoreDesired && a && b && a.userDesired && b.userDesired) return false;
+  // 使用者在「希望景點」指定的站不併進別站，否則站名消失（綠島燈塔被併進中寮漁港）。兩站都指定時結尾會提醒。
+  if (!ignoreDesired && a && b && (a.userDesired || b.userDesired)) return false;
   if (isFoodStop(a) || isFoodStop(b)) return false; // 餐廳閘門：用餐站不與他站合併
   if (isLodgingStop(a) || isLodgingStop(b)) return false; // 住宿閘門：住宿站不與他站合併（含同名的隔日住宿站）
   const ca = getStopCoordinate(a);
@@ -3755,21 +3758,31 @@ function buildMergedAttraction(members) {
 
 // 對站點做貪婪群集（單一連結）：同一大景區（距離為主）者併成一個大景點；跳過 start/end 錨點站
 const VISITOR_CENTER_RE = /(遊客中心|旅遊服務中心|服務中心|旅客服務中心)$/;
+// 前綴是鄉鎮名或島名就不能當「同一個景區」的依據：綠島遊客中心和綠島燈塔、鹿野遊客中心和鹿野高台都是不同地方。
+const VISITOR_CENTER_PLACE_PREFIXES = new Set(['台東', '台東縣', '台東市', '成功', '關山', '卑南', '鹿野', '池上', '東河', '長濱', '太麻里', '大武', '綠島', '蘭嶼', '延平', '海端', '金峰', '達仁']);
+function normalizeVisitorCenterName(name) {
+  return String(name || '').replace(/[（(][^）)]*[）)]/g, '').replace(/臺/g, '台').replace(/\s/g, '');
+}
+// other 是不是這個遊客中心服務的景區。卑南是鄉名，但卑南遊客中心就是遺址的遊客中心，單獨認「卑南遺址…」。
+function isVisitorCenterOf(centerName, otherName) {
+  const center = normalizeVisitorCenterName(centerName);
+  const other = normalizeVisitorCenterName(otherName);
+  const m = center.match(VISITOR_CENTER_RE);
+  if (!m || VISITOR_CENTER_RE.test(other)) return false;
+  const prefix = center.slice(0, center.length - m[0].length);
+  if (prefix.length < 2) return false;
+  if (prefix === '卑南') return other.startsWith('卑南遺址');
+  return !VISITOR_CENTER_PLACE_PREFIXES.has(prefix) && other.startsWith(prefix);
+}
 function dropRedundantVisitorCenters(stops) {
   if (!Array.isArray(stops) || stops.length < 2) return stops;
-  const norm = (s) => String(s || '').replace(/[（(][^）)]*[）)]/g, '').replace(/臺/g, '台').replace(/\s/g, '');
   return stops.filter((s) => {
     if (!s || s.type === 'start' || s.type === 'end') return true;
     if (s.userDesired) return true; // 使用者指定的遊客中心不刪，結尾會提醒兩處很近
-    const n = norm(s.name);
-    const m = n.match(VISITOR_CENTER_RE);
-    if (!m) return true;
-    const prefix = n.slice(0, n.length - m[0].length);
-    // 前綴只是地區名（綠島遊客中心 × 綠島人權文化園區）不算：同一個島上的不同景點
-    if (prefix.length < 2 || ['台東', '綠島', '蘭嶼'].includes(prefix)) return true;
+    if (!VISITOR_CENTER_RE.test(normalizeVisitorCenterName(s.name))) return true;
     const cs = getStopCoordinate(s);
     const sibling = stops.find((o) => o && o !== s && o.type !== 'start' && o.type !== 'end'
-      && !VISITOR_CENTER_RE.test(norm(o.name)) && norm(o.name).startsWith(prefix)
+      && isVisitorCenterOf(s.name, o.name)
       && (() => { const co = getStopCoordinate(o); return !cs || !co || getDistanceMeters(cs, co) <= 5000; })());
     if (sibling) console.info('[遊客中心] 已有「' + sibling.name + '」，不再另排「' + s.name + '」');
     return !sibling;
@@ -4452,12 +4465,7 @@ async function optimizeGeneratedTripStops(stops, wizardData = {}, livePlaces = [
   keepAgentSchedule(scheduledStops, finalStops, _agentPlanned, wizardData);
   finalStops.splice(0, finalStops.length, ...scheduledStops);
   // 生成時已經做過鄰站合併與大景點補標籤。標記起來，行程頁載入時就不再改名、搬座標、拉長停留。
-  // 希望景點沒排進去要說：AI 可能漏掉，或查不到這個地方（只比對中間站，起訖點不算）
-  const _plannedNames = finalStops.filter((s) => s && s.type !== 'start' && s.type !== 'end').map((s) => _osmNorm(s.name)).filter(Boolean);
-  const _missingDesired = String(wizardData.desiredSpots || '').split(/[、，,;；\/\n]+/).map((x) => x.trim()).filter((x) => x.length >= 2)
-    .filter((x) => { const k = _osmNorm(x); return k.length >= 2 && !_plannedNames.some((n) => n.includes(k) || k.includes(n)); });
-  if (_missingDesired.length) _generationNotices.push(`你想去的${_missingDesired.map((x) => `「${x}」`).join('')}這次沒有排進去，可以到行程頁手動加入。`);
-  _generationNotices = [...new Set([..._generationNotices, ...collectDesiredStopNotices(finalStops)])].slice(0, 5);
+  _generationNotices = [...new Set([..._generationNotices, ...collectDesiredStopNotices(finalStops, _agentPlanned ? null : wizardData)])].slice(0, 5);
   finalStops.forEach((s) => {
     if (!s) return;
     delete s.userDesired;

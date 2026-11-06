@@ -72,15 +72,18 @@ function landmarkTokens(name) {
 // 「X遊客中心」和 X 開頭的景點（卑南遊客中心 × 卑南遺址公園，相距 2.4 km）：遊客中心不值得另佔一站
 const VISITOR_CENTER_RE = /(遊客中心|旅遊服務中心|服務中心|旅客服務中心)$/;
 const VISITOR_CENTER_KM = 5;
-const VISITOR_CENTER_REGION_PREFIX = new Set(['台東', '綠島', '蘭嶼']);
+const VISITOR_CENTER_PLACE_PREFIXES = new Set(['台東', '台東縣', '台東市', '成功', '關山', '卑南', '鹿野', '池上', '東河', '長濱', '太麻里', '大武', '綠島', '蘭嶼', '延平', '海端', '金峰', '達仁']);
 function placeCore(name) { return String(name || '').replace(/[（(][^）)]*[）)]/g, '').replace(/臺/g, '台').replace(/\s/g, ''); }
 function visitorCenterOf(vc, other) {
   const n = placeCore(vc.name), o = placeCore(other.name);
   const m = n.match(VISITOR_CENTER_RE);
   if (!m || VISITOR_CENTER_RE.test(o)) return false;
   const prefix = n.slice(0, n.length - m[0].length);
-  // 前綴只是地區名（綠島遊客中心 × 綠島人權文化園區）就不算：那是同一個島上的不同景點
-  return prefix.length >= 2 && !VISITOR_CENTER_REGION_PREFIX.has(prefix) && o.startsWith(prefix);
+  if (prefix.length < 2) return false;
+  // 卑南是鄉名，但卑南遊客中心就是遺址的遊客中心，單獨認「卑南遺址…」
+  if (prefix === '卑南') return o.startsWith('卑南遺址');
+  // 前綴是鄉鎮名或島名就不算：綠島遊客中心和綠島燈塔、鹿野遊客中心和鹿野高台都是不同地方（與 UIUX dd34765 相同）
+  return !VISITOR_CENTER_PLACE_PREFIXES.has(prefix) && o.startsWith(prefix);
 }
 
 // 飲料、冰品、咖啡、甜點不算正餐：不能當午餐或晚餐，也不算「兩餐太近」
