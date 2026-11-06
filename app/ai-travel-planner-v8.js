@@ -3807,12 +3807,15 @@
     const added = newStop.name;
     const coord = readStopCoordinates(newStop);
     if (coord && !isFoodStop(newStop)) {
+      const metersTo = (s) => { const c = readStopCoordinates(s); return c ? approxDistanceMeters(coord.lat, coord.lng, c.lat, c.lng) : Infinity; };
       const near = replanStops.find((s) => {
         if (s.id === newStop.id || s.type === 'start' || s.type === 'end' || isFoodStop(s)) return false;
-        const c = readStopCoordinates(s);
-        return c && approxDistanceMeters(coord.lat, coord.lng, c.lat, c.lng) <= 300;
+        return metersTo(s) <= 300;
       });
-      if (near) return `已加入「${added}」。它和行程裡的「${near.name}」不到 300 公尺，可能是同一處，不需要可以刪掉一站。`;
+      // 很近不代表同一處（鐵道藝術村和 TTstyle 相距約 150 公尺）：幾乎同一點才這樣說
+      if (near) return metersTo(near) <= 50
+        ? `已加入「${added}」。它和行程裡的「${near.name}」幾乎在同一個位置，可能是同一處，不需要可以刪掉一站。`
+        : `已加入「${added}」。它和行程裡的「${near.name}」不到 300 公尺，可以順路一起逛，不需要可以刪掉一站。`;
     }
     if (isFoodStop(newStop) && !STOP_SNACK_NAME_RE.test(String(added))) {
       const schedule = buildReplanSchedule();
@@ -4434,6 +4437,7 @@
         if (!pn || pn === parentNorm) continue;
         if (otherNorms.has(pn)) continue;
         if (isFoodStop({ name: p.name })) continue; // 餐廳閘門：附近餐廳 POI 不被拉進景點子景點
+        if (window.WAI_BIG_ATTRACTIONS && window.WAI_BIG_ATTRACTIONS.isFacility(p.name)) continue; // 公廁、球場不是子景點
         const dist = approxDistanceMeters(coord.lat, coord.lng, p.lat, p.lng);
         if (dist < 60 || dist > SUB_SPOT_MERGE_RADIUS_M) continue;
         // 只因為在附近不算子景點：要名稱相關或在人工確認清單裡
@@ -4522,6 +4526,7 @@
         stop.stayMin = bumped;
       }
     }
+    if (window.WAI_BIG_ATTRACTIONS) window.WAI_BIG_ATTRACTIONS.cleanSubSpots(stops);
     return stops;
   }
 

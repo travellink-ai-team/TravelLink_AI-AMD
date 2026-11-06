@@ -288,7 +288,9 @@ const STAY_FILL_MAX = 120;
 const STAY_FILL_MARGIN = 20;
 function fillIdleWithStay(seq, req) {
   let out = seq;
+  // 餐前的景點拉長會把用餐往後推：實測蘭嶼站少、停留一拉長午餐就排到 14:10，LLM 怎麼改都修不好
   const tooLate = (s) => s.returnMin > req.endMin - STAY_FILL_MARGIN
+    || s.stops.some((x) => x.slot && x.start > x.slot.to)
     || s.stops.some((x) => { const h = D.hoursOn(x.place, req.date); return h.status === 'open' && h.windows.length && !D.fitsHours(h, x.start, x.end); });
   for (let round = 0; round < 12; round++) {
     let grew = false;
@@ -469,8 +471,9 @@ function buildDraft(req, picks, opts = {}) {
   }
   // 站數與空檔
   const range = stopRange(req.durationMin, req.pace);
-  if (items.length && items.length < range.min) {
-    violations.push({ code: 'too_few', message: `只有 ${items.length} 站，${Math.round(req.durationMin / 60)} 小時的行程建議至少 ${range.min} 站` });
+  const missingStops = items.length ? Math.max(0, range.min - items.length) : 0;
+  if (missingStops) {
+    violations.push({ code: 'too_few', message: `只有 ${items.length} 站，${Math.round(req.durationMin / 60)} 小時的行程建議至少 ${range.min} 站：請再加 ${missingStops} 個景點（不是餐廳）` });
   }
   // 原本 120 分才擋，實測 09–18 的行程 16:00 就回到終點也會通過；前端還會在起點加約 30 分停留，
   // 所以這裡收到 90 分：實際畫面上的空檔約 1 小時內
@@ -478,7 +481,10 @@ function buildDraft(req, picks, opts = {}) {
   if (items.length && idle > 60) {
     // 空檔不大就延長停留（加一站常常一下子超時），差很多才加站；目標是回到終點時離結束還有 30–60 分
     const need = idle - 30;
-    const fix = idle <= 120
+    // 站數已經不夠時，兩個問題要給同一個修法：實測一邊要加站、一邊說不要加站，蘭嶼常卡到驗證失敗
+    const fix = missingStops
+      ? '加景點後再看要不要延長停留'
+      : idle <= 120
       ? `請把幾站的 stayMin 合計延長約 ${need} 分鐘（不要加站）`
       : `請再加 ${Math.max(1, Math.round(need / 90))} 站（每站約 60–75 分），或延長停留合計約 ${need} 分鐘`;
     violations.push({ code: 'idle', message: `行程 ${I.toClock(sch.returnMin)} 就結束，離 ${I.toClock(req.endMin)} 還空 ${idle} 分鐘：${fix}` });

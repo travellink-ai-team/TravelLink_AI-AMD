@@ -30,10 +30,17 @@ window.WAI_BIG_ATTRACTIONS = (function () {
     ['白色恐怖綠島紀念園區', '綠島人權文化園區', '綠島人權園區', '國家人權博物館-白色恐怖綠島紀念園區'],
     ['臺東北町建築群', '臺東市北町日式建築宿舍群'],
     ['TTstyle原創館-波浪屋', '台東波浪屋-原民文創產業聚落'],
-    ['野銀舊部落', '野銀部落地下屋']
+    ['野銀舊部落', '野銀部落地下屋'],
+    ['哈巴狗岩', '哈巴狗與睡美人岩', '睡美人岩', '睡美人與哈巴狗']
   ];
   // 就算在範圍內也是獨立一站；萬富倉庫是糖廠裡的甜點店，鐵花村音樂聚落是藝術村旁的另一個場地
   const SKIP_RE = /火車站|車站|捷運|高鐵|轉運站|客運站|機場|航空站|停車場|公廁|廁所|萬富倉庫|鐵花村/;
+
+  // 設施不是景點：名稱前綴相同也不算子景點（卑南遺址公園公廁、海濱公園籃球場）
+  const FACILITY_RE = /公廁|廁所|洗手間|化妝室|停車場|籃球場|網球場|羽球場|排球場|足球場|售票|服務台|管理處|管理站|入口|出口|涼亭|公車站|站牌|變電|加油站|充電站/;
+  function isFacility(name) {
+    return FACILITY_RE.test(String(name || ''));
+  }
 
   function norm(name) {
     const unified = String(name || '').replace(/臺/g, '台');
@@ -88,5 +95,21 @@ window.WAI_BIG_ATTRACTIONS = (function () {
     const ca = classify(aName, aCoords), cb = classify(bName, bCoords);
     return !!(ca && cb && ca.parent === cb.parent);
   }
-  return { parents, sameNames, normalize: norm, ringOf, classify, isSameName, isSamePlace };
+  // 整趟行程的子景點清理：拿掉設施、別站的站名，以及前面的站已經列過的（小長城與哈巴狗岩都列睡美人岩）
+  function cleanSubSpots(stops) {
+    if (!Array.isArray(stops)) return stops;
+    const listed = [];
+    stops.forEach((stop) => {
+      if (!stop || !Array.isArray(stop.mergedSubSpots)) return;
+      stop.mergedSubSpots = stop.mergedSubSpots.filter((sub) => {
+        if (isFacility(sub) || norm(sub) === norm(stop.name)) return false; // 設施、站名本身（台東森林公園含臺東森林公園）
+        if (stops.some((other) => other && other !== stop && other.type !== 'start' && other.type !== 'end' && isSameName(sub, other.name))) return false;
+        if (listed.some((seen) => isSameName(sub, seen))) return false;
+        listed.push(sub);
+        return true;
+      });
+    });
+    return stops;
+  }
+  return { parents, sameNames, normalize: norm, ringOf, classify, isSameName, isSamePlace, isFacility, cleanSubSpots };
 })();

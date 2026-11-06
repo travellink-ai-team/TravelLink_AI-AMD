@@ -1762,6 +1762,12 @@ async function enrichFees(db) {
   console.log('Enrich-fees summary', { region: CRAWL_REGION, scanned, matched, exact, loose, unmatched, skipped, sliced, dryRun: DRY });
 }
 
+// 來源座標確認有誤的景點，匯出時更正（重新匯出不會被蓋回去）。新增前請先查證。
+// 東河舊橋休憩區：介紹寫橫跨馬武窟溪，就是東河舊橋，來源座標卻落在北邊約 15 公里的成功鎮。
+const POI_LOCATION_FIXES = {
+  '東河舊橋休憩區': { lat: 22.9767374, lng: 121.3049519, district: '東河' }
+};
+
 async function exportLocal(db) {
   console.log('Export-local mode: reading collection', POI_COLLECTION);
   const snap = await db.collection(POI_COLLECTION).get();
@@ -1847,6 +1853,7 @@ async function exportLocal(db) {
       shortenedExterior += 1;
       poi.duration = 20;
     }
+    if (POI_LOCATION_FIXES[poi.name]) Object.assign(poi, POI_LOCATION_FIXES[poi.name]);
     const destKey = deriveDestKey(data);
     if (!destKey) continue;
     if (!candidates[destKey]) candidates[destKey] = new Map();

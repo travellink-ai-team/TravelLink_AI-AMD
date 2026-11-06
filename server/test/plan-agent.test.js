@@ -165,6 +165,26 @@ const last = (results, name) => (results[name] || [])[(results[name] || []).leng
     ok('遊客中心：前綴只是地區名不算同一處', !P.sameAttraction(DD.findPlace('綠島遊客中心'), DD.findPlace('綠島人權文化園區')));
     const filled = dr({}, [...sc('鯉魚山', '臺東森林公園', '小野柳').map((x) => ({ name: x.name })), { name: reals[0] }]);
     ok('空檔由程式拉長停留：不必 LLM 重送', !codes(filled).includes('idle') && filled.stops.some((x) => x.stayMin > 60), filled.returnTime + JSON.stringify(codes(filled)));
+    // 蘭嶼站少，停留拉長不能把午餐推過 14:00；站數不夠時不能同時叫它不要加站
+    const lanyuReq = P.normalizeRequest({ ...TAITUNG, dest: '蘭嶼', startLocation: '', endLocation: '' });
+    const lanyu = P.buildDraft(lanyuReq, [{ name: '蘭嶼燈塔', stayMin: 90 }, { name: '東清灣', stayMin: 90 }, { name: '蘭嶼漂流木餐廳' }]);
+    const lunch = lanyu.stops.find((x) => x.meal === 'lunch');
+    ok('停留拉長：午餐不會被推過 14:00', !!lunch && lunch.time <= '14:00' && !codes(lanyu).includes('meal_time'), JSON.stringify(lanyu.stops.map((x) => x.time + x.name)));
+    const fewMsg = lanyu.violations.map((v) => v.message).join('；');
+    ok('站數不足：要加景點，不會同時說不要加站', /請再加 \d+ 個景點/.test(fewMsg) && !fewMsg.includes('不要加站'), fewMsg);
+    ok('同一處：哈巴狗岩與睡美人岩的別名算同一處', P.sameAttraction(DD.findPlace('哈巴狗岩'), DD.findPlace('哈巴狗與睡美人岩')) && P.sameAttraction(DD.findPlace('哈巴狗岩'), DD.findPlace('小長城步道 & 睡美人與哈巴狗')));
+    const fixedBridge = DD.findPlace('東河舊橋休憩區');
+    ok('資料：東河舊橋休憩區座標已更正', Math.abs(fixedBridge.lat - 22.9767) < 0.001, String(fixedBridge.lat));
+    const listSandbox = { window: {} };
+    require('vm').runInNewContext(require('fs').readFileSync(require('path').join(__dirname, '..', '..', 'app', 'big-attraction-config.js'), 'utf8'), listSandbox);
+    const trip = [
+      { name: '小長城', mergedSubSpots: ['小長城步道 & 睡美人與哈巴狗', '小長城觀景台'] },
+      { name: '哈巴狗岩', mergedSubSpots: ['哈巴狗與睡美人岩'] },
+      { name: '卑南遺址公園', mergedSubSpots: ['卑南遺址公園公廁', '卑南遺址公園月形石柱', '哈巴狗岩'] },
+      { name: '海濱公園', mergedSubSpots: ['海濱公園籃球場', '小長城觀景台'] }
+    ];
+    listSandbox.window.WAI_BIG_ATTRACTIONS.cleanSubSpots(trip);
+    ok('子景點：別站的內容與設施都拿掉', JSON.stringify(trip.map((x) => x.mergedSubSpots)) === JSON.stringify([['小長城觀景台'], ['哈巴狗與睡美人岩'], ['卑南遺址公園月形石柱'], []]), JSON.stringify(trip.map((x) => x.mergedSubSpots)));
     const dA = DD.travelMinutes({ lat: 22.75, lng: 121.13 }, { lat: 22.76, lng: 121.14 });
     ok('車程：市區約 1.5 km 不超過 6 分', dA <= 6, String(dA));
   }
