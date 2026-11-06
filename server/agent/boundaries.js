@@ -13,6 +13,11 @@ const vm = require('vm');
 
 const FILE = path.join(__dirname, '..', '..', 'app', 'osm-boundary-data.js');
 const MAX_CENTROID_KM = 2;   // 景點座標離輪廓質心超過 2 km，就不是這個景點的輪廓
+// 只認人工確認過的大景點輪廓（與 ai-travel-planner-v8.js 的 BIG_ATTRACTIONS 同一份）。
+// 全自動用所有輪廓會判錯：都歷遊客中心被算進阿美族民俗中心、轉運站被算進鐵道藝術村。
+const CURATED_OUTLINES = new Set(['臺東森林公園', '鯉魚山公園', '海濱公園(馬卡巴嗨公園)', '小野柳遊憩區', '台東鐵道藝術村',
+  '台東糖廠', '八仙洞', '初鹿牧場', '關山親水公園', '綠洲山莊(綠島感訓監獄)']);
+const INDEPENDENT_STOP_RE = /火車站|車站|捷運|高鐵|轉運站|客運站|機場|航空站|停車場|公廁|廁所|萬富倉庫/;   // 在園區內也算獨立一站
 
 const norm = (s) => String(s || '')
   .replace(/[（(][^）)]*[）)]/g, '')
@@ -36,7 +41,7 @@ function load() {
     vm.runInNewContext(fs.readFileSync(FILE, 'utf8'), sandbox, { filename: 'osm-boundary-data.js' });
     const list = (sandbox.window.WAI_OSM_BOUNDARY_DATA && sandbox.window.WAI_OSM_BOUNDARY_DATA.items) || [];
     for (const it of list) {
-      if (!it || !it.n || !Array.isArray(it.r) || it.r.length < 3) continue;
+      if (!it || !CURATED_OUTLINES.has(it.n) || !Array.isArray(it.r) || it.r.length < 3) continue;
       const ring = it.r.map(([lat, lng]) => ({ lat, lng }));
       items.push({
         norm: norm(it.n),
@@ -52,7 +57,7 @@ function load() {
 const ownCache = new Map();
 function boundaryOf(place) {
   const n = norm(place && place.name);
-  if (n.length < 2 || !Number.isFinite(place.lat) || !Number.isFinite(place.lng)) return null;
+  if (n.length < 2 || INDEPENDENT_STOP_RE.test(String(place.name)) || !Number.isFinite(place.lat) || !Number.isFinite(place.lng)) return null;
   const key = `${n}@${place.lat.toFixed(4)},${place.lng.toFixed(4)}`;
   if (ownCache.has(key)) return ownCache.get(key);
   let best = null, bestKm = Infinity;
@@ -77,12 +82,13 @@ function pointInRing(ring, p) {
 /** 兩個點是否在同一個輪廓裡（鷺鷥湖與活水湖都在臺東森林公園裡，但彼此不包含對方） */
 function sharedOutline(a, b) {
   if (!a || !b || ![a.lat, a.lng, b.lat, b.lng].every(Number.isFinite)) return false;
+  if (INDEPENDENT_STOP_RE.test(String(a.name)) || INDEPENDENT_STOP_RE.test(String(b.name))) return false;
   return load().some((o) => pointInRing(o.ring, a) && pointInRing(o.ring, b));
 }
 
 /** place 的座標是否落在 container 這個景點的輪廓內 */
 function contains(container, place) {
-  if (!place || !Number.isFinite(place.lat) || !Number.isFinite(place.lng)) return false;
+  if (!place || INDEPENDENT_STOP_RE.test(String(place.name)) || !Number.isFinite(place.lat) || !Number.isFinite(place.lng)) return false;
   const b = boundaryOf(container);
   return !!b && pointInRing(b.ring, place);
 }

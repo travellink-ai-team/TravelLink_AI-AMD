@@ -69,12 +69,33 @@ function landmarkTokens(name) {
     .filter((t) => t.length >= 2 && !LANDMARK_STOPWORDS.has(t));
 }
 
+// 「X遊客中心」和 X 開頭的景點（卑南遊客中心 × 卑南遺址公園，相距 2.4 km）：遊客中心不值得另佔一站
+const VISITOR_CENTER_RE = /(遊客中心|旅遊服務中心|服務中心|旅客服務中心)$/;
+const VISITOR_CENTER_KM = 5;
+const VISITOR_CENTER_REGION_PREFIX = new Set(['台東', '綠島', '蘭嶼']);
+function placeCore(name) { return String(name || '').replace(/[（(][^）)]*[）)]/g, '').replace(/臺/g, '台').replace(/\s/g, ''); }
+function visitorCenterOf(vc, other) {
+  const n = placeCore(vc.name), o = placeCore(other.name);
+  const m = n.match(VISITOR_CENTER_RE);
+  if (!m || VISITOR_CENTER_RE.test(o)) return false;
+  const prefix = n.slice(0, n.length - m[0].length);
+  // 前綴只是地區名（綠島遊客中心 × 綠島人權文化園區）就不算：那是同一個島上的不同景點
+  return prefix.length >= 2 && !VISITOR_CENTER_REGION_PREFIX.has(prefix) && o.startsWith(prefix);
+}
+
+// 飲料、冰品、咖啡、甜點不算正餐：不能當午餐或晚餐，也不算「兩餐太近」
+const SNACK_NAME_RE = /茶飲|飲料|手搖|冰城|冰店|冰品|豆花|甜點|咖啡|cafe|coffee|烘焙|麵包|甜湯|剉冰|雪花冰/i;
+const isSnack = (place) => SNACK_NAME_RE.test(String((place && place.name) || ''));
+const MEAL_GAP_MIN = 150;       // 兩間正餐開始時間至少隔 2.5 小時
+const MEAL_GAP_NOTICE_MIN = 90; // 使用者指定時不擋，太近才提醒
+
 /** 兩筆地點是不是同一處景點（需要 lat/lng） */
 function sameAttraction(a, b) {
   if (!a || !b || a === b) return false;
   const km = D.haversineKm(a, b);
   if (!Number.isFinite(km)) return false;   // 缺座標就無法用距離把關，寧可不合併
   if (km <= SAME_SPOT_KM) return true;
+  if (km <= VISITOR_CENTER_KM && (visitorCenterOf(a, b) || visitorCenterOf(b, a))) return true;
   if (km > SAME_LANDMARK_KM) return false;
   // 名稱不共用字、但在同一個園區裡（鷺鷥湖在臺東森林公園裡、龍鳳佛堂在鯉魚山上）：看座標是否落在對方的 OSM 輪廓內
   if (B.contains(a, b) || B.contains(b, a) || B.sharedOutline(a, b)) return true;
@@ -260,6 +281,29 @@ function fixHoursBySwaps(seq, startPoint, endPoint, startMin, date) {
   return best;
 }
 
+// 時間有剩就由程式把景點停留拉長，不要叫 LLM 算：實測它常不帶 stayMin、同一份草稿連送 4 輪，整趟失敗。
+// 每輪每個景點加 10 分（上限 STAY_FILL_MAX），不能超過營業時間，回到終點前留 STAY_FILL_MARGIN 分。
+const STAY_FILL_MAX = 120;
+const STAY_FILL_MARGIN = 20;
+function fillIdleWithStay(seq, req) {
+  let out = seq;
+  const tooLate = (s) => s.returnMin > req.endMin - STAY_FILL_MARGIN
+    || s.stops.some((x) => { const h = D.hoursOn(x.place, req.date); return h.status === 'open' && h.windows.length && !D.fitsHours(h, x.start, x.end); });
+  for (let round = 0; round < 12; round++) {
+    let grew = false;
+    for (let i = 0; i < out.length; i++) {
+      if (out[i].kind === 'food' || out[i].stayMin >= STAY_FILL_MAX) continue;
+      const cand = out.slice();
+      cand[i] = { ...cand[i], stayMin: Math.min(STAY_FILL_MAX, cand[i].stayMin + 10) };
+      if (tooLate(schedule(cand, req.startPoint, req.endPoint, req.startMin, req.date))) continue;
+      out = cand;
+      grew = true;
+    }
+    if (!grew) break;
+  }
+  return out;
+}
+
 /**
  * 把 LLM 選的站排成一日行程並驗證。
  * @param {object} req   normalizeRequest() 的結果
@@ -271,18 +315,34 @@ function buildDraft(req, picks, opts = {}) {
   const rejected = [];
   const items = [];
   const seen = new Set();
+  // 使用者在「希望景點」指定的站：一定要排、不被同處規則擋下，排法有疑慮只提醒（notices），不替使用者決定
+  const desiredList = resolveDesired(req);
+  // 用名稱互相包含比對：指定「阿鋐炸雞」時，搜尋回的「阿鋐炸雞-正氣店」也算
+  const desiredKeys = desiredList.filter((d) => d.name).map((d) => D.normName(d.input)).filter((k) => k.length >= 2);
+  const matchesDesired = (key, place) => { const k = String(place._key); return k.includes(key) || key.includes(k); };
+  const isDesired = (place) => desiredKeys.some((key) => matchesDesired(key, place));
+  const notices = desiredList.filter((d) => !d.name).map((d) => `你想去的「${d.input}」在景點資料裡找不到，這次沒有排進去，可以到行程頁手動加入。`);
   for (const p of (Array.isArray(picks) ? picks : []).slice(0, MAX_DRAFT_STOPS + 4)) {
     const name = String((p && (p.name || p)) || '').trim();
     if (!name) continue;
     const place = D.findPlace(name);
     if (!place) { rejected.push({ name, reason: '本地資料找不到，只能用搜尋工具回傳的名稱' }); continue; }
-    if (allowed && !allowed.has(place._key)) { rejected.push({ name, reason: '這個名稱不是搜尋工具回傳的結果，請先用 search_local_poi／search_restaurants 找到它' }); continue; }
+    if (allowed && !allowed.has(place._key) && !isDesired(place)) { rejected.push({ name, reason: '這個名稱不是搜尋工具回傳的結果，請先用 search_local_poi／search_restaurants 找到它' }); continue; }
     if (D.accessOf(place).avoid) { rejected.push({ name: place.name, reason: '目前暫停開放' }); continue; }
     if (place.kind === 'transit') { rejected.push({ name: place.name, reason: '交通站不是景點' }); continue; }
     if (seen.has(place._key)) continue;
     seen.add(place._key);
     const twin = place.kind === 'food' ? null : items.find((x) => x.place.kind !== 'food' && sameAttraction(x.place, place));
-    if (twin) { rejected.push({ name: place.name, reason: `和「${twin.place.name}」是同一個景點，請只留一個，改挑別的景點` }); continue; }
+    if (twin && isDesired(place) && isDesired(twin.place)) {
+      notices.push(`你指定的「${twin.place.name}」和「${place.name}」在同一區或很靠近，都幫你排了。不需要的話可以刪掉一站。`);
+    } else if (twin && isDesired(place)) {
+      // 新來的是使用者指定、先排的不是：留使用者要的
+      items.splice(items.indexOf(twin), 1);
+      rejected.push({ name: twin.place.name, reason: `和旅客指定的「${place.name}」是同一個景點，請拿掉` });
+    } else if (twin) {
+      rejected.push({ name: place.name, reason: `和「${twin.place.name}」是同一個景點，請只留一個，改挑別的景點` });
+      continue;
+    }
     const stay = Number(p && p.stayMin);
     items.push({
       place,
@@ -308,14 +368,18 @@ function buildDraft(req, picks, opts = {}) {
   };
   const freeFoods = foods.slice();
   slots.forEach((slot) => {
-    let k = freeFoods.findIndex((f) => servesSlot(f, slot));
-    if (k < 0 && freeFoods.length) k = 0;
+    // 飲料店、冰店不算這一餐；使用者指定的正餐優先
+    const realMeal = (f) => !isSnack(f.place);
+    let k = freeFoods.findIndex((f) => realMeal(f) && isDesired(f.place) && servesSlot(f, slot));
+    if (k < 0) k = freeFoods.findIndex((f) => realMeal(f) && servesSlot(f, slot));
+    if (k < 0) k = freeFoods.findIndex(realMeal);
     if (k >= 0) meals.push({ ...freeFoods.splice(k, 1)[0], slot });
   });
   freeFoods.forEach((f) => others.push(f));   // 多出來的餐廳（咖啡、點心）當一般站排
 
   let seq = insertMeals(orderByRoute(others, startPoint, endPoint), meals, startPoint, endPoint, req.startMin, req.date);
   seq = fixHoursBySwaps(seq, startPoint, endPoint, req.startMin, req.date);
+  seq = fillIdleWithStay(seq, req);
   const sch = schedule(seq, startPoint, endPoint, req.startMin, req.date);
 
   // ── 驗證：共用 itinerary.js 的硬規則 ──
@@ -331,9 +395,17 @@ function buildDraft(req, picks, opts = {}) {
   const violations = [];
   const warnings = base.warnings.slice();
   // 降雨：一日遊允許 1 個戶外站（短暫停留、看雨勢再決定），2 個以上才擋
-  const rain = base.violations.filter((v) => v.code === 'rain');
+  // 使用者指定的戶外景點不因下雨被擋（提醒就好）；離島室內景點太少，下雨也排不出室內行程，同樣只提醒
+  const desiredRain = (v) => { const p = D.findPlace(v.stop); return !!p && isDesired(p); };
+  const rain = base.violations.filter((v) => v.code === 'rain' && !desiredRain(v));
   base.violations.forEach((v) => {
-    if (v.code === 'rain' && rain.length <= 1) warnings.push({ ...v, code: 'rain_minor' });
+    if (v.code === 'rain' && desiredRain(v)) {
+      warnings.push({ ...v, code: 'rain_minor' });
+      notices.push(`你指定的「${v.stop}」是戶外景點，當天預報可能下雨，建議出發前再確認。`);
+    } else if (v.code === 'rain' && req.island) {
+      warnings.push({ ...v, code: 'rain_minor' });
+      notices.push(`${req.island}當天預報可能下雨，島上室內景點不多，行程仍以戶外為主，出發前請再確認天氣。`);
+    } else if (v.code === 'rain' && rain.length <= 1) warnings.push({ ...v, code: 'rain_minor' });
     else violations.push(v);
   });
 
@@ -349,6 +421,45 @@ function buildDraft(req, picks, opts = {}) {
     }
   });
 
+  // 希望景點：查得到、能去的都要排
+  desiredList.forEach((d) => {
+    if (!d.name) return;
+    const place = D.findPlace(d.name);
+    if (!place || place.kind === 'transit' || D.accessOf(place).avoid) {
+      notices.push(`你想去的「${d.name}」目前無法安排（交通站或暫停開放）。`);
+      return;
+    }
+    const key = D.normName(d.input);
+    if (!items.some((x) => x.place._key === place._key || matchesDesired(key, x.place))) {
+      violations.push({ code: 'desired_missing', stop: d.name, message: `旅客指定要去「${d.name}」，一定要排進行程（可以拿掉別站或縮短停留）` });
+    }
+  });
+
+  // 連續三站以上都在吃喝：不是使用者指定就擋，指定的只提醒
+  for (let i = 0; i < sch.stops.length;) {
+    let j = i;
+    while (j < sch.stops.length && sch.stops[j].kind === 'food') j += 1;
+    if (j - i >= 3) {
+      const run = sch.stops.slice(i, j);
+      const names = run.map((x) => `「${x.place.name}」`).join('');
+      if (run.some((x) => isDesired(x.place))) notices.push(`${names}連續 ${run.length} 站都在吃喝，這是照你指定的排法，想分散可以到行程頁調整。`);
+      else violations.push({ code: 'food_streak', message: `${names}連續 ${run.length} 站都在吃喝，請拿掉多的餐廳或中間排景點` });
+    }
+    i = Math.max(j, i + 1);
+  }
+
+  // 兩間正餐太近：飲料、冰品不算
+  const realMeals = sch.stops.filter((x) => x.kind === 'food' && !isSnack(x.place));
+  for (let i = 0; i + 1 < realMeals.length; i++) {
+    const a = realMeals[i], b = realMeals[i + 1];
+    const gap = b.start - a.start;
+    if (isDesired(a.place) || isDesired(b.place)) {
+      if (gap <= MEAL_GAP_NOTICE_MIN) notices.push(`「${a.place.name}」和「${b.place.name}」都是正餐，只隔大約 ${gap} 分鐘。已照你指定的保留，覺得太趕可以刪掉一間。`);
+    } else if (gap < MEAL_GAP_MIN) {
+      violations.push({ code: 'meal_gap', message: `「${a.place.name}」和「${b.place.name}」都是正餐，只隔 ${gap} 分鐘，請拿掉一間` });
+    }
+  }
+
   // 回到終點
   if (sch.returnMin > req.endMin + 15) {
     const over = sch.returnMin - req.endMin;
@@ -363,15 +474,15 @@ function buildDraft(req, picks, opts = {}) {
   // 原本 120 分才擋，實測 09–18 的行程 16:00 就回到終點也會通過；前端還會在起點加約 30 分停留，
   // 所以這裡收到 90 分：實際畫面上的空檔約 1 小時內
   const idle = req.endMin - sch.returnMin;
-  if (items.length && idle > 90) {
+  if (items.length && idle > 60) {
     // 空檔不大就延長停留（加一站常常一下子超時），差很多才加站；目標是回到終點時離結束還有 30–60 分
-    const need = idle - 45;
-    const fix = idle <= 150
+    const need = idle - 30;
+    const fix = idle <= 120
       ? `請把幾站的 stayMin 合計延長約 ${need} 分鐘（不要加站）`
       : `請再加 ${Math.max(1, Math.round(need / 90))} 站（每站約 60–75 分），或延長停留合計約 ${need} 分鐘`;
     violations.push({ code: 'idle', message: `行程 ${I.toClock(sch.returnMin)} 就結束，離 ${I.toClock(req.endMin)} 還空 ${idle} 分鐘：${fix}` });
   }
-  else if (items.length && idle > 60) warnings.push({ code: 'idle_minor', message: `離結束時間還有約 ${idle} 分鐘空檔` });
+  else if (items.length && idle > 30) warnings.push({ code: 'idle_minor', message: `離結束時間還有約 ${idle} 分鐘空檔` });
   const longWaits = sch.stops.filter((x) => x.wait >= 45);
   longWaits.forEach((x) => warnings.push({ code: 'wait', stop: x.place.name, message: `「${x.place.name}」要等 ${x.wait} 分鐘才開門` }));
 
@@ -398,7 +509,8 @@ function buildDraft(req, picks, opts = {}) {
     endTime: I.toClock(Math.min(sch.endMin, 1439)),
     returnTime: I.toClock(Math.min(sch.returnMin, 1439)),
     costPerPerson: I.costPerPerson(trip),
-    range
+    range,
+    notices: [...new Set(notices)]
   };
 }
 
@@ -469,5 +581,5 @@ function interestScore(place, interests) {
 
 module.exports = {
   normalizeRequest, buildDraft, resolveDesired, poolOf, interestScore, centerOf, islandOf, endpointOf,
-  mealSlots, stopRange, schedule, orderByRoute, INTEREST_RE, MAX_DRAFT_STOPS, landmarkTokens, sameAttraction
+  isSnack, mealSlots, stopRange, schedule, orderByRoute, INTEREST_RE, MAX_DRAFT_STOPS, landmarkTokens, sameAttraction
 };

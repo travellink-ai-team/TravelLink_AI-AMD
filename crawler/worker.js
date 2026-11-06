@@ -2125,13 +2125,13 @@ async function applyFoodIncludes(destKey, center, restaurants, includeMap) {
 // 店家在 Google 登記的名稱常夾營業備註：「台東客來吃樂（店休不固定，請查詢粉絲專頁））」、
 // 「日日麵所．Daily Pasta (3月底營業)」。直接當站名會出現在行程卡、語音導覽、地圖標籤上，
 // 所以把括號裡的營業備註拆出來放 nameNote，名稱只留店名。分店名（「台東正氣店」）不含這些字，不受影響。
-const NAME_NOTE_WORDS = '店休|公休|休息|營業|請(?:看|查|洽|參考)|IG|粉絲|臉書|FB|預約|月底|月初|點餐|訂位|@';
+const NAME_NOTE_WORDS = '店休|公休|休息|營業|請(?:看|查|洽|參考)|IG|粉絲|臉書|FB|預約|月底|月初|點餐|訂位|外送|@|Last\\s*Order|最後點餐|創始|首創|老店|老字號|別無分店|無分店|唯一|寵物友善|自助餐';
 // 括號裡的備註：「（店休不固定，請查詢粉絲專頁））」「（歡迎線上點餐@342uizcv)」
 const NAME_NOTE_RE = new RegExp(`\\s*[（(]([^（）()]*(?:${NAME_NOTE_WORDS})[^（）()]*)[）)]+\\s*`, 'gi');
 // 寫在名稱最後、沒有括號的備註：「綠島哈嘍木木早午餐（…)公休日參考IG」的「公休日參考IG」
 // 前面可以帶日期區間：「6/22（一）-6/24（三）公休3日」整段都是公休公告
 const NAME_DATE = String.raw`\d{1,2}\/\d{1,2}(?:\s*[（(][^（）()]{1,2}[）)])?`;
-const NAME_TAIL_NOTE_RE = new RegExp(String.raw`\s*[，,、｜|]?\s*((?:${NAME_DATE}\s*(?:[-~–至]\s*${NAME_DATE}\s*)?)?(?:店休|公休|休息|營業時間|營業日)[^（）()]{0,30})$`);
+const NAME_TAIL_NOTE_RE = new RegExp(String.raw`\s*[，,、｜|]?\s*((?:${NAME_DATE}\s*(?:[-~–至]\s*${NAME_DATE}\s*)?)?(?:店休|公休|休息(?![區站室])|營業時間|營業日)[^（）()]{0,30})$`);
 // 斜線後面的預約說明：「順大新港 黑潮海鮮餐廳/FB預約制」。只有接在斜線後才拆，避免把店名裡的「預約」切掉
 const NAME_SLASH_NOTE_RE = /\s*[\/／]\s*((?:FB|IG)?\s*(?:預約|訂位)[^（）()\/／]*)$/i;
 // 書名號裡的宣傳詞：「博文臭豆腐《池上必吃銅板美食》」
@@ -2143,6 +2143,8 @@ function splitNameNote(name) {
     .replace(NAME_TAIL_NOTE_RE, (_m, note) => { notes.push(note.trim()); return ''; })
     .replace(NAME_SLASH_NOTE_RE, (_m, note) => { notes.push(note.trim()); return ''; })
     .replace(NAME_SLOGAN_RE, (_m, note) => { notes.push(note.trim()); return ' '; })
+    .replace(/\s*#([^#]{1,20})#\s*/g, (_m, note) => { notes.push(note.trim()); return ' '; }) // 「#無提供冷氣#」
+    .replace(/\s*[-－–]\s*([^-－–]*[，！!。][^-－–]*)$/, (_m, note) => { notes.push(note.trim()); return ''; }) // 店名後接一句話：「里漾餐廳-餐點現點現做，趕行程…請您跳過我們唷！」
     .replace(/\s+/g, ' ').trim();
   return clean.length >= 2 && notes.length ? { name: clean, note: notes.join('；') } : { name: raw, note: '' };
 }

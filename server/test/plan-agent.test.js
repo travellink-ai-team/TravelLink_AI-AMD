@@ -128,6 +128,39 @@ const last = (results, name) => (results[name] || [])[(results[name] || []).leng
   ok('店名備註：斜線後的預約說明', sn('順大新港 黑潮海鮮餐廳/FB預約制').name === '順大新港 黑潮海鮮餐廳' && sn('順大新港 黑潮海鮮餐廳/FB預約制').note === 'FB預約制');
   ok('店名備註：沒有斜線的「預約」不拆', sn('預約制私房菜').name === '預約制私房菜');
   ok('店名備註：分店名不動', sn('SP夏帕義大利麵 台東正氣店').name === 'SP夏帕義大利麵 台東正氣店' && sn('東粄香傳統米食坊（台東新生店）').note === '');
+  ok('店名備註：休息區是站名不拆', sn('堺橋休息區').name === '堺橋休息區' && sn('堺橋休息區').note === '');
+  ok('店名備註：宣傳字、句子、井字號', sn('榕樹下米苔目(中華路創始老店-別無分店)').name === '榕樹下米苔目' && sn('眺港café(寵物友善）').name === '眺港café' && sn('里漾餐廳-餐點現點現做，趕行程的朋友請跳過！（專案自助餐）#無提供冷氣#').name === '里漾餐廳');
+  // 同處判斷只用人工確認的大景點輪廓；全自動會把都歷遊客中心算進阿美族民俗中心
+  ok('sameAttraction：都歷遊客中心與阿美族民俗中心不算', !P.sameAttraction(require('../agent/data').findPlace('都歷遊客中心'), require('../agent/data').findPlace('阿美族民俗中心')));
+  ok('sameAttraction：卑南遊客中心與卑南遺址公園（2.4 km）算同一處', P.sameAttraction(require('../agent/data').findPlace('卑南遊客中心'), require('../agent/data').findPlace('卑南遺址公園')));
+  // 希望景點、用餐規則
+  {
+    const DD = require('../agent/data');
+    const reals = DD.data().foods.filter((x) => x.region === '台東' && !P.isSnack(x)).map((x) => x.name);
+    const snack = DD.data().foods.find((x) => x.region === '台東' && P.isSnack(x));
+    const dr = (extra, picks) => P.buildDraft(P.normalizeRequest({ ...TAITUNG, startLocation: '台東車站', ...extra }), picks);
+    const codes = (d) => d.violations.map((v) => v.code);
+    const sc = (...n) => n.map((name) => ({ name, stayMin: 90 }));
+    ok('希望景點：沒排進去要擋', codes(dr({ desiredSpots: '初鹿牧場' }, [...sc('鯉魚山', '臺東森林公園', '小野柳'), { name: reals[0] }])).includes('desired_missing'));
+    ok('希望景點：找不到的要提醒', dr({ desiredSpots: '不存在的店名' }, [...sc('鯉魚山'), { name: reals[0] }]).notices.some((m) => m.includes('不存在的店名')));
+    const both = dr({ desiredSpots: '卑南遊客中心、卑南遺址公園' }, [{ name: '卑南遊客中心' }, { name: '卑南遺址公園' }, ...sc('鯉魚山'), { name: reals[0] }]);
+    ok('希望景點：兩處都指定就都排，並提醒', both.stops.length === 4 && both.notices.some((m) => m.includes('同一區')) && !codes(both).includes('unknown_place'), JSON.stringify(both.violations));
+    const noPref = dr({}, [{ name: '卑南遊客中心' }, { name: '卑南遺址公園' }, ...sc('鯉魚山'), { name: reals[0] }]);
+    ok('遊客中心：沒指定時和同名景點只留一個', codes(noPref).includes('unknown_place'));
+    if (snack) ok('午餐：只有飲料店不算排了午餐', codes(dr({}, [...sc('鯉魚山', '臺東森林公園'), { name: snack.name }])).includes('meal'));
+    const streak = dr({}, [{ name: '鯉魚山', stayMin: 120 }, ...reals.slice(0, 3).map((name) => ({ name, stayMin: 45 })), ...sc('鐵花新聚落', '海濱公園')]);
+    const seq = streak.stops.map((x) => (x.kind === 'food' ? 'F' : 'S')).join('');
+    ok('連續吃喝或兩餐太近要擋', codes(streak).includes('meal_gap') || (/FFF/.test(seq) && codes(streak).includes('food_streak')), seq + JSON.stringify(codes(streak)));
+    const ds = dr({ desiredSpots: reals.slice(0, 2).join('、') }, [...sc('鯉魚山', '臺東森林公園'), { name: reals[0], stayMin: 45 }, { name: reals[1], stayMin: 45 }]);
+    ok('兩餐太近：使用者指定不擋', !codes(ds).includes('meal_gap'), JSON.stringify(codes(ds)));
+    const branch = dr({ desiredSpots: '阿鋐炸雞' }, [...sc('鯉魚山', '臺東森林公園'), { name: '阿鋐炸雞-正氣店' }]);
+    ok('希望景點：指定總店名，排到分店也算', !codes(branch).includes('desired_missing'), JSON.stringify(codes(branch)));
+    ok('遊客中心：前綴只是地區名不算同一處', !P.sameAttraction(DD.findPlace('綠島遊客中心'), DD.findPlace('綠島人權文化園區')));
+    const filled = dr({}, [...sc('鯉魚山', '臺東森林公園', '小野柳').map((x) => ({ name: x.name })), { name: reals[0] }]);
+    ok('空檔由程式拉長停留：不必 LLM 重送', !codes(filled).includes('idle') && filled.stops.some((x) => x.stayMin > 60), filled.returnTime + JSON.stringify(codes(filled)));
+    const dA = DD.travelMinutes({ lat: 22.75, lng: 121.13 }, { lat: 22.76, lng: 121.14 });
+    ok('車程：市區約 1.5 km 不超過 6 分', dA <= 6, String(dA));
+  }
   ok('sameAttraction：鷺鷥湖在臺東森林公園裡算同一處', P.sameAttraction(dpark.findPlace('台東森林公園'), dpark.findPlace('鷺鷥湖')));
   ok('sameAttraction：龍鳳佛堂在鯉魚山上算同一處', P.sameAttraction(dpark.findPlace('鯉魚山'), dpark.findPlace('臺東龍鳳佛堂')));
   ok('sameAttraction：鷺鷥湖與活水湖都在森林公園裡算同一處', P.sameAttraction(dpark.findPlace('鷺鷥湖'), dpark.findPlace('活水湖')));
@@ -182,7 +215,7 @@ const last = (results, name) => (results[name] || [])[(results[name] || []).leng
   // 行程太早結束：09–18 只排兩站，離結束還空很久 → idle 違規
   const lateReq = P.normalizeRequest({ ...TAITUNG, durationMin: 540 });
   const shortDay = P.buildDraft(lateReq, picks.slice(0, 2).concat([{ name: food.results[0].name }]), { allowed: ctx0.allowed });
-  ok('buildDraft：離結束時間空超過 90 分 → idle 違規', shortDay.violations.some((v) => v.code === 'idle'), shortDay.returnTime);
+  ok('buildDraft：離結束時間空超過 60 分 → idle 違規', shortDay.violations.some((v) => v.code === 'idle'), shortDay.returnTime);
 
   /* ═══ 2. mock LLM 跑通工具迴圈：第一輪缺午餐被退回，第二輪通過 ═══ */
   const script = [
