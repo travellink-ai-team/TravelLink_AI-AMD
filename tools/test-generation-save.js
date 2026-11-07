@@ -37,7 +37,7 @@ test('background persistence reports both successful and exhausted saves', async
   for (const success of [true, false]) {
     let attempts = 0;
     const ctx = { firebaseEnabled: true, saveMicroTripToFirebase: async () => { attempts++; return success; },
-      saveState() {}, renderSideMyTrips() {}, renderMyTrips() {}, showToast() {},
+      saveState() {}, renderSideMyTrips() {}, renderMyTrips() {}, showToast() {}, recordCrowdForTrip() {},
       setTimeout: cb => cb(), console: { warn() {} } };
     vm.runInNewContext(fn, ctx);
     assert.equal(await ctx.persistMicroTripInBackground({}), success);

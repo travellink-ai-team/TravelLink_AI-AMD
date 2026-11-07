@@ -7111,6 +7111,7 @@ function renderMyTrips() {
           ${t.collab ? `<button class="mt-action-btn primary" onclick="openCollabPanel('${t.id}')">👥 成員</button>` : ''}
           ${(!t.collab || ['owner', 'editor'].includes(t.role) || (t.ownerEmail && currentUser && currentUser.email && t.ownerEmail.toLowerCase() === currentUser.email.toLowerCase())) ? `<button class="mt-action-btn share" onclick="renameMyTrip('${t.id}')">📝 改名</button>` : ''}
           <button class="mt-action-btn share" onclick="shareTrip('${t.id}')">📤 分享</button>
+          ${!t.collab && isLoggedIn && !t.cloudSyncedFor ? `<button class="mt-action-btn share" title="將這台裝置上的行程同步到帳號" onclick="syncLocalTripToCloud('${t.id}')">☁ 同步</button>` : ''}
           ${(t.collab && t.role !== 'owner')
             ? `<button class="mt-action-btn delete" title="退出共編（不會刪除擁有者的行程）" aria-label="退出共編" onclick="deleteMyTrip('${t.id}')">🚪</button>`
             : `<button class="mt-action-btn delete" title="刪除行程" aria-label="刪除行程" onclick="deleteMyTrip('${t.id}')">🗑</button>`}
@@ -7326,12 +7327,45 @@ async function deleteMyTrip(id) {
   showToast('🗑 已刪除行程', 'red');
 }
 
+// 將舊版或離線時只存於本機的單人行程，明確同步到目前登入帳號。
+async function syncLocalTripToCloud(id) {
+  const trip = myTrips.find((item) => item.id === id);
+  if (!trip || trip.collab || trip.__saving) return;
+  const authUser = (typeof firebaseAuth !== 'undefined' && firebaseAuth) ? firebaseAuth.currentUser : null;
+  if (!firebaseEnabled || !firebaseDb || !authUser || !authUser.email || !currentUser
+      || String(currentUser.email).toLowerCase() !== String(authUser.email).toLowerCase()) {
+    showToast('請先登入並連線，再同步行程', 'orange');
+    return;
+  }
+  trip.__saving = true;
+  renderMyTrips(); renderSideMyTrips();
+  try {
+    // 與 loadState 使用相同的已授權查詢。先確認雲端沒有同 ID 文件，避免舊本機副本覆蓋較新的版本。
+    const ownTrips = await firebaseDb.collection('micro_trips')
+      .where('userEmail', '==', authUser.email).get({ source: 'server' });
+    if (ownTrips.docs.some((doc) => doc.id === id)) {
+      trip.cloudSyncedFor = authUser.email.toLowerCase();
+      showToast('雲端已有這份行程，請重新整理取得最新版本', 'blue');
+    } else if (await saveMicroTripToFirebase(trip)) {
+      showToast('☁ 已同步到雲端，另一個網站重新整理後即可查看', 'green');
+    } else {
+      showToast('同步失敗，行程仍保存在這台裝置', 'orange');
+    }
+  } catch (error) {
+    console.warn('同步本機行程失敗：', error);
+    showToast('同步失敗，行程仍保存在這台裝置', 'orange');
+  } finally {
+    trip.__saving = false;
+    saveState(); renderMyTrips(); renderSideMyTrips();
+  }
+}
+
 // 刪除自己的單人行程在 Firestore 上的文件（含子集合）。
 // 回傳 'deleted'（雲端已刪）、'local-only'（雲端本來就沒有／訪客，只需刪本機）、
 // 'offline'（已上傳過、但現在沒辦法確認或刪除雲端）；刪除被拒或網路錯誤則丟出例外。
 //
-// - 先用「documentId + userEmail」查詢確認文件存在：Rules 的 read/delete 都讀 resource.data，
-//   對不存在的文件直接 get()/delete() 會被判 permission-denied（F12 紅字），查詢則只會回空結果。
+// - 用與 loadState 相同的 userEmail 查詢確認文件存在，並在前端比對 ID。
+//   避免額外的 documentId 複合查詢，讓本機獨有的舊行程可依已驗證清單判定不存在。
 // - 用戶端 SDK 不會遞迴刪子集合，而 photos 等子集合的 Rules 依賴父文件存在（isTripMemberOrOwner），
 //   父文件一刪就再也清不掉。所以子集合與父文件放在同一個 batch：Rules 的 exists()/get()
 //   看的是 batch 前的狀態，全部成功或全部失敗，不會留下半刪的行程。
@@ -7341,27 +7375,36 @@ async function deleteMyTrip(id) {
 //   · feedback：Rules 禁止網站帳號讀取，列不出來也刪不到；留給管理端（屬於使用回饋資料）。
 async function deleteOwnTripFromCloud(trip) {
   const authUser = (typeof firebaseAuth !== 'undefined' && firebaseAuth) ? firebaseAuth.currentUser : null;
-  const email = (currentUser && currentUser.email) || '';
-  const ready = firebaseEnabled && firebaseDb && authUser && email && typeof firebase !== 'undefined';
+  const email = authUser && authUser.email;
+  const ready = firebaseEnabled && firebaseDb && authUser && email && currentUser
+    && String(currentUser.email).toLowerCase() === String(email).toLowerCase()
+    && typeof firebase !== 'undefined';
   if (!ready) {
-    // 訪客或從沒上傳過的行程：雲端本來就沒有。確定上傳過的，就不能假裝刪掉了。
-    return (isLoggedIn && trip.cloudSyncedFor) ? 'offline' : 'local-only';
+    // 登入狀態下無法確認雲端時不可假裝刪除成功，避免重新整理後行程又出現。
+    return isLoggedIn ? 'offline' : 'local-only';
   }
   const tripRef = firebaseDb.collection('micro_trips').doc(trip.id);
   const found = await firebaseDb.collection('micro_trips')
-    .where(firebase.firestore.FieldPath.documentId(), '==', trip.id)
     .where('userEmail', '==', email)
     .get({ source: 'server' });
-  if (found.empty) return 'local-only';
+  if (!found.docs.some((doc) => doc.id === trip.id)) return 'local-only';
 
   const uid = authUser.uid;
   const refs = [];
   const photos = await tripRef.collection('photos').get({ source: 'server' });
   photos.forEach((doc) => refs.push(doc.ref));
-  refs.push(tripRef.collection('memories').doc(uid));
-  refs.push(tripRef.collection('recaps').doc(uid));
-  refs.push(tripRef.collection('presence').doc(uid));
-  refs.push(tripRef.collection('presence').doc(String(email).toLowerCase().replace(/[^a-z0-9]/g, '_')));
+  const childRefs = [
+    tripRef.collection('memories').doc(uid),
+    tripRef.collection('recaps').doc(uid),
+    tripRef.collection('presence').doc(uid),
+    tripRef.collection('presence').doc(String(email).toLowerCase().replace(/[^a-z0-9]/g, '_'))
+  ];
+  const childDocs = await Promise.all(childRefs.map((ref) => ref.get({ source: 'server' })));
+  childDocs.forEach((doc) => { if (doc.exists) refs.push(doc.ref); });
+  if (!refs.length) {
+    await tripRef.delete();
+    return 'deleted';
+  }
   // batch 上限 500 筆；照片極多時先分批刪照片，最後一批才連同父文件。
   const CHUNK = 450;
   for (let i = 0; i < refs.length; i += CHUNK) {
